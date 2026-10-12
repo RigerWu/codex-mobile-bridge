@@ -225,11 +225,33 @@ final class Connector {
         try fail("failed", "未找到 Claude Console，请确认开发者工具窗口可用后重试")
     }
     func verify(_ prompt: AXUIElement, _ expected: String) throws {
-        for _ in 0..<40 {
+        func read() throws -> Bool {
             Thread.sleep(forTimeInterval: 0.025); try check(prompt)
-            if contents(prompt) == expected { return }
+            let observed = (attribute(prompt, kAXValueAttribute) as? String)?.trimmingCharacters(in: .newlines)
+            return observed == expected
         }
-        try fail("needs-attention", "Console 内容未完整到达，未执行连接脚本，请重试")
+        for _ in 0..<40 {
+            if try read() { return }
+        }
+        if !expected.isEmpty {
+            // Chromium can expose only the visible part of a long Console
+            // editor through AXValue. Page through it, accepting only a single
+            // AXValue that equals the entire expected source.
+            try key(126, flags: .maskCommand, prompt: prompt)
+            let deadline = Date().addingTimeInterval(8)
+            for page in 0..<64 where Date() < deadline {
+                if page > 0 { try key(121, prompt: prompt) }
+                for _ in 0..<4 {
+                    if try read() {
+                        // Subsequent CGEvent chunks and Return must act at the
+                        // end of the same verified editor, never mid-source.
+                        try key(125, flags: .maskCommand, prompt: prompt)
+                        return
+                    }
+                }
+            }
+        }
+        try fail("needs-attention", "Console 无法核验完整内容，未执行连接脚本，请重试")
     }
     func submit(_ prompt: AXUIElement) throws {
         try check(prompt)

@@ -328,14 +328,14 @@ final class Connector {
         if find(root, matching: isPrompt) != nil { try fail("needs-attention", "Claude 已连接；开发者工具未自动关闭，请手动关闭") }
         output("connected", "Claude 已连接")
     }
-    func inspectError() {
-        let conflict = find(root, matching: {
+    func inspectError(marker: String?) {
+        let conflict = marker.flatMap { expected in find(root, matching: {
             guard text($0, kAXRoleAttribute) == "AXStaticText" else { return false }
             let value = text($0, kAXValueAttribute).isEmpty ? text($0, kAXTitleAttribute) : text($0, kAXValueAttribute)
-            return value.contains("Claude 桥接连接被其他网关占用")
-        })
+            return value.contains("Claude 桥接连接被其他网关占用") && value.contains("[\(expected)]")
+        }) }
         if conflict != nil {
-            output("owner-conflict", "Claude 桥接连接被其他网关占用，请先停止旧网关或重新加载 Claude")
+            output("owner-conflict", "Claude 桥接连接被其他网关占用，请先停止旧网关；旧版连接还需重新加载 Claude")
             return
         }
         let error = find(root, matching: {
@@ -410,7 +410,7 @@ do {
             if args[0] == "--enable-devtools" { try connector.developerMode() }
             else if args[0] == "--connect" && args.count == 5 { try connector.inject(args[3]) }
             else if args[0] == "--close-devtools" { try connector.closeConsole() }
-            else if args[0] == "--inspect-error" { connector.inspectError() }
+            else if args[0] == "--inspect-error" { connector.inspectError(marker: args.count > 3 ? args[3] : nil) }
             else { try fail("needs-attention", "连接组件参数无效") }
         }
     }

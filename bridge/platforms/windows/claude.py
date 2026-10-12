@@ -101,6 +101,8 @@ def native_action(action, *, helper, pid=None, executable=None, script=None, can
         return {'setupState': 'ready'}
     argument = '--connect-background='+str(script) if background else str(script) if action == 'connect' else '--'+action
     args = [str(helper), str(pid), argument, str(executable)]
+    if action == 'inspect-error' and script:
+        args.append(str(script))
     if cancel_path:
         args.append(str(cancel_path))
     options = {'creationflags': getattr(subprocess, 'CREATE_NO_WINDOW', 0)}
@@ -193,7 +195,7 @@ def native_action(action, *, helper, pid=None, executable=None, script=None, can
     if action == 'inspect-error':
         if 'OWNER_CONFLICT' in stdout:
             return {'setupState': 'owner-conflict',
-                    'reason': 'Claude 桥接连接被其他网关占用，请先停止旧网关或重新加载 Claude'}
+                    'reason': 'Claude 桥接连接被其他网关占用，请先停止旧网关；旧版连接还需重新加载 Claude'}
         return {'setupState': 'needs-trust' if 'NEEDS_TRUST' in stdout else 'failed',
                 'reason': '请在 Claude Code 中确认连接目录信任，然后重新连接'}
     return {'setupState': 'needs-developer-mode' if action == 'enable-devtools' else 'submitted',

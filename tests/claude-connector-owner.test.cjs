@@ -45,10 +45,8 @@ test('pending request or response write blocks even same-owner replacement',asyn
   assert.equal(ui.counts().stopped,0);
  }
 });
-test('explicitly stopped foreign connector can be replaced',async()=>{
+test('legacy stopped flag alone does not prove a signed release',async()=>{
  const ui=fixture({transport:'file',stopped:true,busy:false,sessionId:'legacy-session'});
- const running=ui.run();
- for(let i=0;i<50&&!ui.window.__claudeMobileBridge?.owns;i++)await new Promise(resolve=>setTimeout(resolve,10));
- assert.equal(ui.counts().stopped,1);
- ui.window.__claudeMobileBridge.stop();await running;
+ await assert.rejects(ui.run(),/其他网关占用/);
+ assert.equal(ui.counts().stopped,0);
 });

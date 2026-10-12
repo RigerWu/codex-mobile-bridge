@@ -178,7 +178,8 @@ assert.equal(start.cwd,cwd);assert.equal(start.message,'');})();
             prepared = adapter.prepare()
         source = (ROOT/'bridge/clients/claude/connector.js').read_text(encoding='utf-8')
         config = {'transport': 'file', 'cwd': str(adapter.directory), 'token': adapter.desktop.token,
-                  'generation': adapter.desktop.generation, 'reconnect': True, 'connectorRevision': 5,
+                  'generation': adapter.desktop.generation, 'reconnect': True,
+                  'inspectionMarker': prepared['inspectionMarker'], 'connectorRevision': 5,
                   'request': 'request.json', 'response': 'response.json'}
         self.assertEqual(Path(prepared['scriptPath']).read_text(encoding='utf-8'),
                          source.replace('__BRIDGE_CONFIG__', json.dumps(config)))
@@ -511,7 +512,7 @@ class ClaudeNativeConnection(unittest.TestCase):
                 return {'setupState': 'connected'}
             if action == 'inspect-error':
                 if conflict:
-                    return {'setupState': 'owner-conflict', 'reason': 'Claude 桥接连接被其他网关占用，请先停止旧网关或重新加载 Claude'}
+                    return {'setupState': 'owner-conflict', 'reason': 'Claude 桥接连接被其他网关占用，请先停止旧网关；旧版连接还需重新加载 Claude'}
                 return {'setupState': 'needs-trust' if trust else 'failed', 'reason': 'trust required'}
             return {'setupState': 'ready'}
         with patch('bridge.clients.claude.adapter.native_action', side_effect=native), \
@@ -793,6 +794,13 @@ class ClaudeNativeConnection(unittest.TestCase):
         source = Path(prepared['consolePath']).read_text(encoding='utf-8')
         self.assertNotIn('\n', source)
         self.assertIn(self.adapter.desktop.generation, source)
+
+    def test_each_console_injection_has_a_fresh_error_inspection_marker(self):
+        self.addCleanup(self.adapter.close)
+        first = self.adapter.prepare()
+        second = self.adapter.prepare()
+        self.assertNotEqual(first['inspectionMarker'], second['inspectionMarker'])
+        self.assertIn(second['inspectionMarker'], Path(second['consolePath']).read_text(encoding='utf-8'))
 
     def test_transformed_console_script_preserves_file_protocol_behavior(self):
         source = (ROOT/'bridge/clients/claude/connector.js').read_text(encoding='utf-8')

@@ -195,7 +195,7 @@ const en={
 "尝试重连":"Try reconnecting",
 "重新初始化连接":"Reinitialize connection",
 "连接被其他网关占用":"Connection used by another gateway",
-"Claude 桥接连接被其他网关占用，请先停止旧网关或重新加载 Claude":"Another gateway is using Claude's bridge. Stop the old gateway or reload Claude first.",
+"Claude 桥接连接被其他网关占用，请先停止旧网关；旧版连接还需重新加载 Claude":"Another gateway is using Claude's bridge. Stop the old gateway first; legacy connections also require reloading Claude.",
 "开始初始化":"Start initialization",
 "会打开电脑上的 Claude 和开发者工具，并使用键盘焦点；请暂停电脑端操作，完成后恢复后台连接。":"This opens Claude and its developer tools on your computer and uses keyboard focus. Pause your work on the computer; the connection will return to the background when finished.",
 "通过 Claude 原生菜单退出，菜单可能短暂出现；如有任务或保存确认，请在电脑端处理。完全退出后需重新初始化连接，初始化会使用电脑前台和键盘焦点。":"Quit through Claude's native menu. The menu may appear briefly; handle any task or save confirmation on your computer. After quitting completely, the connection requires initialization again, using the computer's foreground window and keyboard focus.",

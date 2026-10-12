@@ -36,10 +36,17 @@ class ClaudeSessionTests(unittest.TestCase):
         process = Mock(returncode=0)
         process.communicate.return_value = ('OWNER_CONFLICT', '')
         with patch.object(claude_setup, 'helper_path', return_value=Path(__file__)), \
-             patch.object(claude_setup.subprocess, 'Popen', return_value=process):
-            result = claude_setup.native_action('inspect-error', pid=42)
+             patch.object(claude_setup.subprocess, 'Popen', return_value=process) as popen:
+            result = claude_setup.native_action('inspect-error', pid=42, script='attempt-marker')
         self.assertEqual(result['setupState'], 'owner-conflict')
         self.assertIn('旧网关', result['reason'])
+        self.assertEqual(popen.call_args.args[0][-1], 'attempt-marker')
+
+    def test_macos_error_inspection_receives_only_the_current_attempt_marker(self):
+        from bridge.platforms.macos.claude import helper_command
+        command, _ = helper_command(Path('helper'), 'inspect-error', 42, Path('Claude'),
+                                    'attempt-marker', None)
+        self.assertEqual(command[-1], 'attempt-marker')
 
     def test_locked_check_and_connect_do_not_start_helper(self):
         self.locked()

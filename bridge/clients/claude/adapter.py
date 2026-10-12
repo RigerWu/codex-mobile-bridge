@@ -97,6 +97,7 @@ class Claude:
             asyncio.run_coroutine_threadsafe(initialize(), self.loop).result(timeout=5)
         config = {'transport': 'file', 'cwd': str(self.directory), 'token': token,
                   'generation': self.desktop.generation, 'reconnect': True,
+                  'inspectionMarker': secrets.token_hex(8),
                   'connectorRevision': CONNECTOR_REVISION,
                   'request': 'request.json', 'response': 'response.json'}
         source = Path(__file__).with_name('connector.js').read_text(encoding='utf-8')
@@ -107,7 +108,7 @@ class Claude:
         console.write_text(console_source(source, config), encoding='utf-8')
         console.chmod(0o600)
         return {'workspace': str(self.directory), 'scriptPath': str(target), 'script': script,
-                'consolePath': str(console)}
+                'consolePath': str(console), 'inspectionMarker': config['inspectionMarker']}
 
     def _setup_state(self, state, reason, **values):
         with self.setup_lock:
@@ -495,7 +496,8 @@ class Claude:
                                           consoleCleanupPending=pending)
                         return
                     if time.monotonic() >= inspect_at:
-                        inspection = native_action('inspect-error', pid=pid, executable=executable, cancelled=cancel)
+                        inspection = native_action('inspect-error', pid=pid, executable=executable,
+                                                   script=prepared.get('inspectionMarker'), cancelled=cancel)
                         if inspection.get('setupState') == 'owner-conflict':
                             self._attempt_state(cancel, 'owner-conflict', inspection['reason'])
                             return
@@ -503,7 +505,8 @@ class Claude:
                     cancel.wait(.25)
                 else:
                     if not cancel.is_set():
-                        result = native_action('inspect-error', pid=pid, executable=executable, cancelled=cancel)
+                        result = native_action('inspect-error', pid=pid, executable=executable,
+                                               script=prepared.get('inspectionMarker'), cancelled=cancel)
                         if result.get('setupState') in DESKTOP_WAIT_STATES:
                             if sys.platform == 'win32':
                                 self._attempt_state(cancel, result['setupState'], result.get('reason', 'Claude 连接未就绪'))

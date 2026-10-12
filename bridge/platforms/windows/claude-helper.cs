@@ -1305,7 +1305,7 @@ class ClaudeKeyboard {
                 var texts=AutomationElement.FromHandle(WaitAppWindow(process,false)).FindAll(TreeScope.Descendants,new PropertyCondition(AutomationElement.ControlTypeProperty,ControlType.Text));
                 foreach(AutomationElement item in texts) {
                     string value=item.Current.Name;
-                    if(value.Contains("Claude 桥接连接被其他网关占用")) {Stage("OWNER_CONFLICT");return 0;}
+                    if(args.Length==4 && value.Contains("Claude 桥接连接被其他网关占用") && value.Contains("["+args[3]+"]")) {Stage("OWNER_CONFLICT");return 0;}
                     if((value.StartsWith("Error:")||value.StartsWith("Uncaught"))&&(value.Contains("尚未信任目录")||value.Contains("WorkspaceTrustError")||value.Contains("trust_required"))) {Stage("NEEDS_TRUST");return 0;}
                 }
                 Stage("NO_TRUST_ERROR");return 0;

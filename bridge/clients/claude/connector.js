@@ -16,8 +16,9 @@
   const sameWorkspace = cwd => typeof cwd === 'string' &&
     normalizedWorkspace(cwd) === normalizedWorkspace(config.cwd);
   const existing = window.__claudeMobileBridge;
+  let sameOwner = false;
   if (existing) {
-    let state, sameOwner = false;
+    let state;
     try {
       state = existing.status();
       if (typeof existing.owns === 'function') sameOwner = existing.owns(config.cwd) === true;
@@ -30,18 +31,19 @@
         sameOwner = sameWorkspace(session?.cwd);
       }
     } catch { /* Unknown ownership is occupied, never permission to replace. */ }
-    if (!state || state.busy || state.writing || state.stopped !== true && !sameOwner) {
+    if (!state || state.busy || state.writing || !sameOwner && state.suspended !== true) {
       const message = sameOwner ? 'Claude 桥接仍有请求进行中，请稍后重试连接' :
-        'Claude 桥接连接被其他网关占用，请先停止旧网关或重新加载 Claude';
+        'Claude 桥接连接被其他网关占用，请先停止旧网关；旧版连接还需重新加载 Claude';
       window.__codingRemoteInjectionError = message;
-      console.error('Error: ' + message);
+      console.error('Error: ' + message + ' [' + (config.inspectionMarker || config.generation) + ']');
       throw new Error(message);
     }
   }
   function replaceExisting() {
     if (!existing) return;
     const state = existing.status();
-    if (window.__claudeMobileBridge !== existing || state.busy || state.writing)
+    if (!state || window.__claudeMobileBridge !== existing || state.busy || state.writing ||
+        !sameOwner && state.suspended !== true)
       throw new Error('Claude 桥接状态已变化，请刷新后重试连接');
     existing.stop();
   }
@@ -83,13 +85,28 @@
     capabilities[kind].push('mobileCatalog', 'mobileProgress', 'mobileAccount');
     if(kind==='code')capabilities[kind].push('mobileList');
     if(typeof api[surface]?.getSession==='function'&&typeof api[surface]?.getTranscript==='function')capabilities[kind].push('mobileDetail');
-    const target = api[surface], original = target?.setAvailableCodeModels;
-    if (typeof original === 'function') {
-      const observer = function (models, ...rest) {
-        if (Array.isArray(models)) offeredModels.set(target, models);
-        return original.call(target, models, ...rest);
-      };
-      try { target.setAvailableCodeModels = observer; restore.push(() => { if (target.setAvailableCodeModels === observer) target.setAvailableCodeModels = original; }); } catch {}
+  }
+  function installObservers() {
+    for (const surface of Object.values(surfaces)) {
+      const target = api[surface], original = target?.setAvailableCodeModels;
+      if (typeof original === 'function') {
+        const observer = function (models, ...rest) {
+          if (Array.isArray(models)) offeredModels.set(target, models);
+          return original.call(target, models, ...rest);
+        };
+        try { target.setAvailableCodeModels = observer; restore.push(() => { if (target.setAvailableCodeModels === observer) target.setAvailableCodeModels = original; }); } catch {}
+      }
+    }
+  }
+  function activate(bridge) {
+    replaceExisting();
+    try {
+      installObservers();
+      window.__claudeMobileBridge = bridge;
+      delete window.__codingRemoteInjectionError;
+    } catch (error) {
+      for (const undo of restore) undo();
+      throw error;
     }
   }
   async function mobileCatalog(target, kind, sessionId, includeSkills=true) {
@@ -239,19 +256,18 @@
     return {contextUsage:null,contextUsageStatus:'unavailable'};
   }
   if (config.transport === 'cdp') {
-    let stopped = false, highWater = 0;
-    replaceExisting();
-    delete window.__codingRemoteInjectionError;
-    window.__claudeMobileBridge = {
+    let stopped = false, busy = false, highWater = 0;
+    activate({
       stop() { stopped = true; for (const undo of restore) undo(); },
       owns(cwd) { return sameWorkspace(cwd); },
-      status() { return {transport:'cdp', stopped, connectorRevision:config.connectorRevision, surfaces:capabilities}; },
+      status() { return {transport:'cdp', stopped, busy, connectorRevision:config.connectorRevision, surfaces:capabilities}; },
       async invoke(msg) {
         if (stopped || msg?.token !== config.token || msg.generation !== config.generation)
           return {error:'连接已过期'};
         if (!Number.isSafeInteger(msg.seq) || msg.seq <= highWater) return {error:'请求已处理，不会重复执行'};
         highWater = msg.seq;
         if (typeof msg.expires !== 'number' || msg.expires < Date.now()/1000) return {error:'请求已过期'};
+        busy = true;
         try {
           const target = api[surfaces[msg.surface]];
           if (!target || !Array.isArray(msg.args)) throw new Error('不支持的桌面操作');
@@ -263,8 +279,9 @@
           if (!allowed.has(msg.method) || typeof target[msg.method] !== 'function') throw new Error('不支持的桌面操作');
           return {result:sanitize(msg.method, await target[msg.method](...callArgs(msg.method,msg.args)))};
         } catch (error) { return {error:String(error.message || error)}; }
+        finally { busy = false; }
       }
-    };
+    });
     return;
   }
   const initial = await read();
@@ -303,21 +320,21 @@
     wakeRequested=false;
   };
   let state = {seq: 0, done: false};
-  replaceExisting();
-  delete window.__codingRemoteInjectionError;
-  window.__claudeMobileBridge = {stop() { stopped = true;wakePoll(); for (const undo of restore) undo(); },
+  activate({stop() { stopped = true;wakePoll(); for (const undo of restore) undo(); },
     owns(cwd) { return sameWorkspace(cwd); },
-    status() { return {transport: 'file', stopped, busy, writing, sessionId, lastWrite, connectorRevision:config.connectorRevision}; }};
+    status() { return {transport: 'file', stopped, suspended, busy, writing, sessionId, lastWrite, connectorRevision:config.connectorRevision}; }});
   async function publish() {
-    let value = {...state, generation, connected: !stopped && !suspended,
-      timestamp: Date.now() / 1000, connectorRevision:config.connectorRevision, surfaces: capabilities};
-    let text = await pack(value);
-    if (encoder.encode(text).length > 32 * 1024 * 1024) {
-      state = {seq: state.seq, done: true, error: '会话内容超过 32 MiB，请在桌面查看'};
-      text = await pack({...value, ...state, result: undefined});
-    }
     writing = true;
     try {
+      let value = {...state, generation, connected: !stopped && !suspended,
+        timestamp: Date.now() / 1000, connectorRevision:config.connectorRevision, surfaces: capabilities};
+      let text = await pack(value);
+      if (stopped) return;
+      if (encoder.encode(text).length > 32 * 1024 * 1024) {
+        state = {seq: state.seq, done: true, error: '会话内容超过 32 MiB，请在桌面查看'};
+        text = await pack({...value, ...state, result: undefined});
+      }
+      if (stopped) return;
       const result = await api.LocalSessions.writeSessionFile(sessionId, config.response, text);
       if (!result?.hash) throw new Error('Claude 拒绝写入桥接文件，请检查目录信任和文件权限');
       lastWrite = Date.now();
@@ -333,6 +350,7 @@
         await new Promise(resolve => setTimeout(resolve, 1000));
         continue;
       }
+      if (stopped) break;
       if (msg && msg.generation !== generation) {
         // A signed idle packet is the only restart handshake. Never replay a request.
         if (!config.reconnect || generations.has(msg.generation) || msg.type !== 'idle' || msg.seq !== 0) {

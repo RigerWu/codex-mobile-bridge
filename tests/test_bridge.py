@@ -863,6 +863,39 @@ class HttpTests(unittest.TestCase):
                 send.assert_called_once()
             self.assertEqual(self.request('POST', path, {'server':'https://other.example'}, headers)[0], 400)
 
+    def test_third_party_channels_are_scoped_and_secrets_remain_masked(self):
+        from bridge.features.notifications.channels import Notifications, settings
+        from unittest.mock import patch
+        with tempfile.TemporaryDirectory(dir=ROOT/'.tmp') as directory:
+            self.server.notifications = Notifications(None, directory)
+            headers = self.login()
+            bark = '/api/notifications/channels/bark'
+            ntfy = '/api/notifications/channels/ntfy'
+            common = '/api/notifications/channels/common'
+            self.assertEqual(self.request('GET', bark)[0], 401)
+            self.assertEqual(self.request('POST', bark, {'barkEnabled': True}, {'Cookie': headers['Cookie']})[0], 403)
+            body = {'barkEnabled': True, 'barkServer': 'https://api.day.app', 'barkKey': 'private-bark'}
+            self.assertEqual(self.request('POST', bark, body, headers)[2]['hasBarkKey'], True)
+            self.assertEqual(self.request('POST', ntfy, {'enabled': True, 'topic': 'test-topic'}, headers)[0], 200)
+            self.assertEqual(self.request('POST', common, {'includeTitle': True, 'securityEnabled': False}, headers)[0], 200)
+            self.assertEqual(settings(directory)['barkKey'], 'private-bark')
+            self.assertTrue(settings(directory)['includeTitle'])
+            self.assertFalse(settings(directory)['securityEnabled'])
+            self.assertNotIn('private-bark', json.dumps(self.request('GET', bark, headers=headers)))
+            self.assertEqual(self.request('POST', ntfy, {'barkKey': 'leak'}, headers)[0], 400)
+            self.assertEqual(self.request('POST', common, {'pushplusToken': 'leak'}, headers)[0], 400)
+            self.assertEqual(self.request('POST', bark, {'clearBarkKey': 'false'}, headers)[0], 400)
+            self.assertEqual(self.request('POST', ntfy, {'clearToken': 1}, headers)[0], 400)
+            self.assertEqual(settings(directory)['barkKey'], 'private-bark')
+            with patch('bridge.api.httpd.publish_bark') as send_bark, patch('bridge.api.httpd.publish') as send_ntfy:
+                self.assertEqual(self.request('POST', bark + '/test', {}, headers)[0], 200)
+                send_bark.assert_called_once()
+                send_ntfy.assert_not_called()
+                self.assertEqual(self.request('POST', ntfy + '/test', {}, headers)[0], 200)
+                send_ntfy.assert_called_once()
+            self.assertEqual(self.request('POST', bark, {'barkServer': 'https://other.example', 'barkEnabled': False}, headers)[2]['hasBarkKey'], False)
+            self.assertEqual(settings(directory)['barkKey'], '')
+
     def test_rename_route_requires_csrf_and_routes_to_selected_host(self):
         from unittest.mock import Mock
         headers = self.login()

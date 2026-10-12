@@ -18,7 +18,7 @@ final class ConnectionDiscovery {
  void cancel(){cancelled=true;HttpURLConnection c=active;if(c!=null)c.disconnect();}
  static String hex(byte[] bytes){StringBuilder s=new StringBuilder();for(byte b:bytes)s.append(String.format("%02x",b&255));return s.toString();}
  static String hash(String value)throws Exception{return hex(MessageDigest.getInstance("SHA-256").digest(value.getBytes(StandardCharsets.UTF_8)));}
- static String secret(String cookie){String value=EventClient.sessionCookie(cookie);return value.isEmpty()?"":value.substring(value.indexOf('=')+1);}
+ static String secret(String cookie){return cookie==null||!cookie.contains("=")?"":cookie.substring(cookie.indexOf('=')+1);}
  static JSONObject descriptor(JSONObject auth,String cookie)throws Exception {
   JSONObject d=auth.optJSONObject("connection");String secret=secret(cookie);
   if(!auth.optBoolean("authenticated")||d==null||secret.isEmpty())return null;

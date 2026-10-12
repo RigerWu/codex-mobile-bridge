@@ -183,7 +183,7 @@ class Handler(BaseHTTPRequestHandler):
         secure = "; Secure" if self.headers.get("Host") in self.server.secure_hosts else ""
         age = 0 if clear else self.server.auth.cookie_age(token)
         lifetime = f"; Max-Age={age}" if age is not None else ""
-        return f"{Auth.COOKIE}={token}; Path=/; HttpOnly; SameSite=Strict{lifetime}{secure}"
+        return f"{self.server.auth.cookie_name}={token}; Path=/; HttpOnly; SameSite=Strict{lifetime}{secure}"
 
     def client(self):
         return self.server.auth.client(self.client_address[0], self.headers, self.headers.get('Host') in self.server.secure_hosts)
@@ -195,7 +195,13 @@ class Handler(BaseHTTPRequestHandler):
         cookie = SimpleCookie()
         try:
             cookie.load(self.headers.get("Cookie", ""))
-            return cookie[Auth.COOKIE].value if Auth.COOKIE in cookie else ""
+            name = self.server.auth.cookie_name
+            if name in cookie:
+                return cookie[name].value
+            # Legacy cookies are accepted only while their token belongs to
+            # this gateway. A successful response migrates to the new name.
+            legacy = cookie[Auth.COOKIE].value if Auth.COOKIE in cookie else ""
+            return legacy if legacy and self.server.auth.get(legacy) else ""
         except Exception:
             return ""
 
@@ -294,7 +300,7 @@ class Handler(BaseHTTPRequestHandler):
                 discovery = getattr(self.server, 'connection_discovery', None)
                 return self.output(200, {"uiLanguage": self.server.ui_language(), "authenticated": bool(session), "trustedDevice": bool(session and session.get("trustedDevice")), "csrf": session["csrf"] if session else None,
                                          "loginStatus": self.server.auth.login_status(self.client()["ip"]),
-                                         "instanceId": self.server.instance_id,
+                                         "instanceId": self.server.instance_id, "cookieName": self.server.auth.cookie_name,
                                          **({"computer": {"name": socket.gethostname(), "platform": platform.system()}} if session else {}),
                                          **({'connection': discovery.descriptor(self.token())} if session and discovery else {}),
                                          "notifications": self.server.notifications is not None,

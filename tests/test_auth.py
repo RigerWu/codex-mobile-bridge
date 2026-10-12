@@ -30,10 +30,13 @@ class AuthTests(unittest.TestCase):
 
     def test_permanent_login_survives_restart_without_storing_bearer(self):
         auth = self.auth()
+        self.assertEqual(auth.cookie_name, self.auth().cookie_name)
+        self.assertRegex(auth.cookie_name, r'^codex_mobile_session_[0-9a-f]{24}$')
         token, session = auth.new_session('192.0.2.7', 'iPhone Safari')
         self.assertEqual(session['expires'], 0)
         raw = (self.directory / 'auth-sessions.json').read_text()
         self.assertNotIn(token, raw)
+        self.assertIn('cookieName', raw)
         with patch('bridge.features.auth.auth.time.time', return_value=session['created'] + 50 * 365 * 86400):
             restarted = self.auth()
             self.assertEqual(restarted.get(token)['csrf'], session['csrf'])

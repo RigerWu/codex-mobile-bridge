@@ -8,6 +8,12 @@
 .chat-list-toolbar .list-mode select{height:36px;padding:6px 3px;width:auto;max-width:108px;font-size:12px}
 .chat-list-toolbar .archive{display:flex;align-items:center;gap:3px;font-size:11px;min-height:36px}
 .chat-list-toolbar .archive input{width:14px;height:14px;flex:none;margin:0}
+/* Keep search usable; filters wrap with the actual list pane width. */
+.ds-list .chat-list-toolbar{display:flex;flex-wrap:wrap}
+.ds-list .chat-list-toolbar>.search{flex:1 1 140px;min-width:140px}
+.ds-list .chat-list-toolbar>.list-filters{display:flex;flex:0 1 auto;flex-wrap:wrap;gap:6px;margin-left:auto}
+.ds-list .chat-list-toolbar .list-mode{flex:none}
+.ds-list .chat-list-toolbar .ds-surface{width:auto;height:36px;margin:0;padding:6px 3px}
 .client-switch-dock{display:flex;align-items:center;border-top:1px solid var(--line);padding-bottom:max(4px,env(safe-area-inset-bottom))}
 .client-switch-dock .client-switch{flex:1;min-width:0;border:0;padding:4px 0}
 .client-functions>[hidden],.client-switch-dock[hidden]{display:none!important}

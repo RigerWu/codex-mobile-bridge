@@ -75,6 +75,32 @@ test('Claude lists distinguish Code and Cowork and retain archive/project filter
 test('workspace tabs use the real Workbench provider routes and split behavior',async()=>{
  const ui=await opened();assert.equal(ui.view.workbench.current.provider,'claude');ui.view.workbench.files();await Promise.resolve();assert.ok(ui.calls.some(c=>c.url.includes('/api/desktop-sessions/claude/workspace?sessionId=a')));ui.view.workbench.split('files');assert.equal(ui.view.workbench.splitMode,true);assert.ok(ui.view.conversation.classList.contains('wb-split'));assert.equal(ui.view.workbench.current.splitTab,'files');
 });
+
+for(const [closed,next] of [['files','terminal'],['terminal','file:preview'],['file:preview','terminal']])test(`closing active split ${closed} selects adjacent ${next} and preserves the main chat`,async()=>{
+ const ui=await opened(),wb=ui.view.workbench,session=wb.current,disposed=[];
+ session.files=['files','terminal','file:preview'].map(id=>({id,name:id,body:wb.node('div'),terminal:id==='terminal'?{dispose:()=>disposed.push(id)}:undefined}));
+ ui.view.input.value='unsent draft';ui.view.messages.scrollTop=42;wb.split(closed);session.splitRatio=.6;
+ await wb.close(closed);assert.equal(session.splitTab,next);assert.equal(session.active,next);assert.equal(wb.splitMode,true);assert.equal(wb.panel.firstElementChild,session.files.find(t=>t.id===next).body);assert.equal(ui.view.input.value,'unsent draft');assert.equal(ui.view.messages.scrollTop,42);assert.equal(session.splitRatio,.6);assert.deepEqual(disposed,closed==='terminal'?['terminal']:[]);
+});
+test('inactive closes and consecutive closes preserve split until the final tool is closed',async()=>{
+ const ui=await opened(),wb=ui.view.workbench,s=wb.current;
+ s.files=['files','terminal','file:preview'].map(id=>({id,name:id,body:wb.node('div')}));wb.split('terminal');
+ await wb.close('files');assert.equal(s.splitTab,'terminal');await wb.close('terminal');assert.equal(s.splitTab,'file:preview');assert.equal(wb.splitMode,true);
+ await wb.close('file:preview');assert.equal(s.splitTab,null);assert.equal(s.active,'chat');assert.equal(wb.splitMode,false);assert.equal(wb.panel.hidden,true);
+});
+test('closing a split tool while narrow preserves the adjacent tool when widened',async()=>{
+ const ui=await opened(),wb=ui.view.workbench,s=wb.current;
+ s.files=['files','file:preview'].map(id=>({id,name:id,body:wb.node('div')}));wb.split('file:preview');ui.view.conversation.clientWidth=390;wb.paint();
+ await wb.close('file:preview');assert.equal(s.splitTab,'files');assert.equal(wb.splitMode,false);ui.view.conversation.clientWidth=1000;wb.paint();assert.equal(wb.splitMode,true);assert.equal(wb.panel.firstElementChild,s.files[0].body);
+ wb.unsplit();await wb.close('files');assert.equal(s.active,'chat');assert.equal(s.splitTab,null);
+});
+test('a pending side-chat close updates only its original session and respects cancellation',async()=>{
+ const ui=await opened(),wb=ui.view.workbench,s=wb.current;let finish;
+ s.files=['files','sidechat'].map(id=>({id,name:id,body:wb.node('div')}));s.files[1].sideChat={end:()=>new Promise(resolve=>finish=resolve),dispose(){}};wb.split('sidechat');
+ const cancelled=wb.close('sidechat');finish(false);await cancelled;assert.equal(s.splitTab,'sidechat');assert.equal(s.files.length,2);
+ const closing=wb.close('sidechat');wb.open('other','local');const other=wb.current;finish(true);await closing;assert.equal(wb.current,other);assert.equal(s.splitTab,'files');assert.equal(s.active,'files');assert.equal(other.active,'chat');
+});
+
 test('model picker preserves current effort only for compatible models',async()=>{
  const ui=await opened();ui.setHandler(async()=>({models:[{id:'model-a',efforts:['high','low']},{id:'model-b',efforts:['low'],defaultEffort:'low'}],currentModel:'model-a',currentEffort:'high'}));await ui.view.models();const dialog=ui.document.querySelector('dialog'),selects=dialog.querySelectorAll('select');assert.equal(selects[1].value,'high');selects[0].value='model-b';selects[0].onchange();assert.equal(selects[1].value,'low');
 });

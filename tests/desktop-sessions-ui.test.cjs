@@ -31,6 +31,16 @@ function fixture(){
 }
 async function opened(){const ui=fixture();await ui.view.choose('claude');await ui.view.open('a');return ui;}
 
+test('search stays short in both languages while its accessible name stays specific',()=>{
+ const ui=fixture();
+ assert.equal(ui.view.search.placeholder,'搜索');
+ assert.equal(ui.view.search.getAttribute('aria-label'),'搜索聊天或项目');
+ ui.run("BridgeI18n.setLanguage('en');BridgeI18n.apply()");
+ assert.equal(ui.view.search.placeholder,'Search');
+ assert.equal(ui.view.search.dataset.i18nAriaLabel,'搜索聊天或项目');
+ assert.equal(ui.run("BridgeI18n.t('搜索聊天或项目')"),'Search chats or projects');
+});
+
 test('session list explains a pending connection and offers retry only after timeout',async()=>{
  const ui=fixture(),client={id:'deepseek',enabled:true,configured:true,running:false,connected:false,connectionState:'starting',reason:'正在启动 Harness 桌面应用'},retries=[];
  ui.view.setClientStates([client],async id=>retries.push(id));ui.setHandler(async()=>{throw Error('客户端连接不可用，请在电脑端检查');});await ui.view.choose('deepseek');

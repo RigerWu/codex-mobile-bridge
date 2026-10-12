@@ -59,3 +59,11 @@ test('busy, hidden and unavailable lists reject pull gestures and failure remain
   ui.setRefresh(async()=>{throw Error('offline');});await ui.sync.update(true);ui.advance(5000);assert.equal(ui.status.hidden,false);assert.match(ui.status.textContent,/点击重试/);
   ui.setRefresh(async()=>{});ui.status.onclick();await settled();assert.equal(ui.calls,3);ui.advance(800);assert.equal(ui.status.hidden,true);
 });
+
+test('pulling in the middle of the list does not intercept normal scrolling',async()=>{
+ const ui=fixture();ui.root.scrollTop=120;ui.touch('touchstart',20);const event=ui.touch('touchmove',120);ui.touch('touchend',120);ui.frame();await settled();assert.equal(event.prevented,undefined);assert.equal(ui.calls,0);assert.equal(ui.status.hidden,true);
+});
+test('reset discards old feedback and keeps a newer refresh busy',async()=>{
+ const ui=fixture();let finishOld,finishNew;ui.setRefresh(()=>new Promise(resolve=>finishOld=resolve));const old=ui.sync.update(true);ui.sync.reset();assert.equal(ui.status.hidden,true);
+ ui.setRefresh(()=>new Promise(resolve=>finishNew=resolve));const current=ui.sync.update(true);finishOld();await old;assert.equal(ui.sync.busy,true);assert.match(ui.status.textContent,/正在刷新/);finishNew();await current;assert.equal(ui.sync.busy,false);assert.match(ui.status.textContent,/已更新/);
+});

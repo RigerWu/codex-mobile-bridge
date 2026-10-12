@@ -76,6 +76,11 @@ class ClaudeControls(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, '电脑端'): self.manager.reconnect_claude()
         self.claude.connect.assert_not_called(); self.fixture.launch.assert_not_called()
 
+    def test_reconnect_can_retry_after_a_reported_other_gateway_conflict(self):
+        self.claude.status.return_value = {'connected': False, 'setupState': 'owner-conflict'}
+        self.manager.reconnect_claude()
+        self.claude.reconnect.assert_called_once_with(); self.claude.connect.assert_not_called()
+
     def test_connected_reconnect_is_idempotent_even_when_tasks_are_busy(self):
         self.claude.status.return_value = {'connected': True}
         self.claude.call.side_effect = lambda *_: {'complete': True, 'sessions': [

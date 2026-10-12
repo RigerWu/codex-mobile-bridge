@@ -191,6 +191,9 @@ def native_action(action, *, helper, pid=None, executable=None, script=None, can
                  else 'needs-desktop' if '桌面不可用' in message else 'needs-retry')
         return {'setupState': state, 'reason': message[:300]}
     if action == 'inspect-error':
+        if 'OWNER_CONFLICT' in stdout:
+            return {'setupState': 'owner-conflict',
+                    'reason': 'Claude 桥接连接被其他网关占用，请先停止旧网关或重新加载 Claude'}
         return {'setupState': 'needs-trust' if 'NEEDS_TRUST' in stdout else 'failed',
                 'reason': '请在 Claude Code 中确认连接目录信任，然后重新连接'}
     return {'setupState': 'needs-developer-mode' if action == 'enable-devtools' else 'submitted',

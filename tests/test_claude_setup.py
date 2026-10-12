@@ -498,7 +498,7 @@ class ClaudeNativeConnection(unittest.TestCase):
             self.adapter._connect_native(False, self.cancel_path)
         profiles.assert_not_called()
 
-    def run_injection(self, heartbeat, trust=False):
+    def run_injection(self, heartbeat, trust=False, conflict=False):
         self.adapter.desktop = self.idle_desktop(connected=False)
         actions = []
         def native(action, **kwargs):
@@ -510,12 +510,14 @@ class ClaudeNativeConnection(unittest.TestCase):
             if action == 'close-devtools':
                 return {'setupState': 'connected'}
             if action == 'inspect-error':
+                if conflict:
+                    return {'setupState': 'owner-conflict', 'reason': 'Claude 桥接连接被其他网关占用，请先停止旧网关或重新加载 Claude'}
                 return {'setupState': 'needs-trust' if trust else 'failed', 'reason': 'trust required'}
             return {'setupState': 'ready'}
         with patch('bridge.clients.claude.adapter.native_action', side_effect=native), \
              patch('bridge.clients.claude.adapter.running_app', return_value=42), \
              patch('bridge.clients.claude.adapter.developer_mode_enabled', return_value=True), \
-             patch('bridge.clients.claude.adapter.time.monotonic', side_effect=[0, 0 if heartbeat else 19]), \
+             patch('bridge.clients.claude.adapter.time.monotonic', side_effect=[0, 0, 3 if conflict else 0 if heartbeat else 19, 3]), \
              patch.object(self.adapter, 'prepare', return_value={'consolePath': str(self.root/'script')}), \
              patch.object(self.adapter.setup_cancel, 'wait', return_value=False), \
              patch.object(self.adapter, '_setup_state', wraps=self.adapter._setup_state) as state:
@@ -533,6 +535,12 @@ class ClaudeNativeConnection(unittest.TestCase):
         _, states = self.run_injection(False, trust=True)
         self.assertNotIn('connected', states)
         self.assertEqual(self.adapter.status()['setupState'], 'needs-trust')
+
+    def test_owner_conflict_reports_without_waiting_for_full_connection_timeout(self):
+        actions, states = self.run_injection(False, conflict=True)
+        self.assertEqual(actions, ['check', 'connect', 'inspect-error'])
+        self.assertIn('owner-conflict', states)
+        self.assertEqual(self.adapter.status()['setupState'], 'owner-conflict')
 
     def test_only_verified_heartbeat_allows_connected_and_console_cleanup(self):
         actions, states = self.run_injection(True)

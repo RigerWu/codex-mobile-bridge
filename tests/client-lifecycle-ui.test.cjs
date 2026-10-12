@@ -109,6 +109,11 @@ test('connection labels distinguish startup, required action, failure and actual
  assert.equal(connection({...base,setupStatus:'recovery-required',connectionState:'connecting',backgroundRunning:true,mainRunning:false}).label,'后台运行，桌面未打开');
  assert.equal(connection({...base,pendingEnable:true,reason:'请手动连接 Claude'}).reason,'正在等待客户端连接，完成后会自动显示聊天。');
  for(const setupStatus of ['needs-initialization','needs-retry','needs-developer-mode','needs-trust','needs-permission','failed'])assert.equal(connection({...base,id:'claude',setupStatus}).canInitialize,true);
+ const prepared={...base,id:'claude',setupStatus:'needs-initialization',reconnectSupported:true,canReconnect:true};
+ assert.equal(connection(prepared).canReconnect,true);assert.equal(connection(prepared).canInitialize,true);
+ assert.equal(connection({...prepared,connectionState:'connecting'}).canReconnect,false);
+ assert.equal(connection({...prepared,setupStatus:'owner-conflict'}).canReconnect,true);
+ assert.equal(connection({...prepared,canReconnect:false}).canReconnect,false);
  for(const client of [{...base,id:'deepseek',setupStatus:'needs-initialization'},{...base,id:'claude',connected:true,setupStatus:'needs-initialization'},{...base,id:'claude',connectionState:'connecting',setupStatus:'needs-initialization'},{...base,id:'claude',setupStatus:'unsupported'}])assert.equal(connection(client).canInitialize,false);
  assert.equal(connection({...base,setupStatus:'restart-required',retryable:true}).retryable,false);
 });

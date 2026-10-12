@@ -329,6 +329,15 @@ final class Connector {
         output("connected", "Claude 已连接")
     }
     func inspectError() {
+        let conflict = find(root, matching: {
+            guard text($0, kAXRoleAttribute) == "AXStaticText" else { return false }
+            let value = text($0, kAXValueAttribute).isEmpty ? text($0, kAXTitleAttribute) : text($0, kAXValueAttribute)
+            return value.contains("Claude 桥接连接被其他网关占用")
+        })
+        if conflict != nil {
+            output("owner-conflict", "Claude 桥接连接被其他网关占用，请先停止旧网关或重新加载 Claude")
+            return
+        }
         let error = find(root, matching: {
             guard text($0, kAXRoleAttribute) == "AXStaticText" else { return false }
             let value = text($0, kAXValueAttribute).isEmpty ? text($0, kAXTitleAttribute) : text($0, kAXValueAttribute)

@@ -9,7 +9,42 @@
   if (!api?.LocalSessions?.getAll || (config.transport !== 'cdp' && (!api.LocalSessions.readFileAtCwd || !api.LocalSessions.writeSessionFile))) {
     throw new Error('当前 Claude Desktop 不提供所需的本地文件接口');
   }
-  window.__claudeMobileBridge?.stop();
+  const normalizedWorkspace = cwd => {
+    const value = cwd.replaceAll('\\', '/').replace(/\/$/, '');
+    return /^[A-Za-z]:\//.test(value) ? value.toLowerCase() : value;
+  };
+  const sameWorkspace = cwd => typeof cwd === 'string' &&
+    normalizedWorkspace(cwd) === normalizedWorkspace(config.cwd);
+  const existing = window.__claudeMobileBridge;
+  if (existing) {
+    let state, sameOwner = false;
+    try {
+      state = existing.status();
+      if (typeof existing.owns === 'function') sameOwner = existing.owns(config.cwd) === true;
+      else if (state?.transport === 'file' && state.sessionId) {
+        // Legacy connectors expose only a session ID. Check Desktop's live
+        // session list before deciding whether that renderer is ours.
+        const rows = await api.LocalSessions.getAll();
+        const sessions = Array.isArray(rows) ? rows : rows?.sessions;
+        const session = sessions?.find(row => row.sessionId === state.sessionId);
+        sameOwner = sameWorkspace(session?.cwd);
+      }
+    } catch { /* Unknown ownership is occupied, never permission to replace. */ }
+    if (!state || state.busy || state.writing || state.stopped !== true && !sameOwner) {
+      const message = sameOwner ? 'Claude 桥接仍有请求进行中，请稍后重试连接' :
+        'Claude 桥接连接被其他网关占用，请先停止旧网关或重新加载 Claude';
+      window.__codingRemoteInjectionError = message;
+      console.error('Error: ' + message);
+      throw new Error(message);
+    }
+  }
+  function replaceExisting() {
+    if (!existing) return;
+    const state = existing.status();
+    if (window.__claudeMobileBridge !== existing || state.busy || state.writing)
+      throw new Error('Claude 桥接状态已变化，请刷新后重试连接');
+    existing.stop();
+  }
   const encoder = new TextEncoder();
   const key = await crypto.subtle.importKey('raw', encoder.encode(config.token),
     {name: 'HMAC', hash: 'SHA-256'}, false, ['sign', 'verify']);
@@ -205,8 +240,11 @@
   }
   if (config.transport === 'cdp') {
     let stopped = false, highWater = 0;
+    replaceExisting();
+    delete window.__codingRemoteInjectionError;
     window.__claudeMobileBridge = {
       stop() { stopped = true; for (const undo of restore) undo(); },
+      owns(cwd) { return sameWorkspace(cwd); },
       status() { return {transport:'cdp', stopped, connectorRevision:config.connectorRevision, surfaces:capabilities}; },
       async invoke(msg) {
         if (stopped || msg?.token !== config.token || msg.generation !== config.generation)
@@ -253,7 +291,7 @@
   if (!sessionId) throw new Error('无法创建文件桥接会话；请在 Code 页面确认目录信任');
   let generation = initial.generation;
   const generations = new Set([generation]);
-  let stopped = false, suspended = initial.type === 'stop', busy = false, highWater = initial.seq, lastWrite = 0, dirty = true;
+  let stopped = false, suspended = initial.type === 'stop', busy = false, writing = false, highWater = initial.seq, lastWrite = 0, dirty = true;
   let wake, wakeRequested=false;
   const wakePoll=()=>{wakeRequested=true;wake?.();};
   const pause=async()=>{
@@ -265,8 +303,11 @@
     wakeRequested=false;
   };
   let state = {seq: 0, done: false};
+  replaceExisting();
+  delete window.__codingRemoteInjectionError;
   window.__claudeMobileBridge = {stop() { stopped = true;wakePoll(); for (const undo of restore) undo(); },
-    status() { return {transport: 'file', stopped, busy, sessionId, lastWrite, connectorRevision:config.connectorRevision}; }};
+    owns(cwd) { return sameWorkspace(cwd); },
+    status() { return {transport: 'file', stopped, busy, writing, sessionId, lastWrite, connectorRevision:config.connectorRevision}; }};
   async function publish() {
     let value = {...state, generation, connected: !stopped && !suspended,
       timestamp: Date.now() / 1000, connectorRevision:config.connectorRevision, surfaces: capabilities};
@@ -275,9 +316,12 @@
       state = {seq: state.seq, done: true, error: '会话内容超过 32 MiB，请在桌面查看'};
       text = await pack({...value, ...state, result: undefined});
     }
-    const result = await api.LocalSessions.writeSessionFile(sessionId, config.response, text);
-    if (!result?.hash) throw new Error('Claude 拒绝写入桥接文件，请检查目录信任和文件权限');
-    lastWrite = Date.now();
+    writing = true;
+    try {
+      const result = await api.LocalSessions.writeSessionFile(sessionId, config.response, text);
+      if (!result?.hash) throw new Error('Claude 拒绝写入桥接文件，请检查目录信任和文件权限');
+      lastWrite = Date.now();
+    } finally { writing = false; }
   }
   console.info('Claude 文件桥接启动中；状态：window.__claudeMobileBridge.status()');
   try {

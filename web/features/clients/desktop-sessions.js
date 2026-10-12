@@ -12,7 +12,8 @@ class DesktopSessionsView {
     this.surface=this.node('select','ds-surface');this.label(this.surface,'会话类型');for(const [id,title] of [['all','全部会话'],['code','Code'],['cowork','Cowork']])this.surface.add(new Option(BridgeI18n.t(title),id));this.surface.onchange=()=>this.renderList();filters.prepend(this.surface);
     this.listStatus=this.node('p','muted ds-list-status');this.listStatus.setAttribute('role','status');this.connectionRetry=this.button('重试连接',async()=>{const provider=this.provider;if(this.retryingClient||!this.retryClient)return;this.retryingClient=provider;this.renderConnectionStatus();try{await this.retryClient(provider);}finally{this.retryingClient=null;this.renderConnectionStatus();}});this.connectionRetry.hidden=true;
     this.connectionInitialize=this.button('初始化连接',async()=>{const provider=this.provider;if(this.initializingClient||!this.initializeClient)return;this.initializingClient=provider;this.renderConnectionStatus();try{await this.initializeClient(provider);}finally{this.initializingClient=null;this.renderConnectionStatus();}});this.connectionInitialize.hidden=true;
-    this.connectionNotice=this.node('p','muted');this.connectionNotice.hidden=true;this.connectionRefresh=this.button('刷新状态',async()=>{if(this.refreshingClient||!this.refreshClients)return;this.refreshingClient=true;this.renderConnectionStatus();try{await this.refreshClients();}finally{this.refreshingClient=false;this.renderConnectionStatus();}});this.connectionRefresh.hidden=true;this.rowsRoot=this.node('div','sessions');const toolbar=this.node('div','chat-list-toolbar');toolbar.append(this.search,filters);this.list.append(toolbar,this.listStatus,this.connectionNotice,this.connectionRetry,this.connectionInitialize,this.connectionRefresh,this.rowsRoot);
+    this.connectionReconnect=this.button('尝试重连',async()=>{const provider=this.provider;if(this.reconnectingClient||!this.reconnectClient)return;this.reconnectingClient=provider;this.renderConnectionStatus();try{await this.reconnectClient(provider);}finally{this.reconnectingClient=null;this.renderConnectionStatus();}});this.connectionReconnect.hidden=true;
+    this.connectionNotice=this.node('p','muted');this.connectionNotice.hidden=true;this.connectionRefresh=this.button('刷新状态',async()=>{if(this.refreshingClient||!this.refreshClients)return;this.refreshingClient=true;this.renderConnectionStatus();try{await this.refreshClients();}finally{this.refreshingClient=false;this.renderConnectionStatus();}});this.connectionRefresh.hidden=true;this.rowsRoot=this.node('div','sessions');const toolbar=this.node('div','chat-list-toolbar');toolbar.append(this.search,filters);this.list.append(toolbar,this.listStatus,this.connectionNotice,this.connectionRetry,this.connectionReconnect,this.connectionInitialize,this.connectionRefresh,this.rowsRoot);
     this.welcome=this.node('div','welcome ds-welcome');const logo=this.node('img','mark large');logo.src='/icon.png';logo.alt='';logo.width=72;logo.height=72;this.welcome.append(logo,this.translated('h1','从一条聊天继续'),this.translated('p','选择电脑上的聊天，查看进度或发送消息。','muted'));
     this.conversation=this.node('section','ds-conversation chat');this.conversation.hidden=true;this.main.append(this.welcome,this.conversation);
     this.back=this.iconButton('返回聊天列表','m15 5-7 7 7 7',()=>{if(!this.workbench.back())this.backToList();});this.back.classList.add('ds-back');
@@ -71,9 +72,9 @@ class DesktopSessionsView {
       this.listPrefetchAt.set(client.id,now);this.sharedRead(client.id,'list').promise.catch(()=>{});
     }
   }
-  setClientStates(clients,retry,initialize,refresh){
+  setClientStates(clients,retry,initialize,refresh,reconnect){
     for(const client of clients){const old=this.clientStates?.find(row=>row.id===client.id);if(old&&(old.enabled!==false&&client.enabled===false||old.connected===true&&client.connected===false))this.invalidateReads(client.id);}
-    const before=this.clientStates?.find(client=>client.id===this.provider);this.clientStates=clients;this.retryClient=retry;this.initializeClient=initialize;this.refreshClients=refresh;
+    const before=this.clientStates?.find(client=>client.id===this.provider);this.clientStates=clients;this.retryClient=retry;this.initializeClient=initialize;this.refreshClients=refresh;this.reconnectClient=reconnect;
     if(this.state&&!this.canMutate())this.staleDetail();else this.updateComposer();
     const current=clients.find(client=>client.id===this.provider),wasWaiting=before&&ClientLifecycle.connection(before).waiting;
     this.prefetchLists();
@@ -81,10 +82,12 @@ class DesktopSessionsView {
   }
   renderConnectionStatus(){
     const client=this.clientStates?.find(client=>client.id===this.provider),state=client&&ClientLifecycle.connection(client);
-    const failure=client?.operationFailure,uncertain=!!(client?.operationUncertain||failure?.uncertain),blocked=!!state&&!client.connected&&(state.waiting||state.action||state.retryable||!!failure);
+    const failure=client?.operationFailure,uncertain=!!(client?.operationUncertain||failure?.uncertain),blocked=!!state&&!client.connected&&(state.waiting||state.action||state.retryable||state.canReconnect||!!failure);
     this.listStatus.setAttribute('aria-busy',String(!!state?.waiting));this.listStatus.classList.toggle('client-connection-waiting',!!state?.waiting);
     this.connectionRetry.hidden=!blocked||!state.retryable||uncertain;this.connectionRetry.disabled=!!this.retryingClient;
     this.connectionInitialize.hidden=!blocked||!state.canInitialize||uncertain;this.connectionInitialize.disabled=!!this.initializingClient;
+    this.connectionReconnect.hidden=!blocked||!state.canReconnect||uncertain;this.connectionReconnect.disabled=!!this.reconnectingClient;
+    this.connectionInitialize.textContent=BridgeI18n.t(state?.canReconnect?'重新初始化连接':'初始化连接');
     this.connectionNotice.hidden=!failure;this.connectionNotice.textContent=failure?BridgeI18n.t(ClientLifecycle.failureMessage(failure)):'';this.connectionRefresh.hidden=!uncertain;this.connectionRefresh.disabled=!!this.refreshingClient;
     if(blocked)this.listStatus.textContent=BridgeI18n.t(state.label)+(state.reason&&state.reason!==state.label?' · '+BridgeI18n.t(state.reason):'');
     return blocked;

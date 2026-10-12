@@ -32,6 +32,15 @@ class ClaudeSessionTests(unittest.TestCase):
     def locked(self):
         self.snapshot.return_value = {'state': 'locked', 'interactive': False, 'reason': 'Windows 已锁定'}
 
+    def test_windows_owner_conflict_receipt_has_actionable_state(self):
+        process = Mock(returncode=0)
+        process.communicate.return_value = ('OWNER_CONFLICT', '')
+        with patch.object(claude_setup, 'helper_path', return_value=Path(__file__)), \
+             patch.object(claude_setup.subprocess, 'Popen', return_value=process):
+            result = claude_setup.native_action('inspect-error', pid=42)
+        self.assertEqual(result['setupState'], 'owner-conflict')
+        self.assertIn('旧网关', result['reason'])
+
     def test_locked_check_and_connect_do_not_start_helper(self):
         self.locked()
         with patch('bridge.platforms.windows.claude.subprocess') as processes:

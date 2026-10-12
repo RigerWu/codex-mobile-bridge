@@ -475,6 +475,7 @@ class Claude:
                     self._setup_state('needs-retry', result.get('reason', 'Claude 自动连接未完成，请点击连接重试'))
                     return
                 deadline = time.monotonic() + (8 if sys.platform == 'win32' else 18)
+                inspect_at = time.monotonic() + 2
                 while not cancel.is_set() and time.monotonic() < deadline:
                     if self.desktop.connected:
                         if force_console:
@@ -493,6 +494,12 @@ class Claude:
                         self._attempt_state(cancel, 'connected', 'Claude 已连接；开发者工具未自动关闭，请手动关闭' if pending else '桌面连接可用',
                                           consoleCleanupPending=pending)
                         return
+                    if time.monotonic() >= inspect_at:
+                        inspection = native_action('inspect-error', pid=pid, executable=executable, cancelled=cancel)
+                        if inspection.get('setupState') == 'owner-conflict':
+                            self._attempt_state(cancel, 'owner-conflict', inspection['reason'])
+                            return
+                        inspect_at = time.monotonic() + 3
                     cancel.wait(.25)
                 else:
                     if not cancel.is_set():
@@ -503,8 +510,8 @@ class Claude:
                                 return
                             if self._await_desktop(result, cancel): continue
                             return
-                        self._setup_state('needs-trust' if result.get('setupState') == 'needs-trust' else 'failed',
-                                          result.get('reason') if result.get('setupState') == 'needs-trust'
+                        self._setup_state(result.get('setupState') if result.get('setupState') in ('needs-trust', 'owner-conflict') else 'failed',
+                                          result.get('reason') if result.get('setupState') in ('needs-trust', 'owner-conflict')
                                           else '未收到 Claude 连接确认，请检查登录和目录信任后重试')
                     return
         except Exception as exc:

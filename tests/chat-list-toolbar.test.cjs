@@ -10,7 +10,7 @@ test('list filters follow the selected label and language',()=>{
   const context=vm.createContext({document:{createElement:()=>measure,body:{append(){}},addEventListener(name,fn){documentEvents[name]=fn;}},window:{addEventListener(){}},getComputedStyle:()=>({font:'12px sans-serif',letterSpacing:'normal'}),requestAnimationFrame:fn=>fn()});
   vm.runInContext(fs.readFileSync('web/features/clients/client-navigation.js','utf8'),context);
   vm.runInContext('bindChatListToolbar(toolbar)',Object.assign(context,{toolbar}));
-  assert.equal(mode.style.width,'84px');assert.equal(surface.style.width,'60px');
-  mode.selectedOptions[0].textContent='Project';events.change();assert.equal(mode.style.width,'92px');
-  mode.selectedOptions[0].textContent='按项目';documentEvents['bridge-language']();assert.equal(mode.style.width,'60px');
+  assert.equal(mode.style.width,'78px');assert.equal(surface.style.width,'54px');
+  mode.selectedOptions[0].textContent='Project';events.change();assert.equal(mode.style.width,'86px');
+  mode.selectedOptions[0].textContent='按项目';documentEvents['bridge-language']();assert.equal(mode.style.width,'54px');
 });

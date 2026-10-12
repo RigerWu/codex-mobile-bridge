@@ -11,7 +11,7 @@ function bindChatListToolbar(toolbar){
       measure.style.letterSpacing=style.letterSpacing;
       measure.textContent=select.selectedOptions[0]?.textContent||'';
       // Reserve the native arrow and its spacing; only the selected label determines width.
-      select.style.width=Math.ceil(measure.getBoundingClientRect().width+36)+'px';
+      select.style.width=Math.ceil(measure.getBoundingClientRect().width+30)+'px';
     }
   };
   const later=()=>requestAnimationFrame(update);

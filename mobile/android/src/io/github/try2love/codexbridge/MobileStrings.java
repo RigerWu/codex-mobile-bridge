@@ -126,8 +126,8 @@ values.put("请填写完整的 HTTPS 网关地址，或局域网 HTTP 地址，�
   values.put("返回电脑列表","Back to computers");
   values.put("账号与接入","Accounts and connections");
   values.put("外观与显示","Appearance");
-  values.put("隐藏APP","Hide apps");
-  values.put("显示APP","Show apps");
+  values.put("隐藏底部 APP 图标","Hide bottom app icons");
+  values.put("显示底部 APP 图标","Show bottom app icons");
   values.put("刷新页面","Reload page");
   values.put("好","OK");
   values.put("电脑上的工作，\n带在身边。","Your computer’s work,\nalways with you.");

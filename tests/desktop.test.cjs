@@ -106,22 +106,23 @@ for(const transferFirst of [false,true])test(`independent transfer settings ${tr
     element.validity={valid:true};element.reportValidity=()=>element.validity.valid;
     return element;
   };
-  const panel=ui.context.document.createElement('section');panel.dataset.panel='advanced';
+  const panel=ui.context.document.createElement('section');panel.dataset.panel='advanced';panel.hidden=true;
   const descendants=element=>[element,...(element.children||[]).flatMap(descendants)];
   const autoStart=ui.nodes.get('auto-start');autoStart.id='auto-start';autoStart.type='checkbox';autoStart.validity={valid:true};autoStart.closest=selector=>selector==='[data-panel]'?panel:null;
   ui.context.document.querySelector=selector=>selector==='[data-panel=advanced]'?panel:null;
   ui.nodes.get('settings').querySelectorAll=()=>[autoStart,...descendants(panel).filter(element=>element.tagName==='INPUT')];
-  ui.context.MutationObserver=class {observe(){}};ui.context.window.addEventListener=()=>{};
+  let reveal;ui.context.MutationObserver=class {constructor(callback){reveal=callback;}observe(){}};ui.context.window.addEventListener=()=>{};
   let resolveRead;const writes=[];
   ui.api.transferSettings=value=>value?(writes.push(value),Promise.resolve(value)):new Promise(resolve=>{resolveRead=resolve;});
   vm.runInContext(fs.readFileSync(path.join(__dirname,'../web/features/workspace/file-actions.js'),'utf8'),ui.context);
   ui.context.BridgeFileActions=ui.context.window.BridgeFileActions;
   vm.runInContext(fs.readFileSync(path.join(__dirname,'../desktop/features/files/settings.js'),'utf8'),ui.context);
   const input=descendants(panel).find(element=>element.tagName==='INPUT');
-  if(transferFirst){resolveRead({clickDownloadMiB:100});await new Promise(setImmediate);}
+  assert.equal(resolveRead,undefined,'hidden settings must not read before reveal');
+  if(transferFirst){panel.hidden=false;reveal();resolveRead({clickDownloadMiB:100});await new Promise(setImmediate);}
   ui.run('dirty=false;render(snapshot)');
   assert.equal(ui.run('dirty'),false);
-  if(!transferFirst){resolveRead({clickDownloadMiB:100});await new Promise(setImmediate);}
+  if(!transferFirst){panel.hidden=false;reveal();resolveRead({clickDownloadMiB:100});await new Promise(setImmediate);}
   ui.run("applyLanguage('en')");
   assert.equal(ui.run('dirty'),false,'independently loaded transfer limit is not a gateway draft');
   await ui.start();assert.ok(ui.calls.includes('start'));

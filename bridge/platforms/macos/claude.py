@@ -56,6 +56,8 @@ def helper_command(helper, action, pid, executable, script, cancel_path):
         args += [str(pid), str(executable)]
     if action == 'connect':
         args += [str(script), str(cancel_path)]
+    elif action == 'inspect-error' and script:
+        args += [str(script)]
     return args, {}
 
 

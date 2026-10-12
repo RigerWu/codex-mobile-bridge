@@ -46,6 +46,19 @@ test('Claude session list exposes the confirmed initialization flow without runn
  ui.view.setClientStates([{...client,connectionState:'connecting'}]);assert.equal(ui.view.connectionInitialize.hidden,true);await ui.view.refresh();assert.equal(ui.calls.length,0);
 });
 
+test('prepared Claude lists offer separate reconnect and reinitialization actions',async()=>{
+ const ui=fixture(),client={id:'claude',name:'Claude',enabled:true,installed:true,connected:false,setupStatus:'needs-initialization',reconnectSupported:true,canReconnect:true},reconnects=[],initializations=[];
+ ui.view.setClientStates([client],undefined,id=>initializations.push(id),undefined,id=>reconnects.push(id));await ui.view.choose('claude');
+ assert.equal(ui.view.connectionReconnect.hidden,false);assert.equal(ui.view.connectionInitialize.hidden,false);
+ assert.equal(ui.view.connectionInitialize.textContent,'重新初始化连接');
+ await ui.view.connectionReconnect.click();assert.deepEqual(reconnects,['claude']);assert.deepEqual(initializations,[]);
+ await ui.view.connectionInitialize.click();assert.deepEqual(initializations,['claude']);
+ ui.view.setClientStates([{...client,operationUncertain:true}],undefined,()=>{throw Error('unexpected initialize');},undefined,()=>{throw Error('unexpected reconnect');});
+ assert.equal(ui.view.connectionReconnect.hidden,true);assert.equal(ui.view.connectionInitialize.hidden,true);
+ ui.view.setClientStates([{...client,setupStatus:'owner-conflict',reason:'Claude 桥接连接被其他网关占用，请先停止旧网关；旧版连接还需重新加载 Claude'}]);
+ assert.match(ui.view.listStatus.textContent,/其他网关占用/);assert.equal(ui.view.connectionReconnect.hidden,false);
+});
+
 test('unknown operations offer refresh only and a failed quit does not block connected chats',async()=>{
  const ui=fixture(),client={id:'claude',enabled:true,installed:true,connected:false,initializationMode:'background',setupStatus:'needs-unlock',connectionState:'needs-initialization',operationFailure:{action:'initialize',message:'timeout',uncertain:true}},refreshes=[];
  ui.view.setClientStates([client],()=>{throw Error('no replay');},()=>{throw Error('no initialization');},async()=>refreshes.push(true));await ui.view.choose('claude');assert.match(ui.view.listStatus.textContent,/电脑已锁定/);assert.match(ui.view.connectionNotice.textContent,/尚未确认/);assert.equal(ui.view.connectionInitialize.hidden,true);assert.equal(ui.view.connectionRetry.hidden,true);assert.equal(ui.view.connectionRefresh.hidden,false);await ui.view.connectionRefresh.click();assert.equal(refreshes.length,1);assert.equal(ui.calls.length,0);

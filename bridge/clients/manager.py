@@ -886,7 +886,8 @@ class DesktopSessions:
                     row['initializationMode'] = 'background' if sys.platform == 'win32' else 'foreground'
                     row['reconnectSupported'] = self._claude_reconnect_supported()
                     row['canReconnect'] = bool(row['reconnectSupported'] and self.gateway_running and row['enabled'] and
-                                               row['mainRunning'] and not native.get('unknown', True))
+                                               len(native.get('mainPids', [])) == 1 and not native.get('unknown', True) and
+                                               row['setupStatus'] != 'connecting')
                     row['canConfirmQuit'] = bool(sys.platform in ('darwin', 'win32') and row['mainRunning'])
                 if not self.gateway_running and row['enabled'] and row['setupStatus'] != 'recovery-required':
                     if row['id'] == 'claude' and sys.platform == 'darwin':

@@ -1,4 +1,26 @@
 'use strict';
+function bindChatListToolbar(toolbar){
+  const selects=[...toolbar.querySelectorAll('select')];
+  const measure=document.createElement('span');
+  measure.style.cssText='position:absolute;visibility:hidden;white-space:pre;pointer-events:none';
+  document.body.append(measure);
+  const update=()=>{
+    for(const select of selects){
+      const style=getComputedStyle(select);
+      measure.style.font=style.font;
+      measure.style.letterSpacing=style.letterSpacing;
+      measure.textContent=select.selectedOptions[0]?.textContent||'';
+      // Reserve the native arrow and its spacing; only the selected label determines width.
+      select.style.width=Math.ceil(measure.getBoundingClientRect().width+30)+'px';
+    }
+  };
+  const later=()=>requestAnimationFrame(update);
+  toolbar.addEventListener('change',update);
+  document.addEventListener('bridge-language',later);
+  window.addEventListener('resize',update);
+  if(typeof ResizeObserver!=='undefined')new ResizeObserver(update).observe(toolbar);
+  later();
+}
 class ClientNavigation {
   constructor({view,request,notify}) {
     Object.assign(this,{view,request,notify});this.clients=[];this.revision=0;this.pending=new Set();this.provider=localStorage.getItem('bridge-client')||'codex';const requested=new URLSearchParams(location.search).get('client');if(['codex','claude','deepseek'].includes(requested))this.provider=requested;

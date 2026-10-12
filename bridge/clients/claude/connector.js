@@ -256,18 +256,18 @@
     return {contextUsage:null,contextUsageStatus:'unavailable'};
   }
   if (config.transport === 'cdp') {
-    let stopped = false, busy = false, highWater = 0;
+    let stopped = false, inFlight = 0, highWater = 0;
     activate({
       stop() { stopped = true; for (const undo of restore) undo(); },
       owns(cwd) { return sameWorkspace(cwd); },
-      status() { return {transport:'cdp', stopped, busy, connectorRevision:config.connectorRevision, surfaces:capabilities}; },
+      status() { return {transport:'cdp', stopped, busy:inFlight > 0, connectorRevision:config.connectorRevision, surfaces:capabilities}; },
       async invoke(msg) {
         if (stopped || msg?.token !== config.token || msg.generation !== config.generation)
           return {error:'连接已过期'};
         if (!Number.isSafeInteger(msg.seq) || msg.seq <= highWater) return {error:'请求已处理，不会重复执行'};
         highWater = msg.seq;
         if (typeof msg.expires !== 'number' || msg.expires < Date.now()/1000) return {error:'请求已过期'};
-        busy = true;
+        inFlight++;
         try {
           const target = api[surfaces[msg.surface]];
           if (!target || !Array.isArray(msg.args)) throw new Error('不支持的桌面操作');
@@ -279,7 +279,7 @@
           if (!allowed.has(msg.method) || typeof target[msg.method] !== 'function') throw new Error('不支持的桌面操作');
           return {result:sanitize(msg.method, await target[msg.method](...callArgs(msg.method,msg.args)))};
         } catch (error) { return {error:String(error.message || error)}; }
-        finally { busy = false; }
+        finally { inFlight--; }
       }
     });
     return;
@@ -308,7 +308,7 @@
   if (!sessionId) throw new Error('无法创建文件桥接会话；请在 Code 页面确认目录信任');
   let generation = initial.generation;
   const generations = new Set([generation]);
-  let stopped = false, suspended = initial.type === 'stop', busy = false, writing = false, highWater = initial.seq, lastWrite = 0, dirty = true;
+  let stopped = false, suspended = initial.type === 'stop', busy = false, inFlight = 0, writing = 0, highWater = initial.seq, lastWrite = 0, dirty = true;
   let wake, wakeRequested=false;
   const wakePoll=()=>{wakeRequested=true;wake?.();};
   const pause=async()=>{
@@ -322,9 +322,10 @@
   let state = {seq: 0, done: false};
   activate({stop() { stopped = true;wakePoll(); for (const undo of restore) undo(); },
     owns(cwd) { return sameWorkspace(cwd); },
-    status() { return {transport: 'file', stopped, suspended, busy, writing, sessionId, lastWrite, connectorRevision:config.connectorRevision}; }});
+    status() { return {transport: 'file', stopped, suspended, busy:busy || inFlight > 0,
+      writing:writing > 0, sessionId, lastWrite, connectorRevision:config.connectorRevision}; }});
   async function publish() {
-    writing = true;
+    writing++;
     try {
       let value = {...state, generation, connected: !stopped && !suspended,
         timestamp: Date.now() / 1000, connectorRevision:config.connectorRevision, surfaces: capabilities};
@@ -338,7 +339,7 @@
       const result = await api.LocalSessions.writeSessionFile(sessionId, config.response, text);
       if (!result?.hash) throw new Error('Claude 拒绝写入桥接文件，请检查目录信任和文件权限');
       lastWrite = Date.now();
-    } finally { writing = false; }
+    } finally { writing--; }
   }
   console.info('Claude 文件桥接启动中；状态：window.__claudeMobileBridge.status()');
   try {
@@ -384,6 +385,10 @@
             }
             return sanitize(msg.method, await target[msg.method](...callArgs(msg.method,msg.args)));
           });
+          // The deadline settles the gateway reply, not the Desktop call.
+          // Retain ownership until the underlying call itself settles.
+          inFlight++;
+          operation.then(() => { inFlight--; }, () => { inFlight--; });
           bounded(operation,Math.max(100,Math.min(90000,(msg.expires-Date.now()/1000)*1000)),'桌面操作超时，结果待核对；不会重复执行').then(result => { if (generation === dispatchedGeneration) state = {seq: msg.seq, done: true, result}; },
             error => { if (generation === dispatchedGeneration) state = {seq: msg.seq, done: true, error: String(error.message || error)}; })
             .finally(() => { if (generation === dispatchedGeneration) { busy = false; dirty = true;wakePoll(); } });

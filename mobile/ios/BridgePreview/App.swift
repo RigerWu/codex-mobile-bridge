@@ -1215,7 +1215,7 @@ enum MobileStrings {
         "当前电脑": "Current computer",
         "尚未选择电脑": "No computer selected",
         "返回首页扫码或输入网关地址。": "Return home to scan or enter a gateway address.",
-        "移除这台电脑": "Remove this computer",
+        "移除这台电脑": "Remove",
         "此预览尚未配置系统推送项目。当前仅同步收件箱；配置 Firebase 或厂商推送后才能启用后台任务提醒。": "System push is not configured. Background task alerts require Firebase or a device vendor’s push service.",
         "手机通知测试": "Mobile notification test",
         "本机通知已开启": "Local notifications are enabled",

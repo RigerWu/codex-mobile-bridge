@@ -177,6 +177,7 @@ $('sessions').addEventListener('touchmove',event=>{
 $('sessions').addEventListener('touchend',()=>{listTouch=null;},{passive:true});
 $('sessions').addEventListener('touchcancel',()=>{listTouch=null;},{passive:true});
 $('search').oninput=()=>{clearTimeout(loadList.timer);loadList.timer=setTimeout(()=>loadList(true).catch(e=>toast(e.message)),300);};$('refresh').onclick=()=>loadList(true).catch(e=>toast(e.message));
+for(const toggle of document.querySelectorAll('#sidebar .list-search-toggle'))toggle.onclick=()=>{const toolbar=toggle.closest('.chat-list-toolbar'),open=toolbar.classList.toggle('search-open');toggle.setAttribute('aria-expanded',String(open));if(open)$('search').focus();};
 $('archived').onchange=()=>loadList(true).catch(e=>toast(e.message));
 const listSync=window.BridgeListSync=new ListSync({root:$('sessions'),status:$('list-sync'),refresh:()=>loadList(true),visible:()=>!$('app').hidden&&$('sidebar').getBoundingClientRect().width>0,ready:()=>!listLoading&&document.activeElement!==$('search')});
 const contextUsageControl=new ContextUsageControl();$('permissions-button').after(contextUsageControl.button);

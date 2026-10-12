@@ -127,6 +127,7 @@ final class BridgeController: NSObject {
 if 'private var pollGeneration' in source:
     fields += '    var pollGeneration = 0\n    var pollTask: URLSessionDataTask?\n'
 fields += section('    private let redirect = NoRedirect()', '    override func viewDidLoad()')
+fields += section('    private func cookieName(', '    private let page = UIStackView()').replace('private func', 'func')
 methods = '''
     func checkComputers() {}
     func stopComputerChecks() {}

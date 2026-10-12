@@ -93,9 +93,7 @@ final class BridgeController: UIViewController, WKNavigationDelegate, WKUIDelega
             WKWebsiteDataStore.default().httpCookieStore.getAllCookies { [weak self] cookies in
                 guard let self, self.saved.contains(address) else { done(nil); return }
                 let matching = cookies.filter { cookie in
-                    cookie.name == "codex_mobile_session" && cookie.path == GatewayURL.cookiePath(address) &&
-                    cookie.domain.trimmingCharacters(in: CharacterSet(charactersIn: ".")) == target.host &&
-                    (!cookie.isSecure || target.scheme == "https") && (cookie.expiresDate == nil || cookie.expiresDate! > Date())
+                    self.cookieMatches(cookie, address: address)
                 }
                 done(matching.isEmpty ? nil : HTTPCookie.requestHeaderFields(with: matching)["Cookie"])
             }
@@ -113,6 +111,14 @@ final class BridgeController: UIViewController, WKNavigationDelegate, WKUIDelega
     private var pollTask: URLSessionDataTask?
     private var generation = 0
     private let defaults = UserDefaults.standard
+    private func cookieName(_ address: String) -> String { defaults.string(forKey: "cookieName:" + address) ?? "codex_mobile_session" }
+    private func cookieMatches(_ cookie: HTTPCookie, address: String, discover: Bool = false) -> Bool {
+        guard let target = URL(string: address), cookie.path == GatewayURL.cookiePath(address),
+              cookie.domain.trimmingCharacters(in: CharacterSet(charactersIn: ".")) == target.host,
+              (!cookie.isSecure || target.scheme == "https"),
+              cookie.expiresDate == nil || cookie.expiresDate! > Date() else { return false }
+        return cookie.name == cookieName(address) || (discover && cookie.name.range(of: #"^codex_mobile_session_[a-f0-9]{24}$"#, options: .regularExpression) != nil)
+    }
     private let page = UIStackView()
     private let topBackground = UIView()
     private var pageStatusBarStyle: UIStatusBarStyle = .default
@@ -400,15 +406,15 @@ final class BridgeController: UIViewController, WKNavigationDelegate, WKUIDelega
     func openSaved(_ address: String, provider: String? = nil) { let suffix = provider.flatMap { ["codex", "claude", "deepseek"].contains($0) ? "?client=" + $0 : nil } ?? ""; guard saved.contains(address), let url = URL(string: address + "/" + suffix) else { info(MobileStrings.text("请先扫码保存通知对应的电脑。")); return }; connect(url, address: address) }
     private func binding(_ address: String, done: @escaping (HTTPCookie?) -> Void) {
         WKWebsiteDataStore.default().httpCookieStore.getAllCookies { cookies in
-            done(cookies.first { $0.name == "codex_mobile_session" && $0.path == GatewayURL.cookiePath(address) && $0.domain == URL(string: address)?.host && ($0.expiresDate == nil || $0.expiresDate! > Date()) })
+            done(cookies.first { self.cookieMatches($0, address: address) })
         }
     }
     private func rememberConnection() {
         let address = origin, ticket = generation
-        binding(address) { cookie in
-            guard let cookie, ticket == self.generation else { return }
-            self.fetch(address: address, route: "/api/auth") { result in
-                guard ticket == self.generation, case .success(let auth) = result else { return }
+        self.fetch(address: address, route: "/api/auth") { result in
+            guard ticket == self.generation, case .success(let auth) = result else { return }
+            self.binding(address) { cookie in
+                guard let cookie, ticket == self.generation else { return }
                 self.binding(address) { current in
                     guard ticket == self.generation, current?.value == cookie.value else { return }
                     self.defaults.set(ConnectionDiscovery.descriptor(auth, secret: cookie.value), forKey: "connection:" + address)
@@ -451,6 +457,7 @@ final class BridgeController: UIViewController, WKNavigationDelegate, WKUIDelega
                 guard current() else { return }
                 var all = self.saved.filter { $0 != address }; if !all.contains(next) { all.append(next) }; self.defaults.set(all, forKey: "origins")
                 self.defaults.set(descriptor, forKey: "connection:" + next); self.defaults.removeObject(forKey: "connection:" + address)
+                if let name = self.defaults.string(forKey: "cookieName:" + address) { self.defaults.set(name, forKey: "cookieName:" + next) }; self.defaults.removeObject(forKey: "cookieName:" + address)
                 for prefix in ["name:", "computer-name:", "cursor:", "stream:", "last-opened:"] {
                     if let value = self.defaults.object(forKey: prefix + address) { self.defaults.set(value, forKey: prefix + next) }; self.defaults.removeObject(forKey: prefix + address)
                 }
@@ -633,8 +640,7 @@ final class BridgeController: UIViewController, WKNavigationDelegate, WKUIDelega
         WKWebsiteDataStore.default().httpCookieStore.getAllCookies { cookies in
             guard valid() else { return }
             guard poll == nil || self.saved.contains(address) else { done(.failure(NSError(domain: "Bridge", code: 401))); return }
-            let host = target.host ?? ""
-            let matching = cookies.filter { cookie in cookie.name == "codex_mobile_session" && cookie.path == GatewayURL.cookiePath(address) && cookie.domain.trimmingCharacters(in: CharacterSet(charactersIn: ".")) == host && (!cookie.isSecure || target.scheme == "https") && (cookie.expiresDate == nil || cookie.expiresDate! > Date()) }
+            let matching = cookies.filter { cookie in self.cookieMatches(cookie, address: address, discover: route == "/api/auth") }
             guard !matching.isEmpty else { done(.failure(NSError(domain: "Bridge", code: 401, userInfo: [NSLocalizedDescriptionKey: MobileStrings.text("请先连接并登录电脑网关")]))); return }
             var request = URLRequest(url: target); request.setValue(GatewayURL.httpOrigin(address), forHTTPHeaderField: "Origin"); request.setValue(HTTPCookie.requestHeaderFields(with: matching)["Cookie"], forHTTPHeaderField: "Cookie"); request.setValue("BridgeMobile/0.1-iOS", forHTTPHeaderField: "User-Agent")
             if let body { request.httpMethod = "POST"; request.httpBody = try? JSONSerialization.data(withJSONObject: body); request.setValue("application/json", forHTTPHeaderField: "Content-Type"); request.setValue(csrf, forHTTPHeaderField: "X-CSRF-Token") }
@@ -646,18 +652,27 @@ final class BridgeController: UIViewController, WKNavigationDelegate, WKUIDelega
                 else { result = .failure(NSError(domain: "Bridge", code: code ?? 0, userInfo: [NSLocalizedDescriptionKey: code == 401 || code == 403 ? MobileStrings.text("登录已失效，请重新连接电脑") : MobileStrings.text("请使用配套电脑 Preview，并检查连接")])) }
                 DispatchQueue.main.async {
                     guard valid() else { return }
+                    if route == "/api/auth", case .success(let auth) = result, auth["authenticated"] as? Bool == true,
+                       let name = auth["cookieName"] as? String,
+                       name.range(of: #"^codex_mobile_session_[a-f0-9]{24}$"#, options: .regularExpression) != nil {
+                        self.defaults.set(name, forKey: "cookieName:" + address)
+                    }
                     if poll != nil { self.pollTask = nil }
                     let response = response as? HTTPURLResponse
                     let headers = response?.allHeaderFields as? [String: String] ?? [:]
                     let renewed = code == 200 && response?.url.map({ GatewayURL.same($0, address) }) == true ? HTTPCookie.cookies(withResponseHeaderFields: headers, for: target).first(where: { cookie in
-                        cookie.name == "codex_mobile_session" && cookie.path == GatewayURL.cookiePath(address) && cookie.domain.trimmingCharacters(in: CharacterSet(charactersIn: ".")) == host && cookie.path == GatewayURL.cookiePath(address) && matching.contains(where: { $0.name == cookie.name && $0.value == cookie.value })
+                        self.cookieMatches(cookie, address: address, discover: route == "/api/auth") && matching.contains(where: { $0.value == cookie.value })
                     }) : nil
                     let store = WKWebsiteDataStore.default().httpCookieStore
                     store.getAllCookies { current in
                         guard valid() else { return }
                         // A response from a removed/replaced login cannot renew its
                         // cookie or commit that account's notification cursor.
-                        let bindingCurrent = self.saved.contains(address) && matching.contains(where: { sent in current.contains(where: { $0.name == sent.name && $0.value == sent.value && $0.domain == sent.domain && $0.path == sent.path }) })
+                        let selectedName = (try? result.get())?["cookieName"] as? String ?? self.cookieName(address)
+                        let bindingCurrent = self.saved.contains(address) && matching.contains(where: { sent in
+                            let migrates = sent.name == "codex_mobile_session" && renewed.map { $0.value == sent.value && $0.name == selectedName } == true
+                            return (sent.name == selectedName || migrates) && current.contains(where: { $0.name == sent.name && $0.value == sent.value && $0.domain == sent.domain && $0.path == sent.path })
+                        })
                         if !bindingCurrent { done(.failure(NSError(domain: "Bridge", code: 401))); return }
                         guard bindingCurrent, let renewed else { done(result); return }
                         store.setCookie(renewed) {
@@ -959,7 +974,7 @@ final class BridgeController: UIViewController, WKNavigationDelegate, WKUIDelega
                 if self.defaults.string(forKey: "active") == target { self.defaults.removeObject(forKey: "active") }
                 self.defaults.removeObject(forKey: "connection:" + target); self.defaults.removeObject(forKey: "cursor:" + target); self.defaults.removeObject(forKey: "stream:" + target); self.defaults.removeObject(forKey: "name:" + target); self.defaults.removeObject(forKey: "last-opened:" + target)
                 WKWebsiteDataStore.default().httpCookieStore.getAllCookies { cookies in
-                    for cookie in cookies where cookie.domain.trimmingCharacters(in: CharacterSet(charactersIn: ".")) == URL(string: target)?.host && cookie.name == "codex_mobile_session" && cookie.path == GatewayURL.cookiePath(target) { WKWebsiteDataStore.default().httpCookieStore.delete(cookie) }
+                    for cookie in cookies where self.cookieMatches(cookie, address: target) { WKWebsiteDataStore.default().httpCookieStore.delete(cookie) }
                 }
                 if self.origin == target { self.origin = "" }
                 if self.generation == revision { self.home() }

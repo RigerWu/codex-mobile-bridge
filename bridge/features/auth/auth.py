@@ -72,6 +72,9 @@ class Auth:
         self.identity = hashlib.sha256(json.dumps(identity, sort_keys=True).encode()).hexdigest()
         legacy_identity = hashlib.sha256(json.dumps({**identity, 'sessionHours': self.hours}, sort_keys=True).encode()).hexdigest()
         self.path = Path(data_dir) / 'auth-sessions.json' if data_dir is not None else None
+        # A cookie namespace belongs to the gateway data directory, not the
+        # process or its (possibly changed) login policy.
+        self.cookie_name = self.COOKIE + '_' + secrets.token_hex(12)
         self.sessions = {}
         self.policy = access_policy({})
         self.failures = {}
@@ -79,6 +82,7 @@ class Auth:
         self.lock = threading.RLock()
         if self.path and self.path.exists():
             saved = json.loads(self.path.read_text(encoding='utf-8'))
+            self.cookie_name = saved.get('cookieName') or self.cookie_name
             self.policy = access_policy(saved['policy'])
             self.failures = saved.get('failures', {})
             self.auto_blocks = saved.get('autoBlocks', {})
@@ -88,6 +92,10 @@ class Auth:
                     self.persist()
             else:
                 self.persist()
+            if not saved.get('cookieName'):
+                self.persist()
+        elif self.path:
+            self.persist()
 
     @staticmethod
     def valid(session):
@@ -103,7 +111,7 @@ class Auth:
         temporary = self.path.with_name(self.path.name + '.' + secrets.token_hex(8) + '.tmp')
         try:
             with os.fdopen(os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600), 'w', encoding='utf-8') as stream:
-                json.dump({'identity': self.identity, 'policy': self.policy, 'sessions': self.sessions, 'failures': self.failures, 'autoBlocks': self.auto_blocks}, stream)
+                json.dump({'identity': self.identity, 'cookieName': self.cookie_name, 'policy': self.policy, 'sessions': self.sessions, 'failures': self.failures, 'autoBlocks': self.auto_blocks}, stream)
             temporary.replace(self.path)
         finally:
             temporary.unlink(missing_ok=True)

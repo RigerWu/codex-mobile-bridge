@@ -85,9 +85,10 @@ app.whenReady().then(async()=>{
       nativePhone=openNative();await nativePhone.loadURL(fresh.url);
       const native=code=>nativePhone.webContents.executeJavaScript(code);
       await until(()=>native('document.getElementById("login").hidden&&!document.getElementById("app").hidden&&Boolean(csrf)'),platform+' QR sign-in');
-      assert.equal(await native('fetch("/api/auth").then(r=>r.json()).then(v=>v.trustedDevice)'),true);
+      const auth=await native('fetch("/api/auth").then(r=>r.json())');
+      assert.equal(auth.trustedDevice,true);
       const store=nativePhone.webContents.session.cookies;
-      const cookie=(await store.get({url:entry,name:'codex_mobile_session'}))[0];
+      const cookie=(await store.get({url:entry,name:auth.cookieName}))[0];
       assert.ok(cookie.httpOnly&&!cookie.session&&cookie.expirationDate>Date.now()/1000+399*86400);
       await store.flushStore();nativePhone.destroy();nativePhone=null;
       await worker('stop');await worker('start');await until(async()=>(await worker('snapshot')).runtime.running,'restarted gateway');

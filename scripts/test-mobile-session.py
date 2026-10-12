@@ -23,7 +23,7 @@ public class CookieManager {
 }''',
     'android/content/Context.java': '''package android.content; public abstract class Context {public abstract SharedPreferences getSharedPreferences(String name,int mode);}''',
     'android/content/SharedPreferences.java': '''package android.content;public interface SharedPreferences {boolean getBoolean(String key,boolean fallback);String getString(String key,String fallback);Editor edit();interface Editor{Editor putString(String key,String value);Editor putBoolean(String key,boolean value);void apply();}}''',
-    'org/json/JSONObject.java': '''package org.json; public class JSONObject {public JSONObject(){}public JSONObject(String value){}public boolean optBoolean(String key){return false;}public String getString(String key){return "";}public JSONObject put(String key,Object value){return this;}}''',
+    'org/json/JSONObject.java': '''package org.json; public class JSONObject {public JSONObject(){}public JSONObject(String value){}public boolean optBoolean(String key){return false;}public String optString(String key,String fallback){return fallback;}public String getString(String key){return "";}public JSONObject put(String key,Object value){return this;}}''',
 }
 for name, source in stubs.items():
     path = work / name

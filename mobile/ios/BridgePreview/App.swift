@@ -246,7 +246,7 @@ final class BridgeController: UIViewController, WKNavigationDelegate, WKUIDelega
             let ticket = self.generation, address = self.origin
             web.evaluateJavaScript("(()=>{const button=document.getElementById('client-switch-toggle');return document.getElementById('app')?.hidden===false&&button&&!button.hidden?button.getAttribute('aria-expanded')==='false':null;})()") { [weak self, weak web] value, _ in
                 guard let self, let web, self.web === web, self.generation == ticket, let url = web.url, GatewayURL.same(url, address), let collapsed = value as? Bool else { completion([]); return }
-                let action = UIAction(title: MobileStrings.text(collapsed ? "显示APP" : "隐藏APP"), image: UIImage(systemName: "square.grid.3x1.below.line.grid.1x2")) { [weak self, weak web] _ in
+                let action = UIAction(title: MobileStrings.text(collapsed ? "显示底部 APP 图标" : "隐藏底部 APP 图标"), image: UIImage(systemName: "square.grid.3x1.below.line.grid.1x2")) { [weak self, weak web] _ in
                     guard let self, let web, self.web === web, self.generation == ticket, let url = web.url, GatewayURL.same(url, address) else { return }
                     web.evaluateJavaScript("document.getElementById('client-switch-toggle')?.click()")
                 }
@@ -1157,8 +1157,8 @@ enum MobileStrings {
 
         "返回电脑列表": "Back to computers",
         "外观与显示": "Appearance",
-        "隐藏APP": "Hide apps",
-        "显示APP": "Show apps",
+        "隐藏底部 APP 图标": "Hide bottom app icons",
+        "显示底部 APP 图标": "Show bottom app icons",
         "刷新页面": "Reload page",
         "好": "OK",
         "电脑上的工作，\n带在身边。": "Your computer’s work,\nalways with you.",

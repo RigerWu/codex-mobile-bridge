@@ -155,7 +155,7 @@ async function loadList(reset=false){
   listRows=[...rows.values()];listRows.sort((a,b)=>b.recency-a.recency);
   listOffset=offset+result.sessions.length;listHasMore=result.sessions.length===100;
   $('host-errors').textContent=(result.unavailableHosts||[]).map(h=>h.label+'：'+h.error).join('\n');
-  $('host-errors').hidden=!(result.unavailableHosts||[]).length;renderList();refreshActivity();clientNavigation.acknowledgeList('codex',result);
+  $('host-errors').hidden=!(result.unavailableHosts||[]).length;renderList();refreshActivity();clientNavigation.acknowledgeList('codex',result);listSync.acknowledgeSuccess();
 }
 function loadMoreSessions(){
   const root=$('sessions');

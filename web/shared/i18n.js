@@ -580,6 +580,7 @@ const en={
 "未确认 Console 已提交，已停止自动操作；请检查 Console 和连接状态后重试":"Console submission could not be confirmed. Automatic setup stopped; check Console and the connection status before retrying.",
 "Claude 已连接，但未能关闭开发者工具窗口":"Claude connected, but the Developer Tools window could not be closed.",
 "Console 内容未完整到达，未执行连接脚本，请重试":"The complete connector did not reach Console and was not executed. Try again.",
+"Console 无法核验完整内容，未执行连接脚本，请重试":"Could not verify the complete Console input. The connector was not executed. Try again.",
 "连接脚本格式无效":"Invalid connector script format",
 "Console 中已有未提交内容，已保留，请处理后重试连接":"Console contains an unfinished draft. It was preserved; finish it before reconnecting.",
 "Console 拒绝输入连接脚本":"Console refused the connector input",

@@ -909,6 +909,7 @@ const en={
 "‹ 会话":"‹ Sessions",
 "继续桌面会话…":"Continue this desktop session…",
 "已连接，桌面还没有会话":"Connected. No desktop sessions yet.",
+"电脑上还没有聊天":"No chats on this computer yet.",
 "补充回答":"Additional answer",
 "新建桌面会话":"New desktop session",
 "应用到此会话":"Apply to this session",

@@ -81,6 +81,12 @@ test('manual failure clears on another authoritative success and auth failure us
  ui.setRefresh(async()=>{throw Object.assign(Error('login'),{status:401});});await ui.sync.update(true);assert.equal(ui.status.hidden,false);ui.advance(200);assert.equal(ui.status.hidden,true);
 });
 
+test('automatic success hides an old error when the list reader acknowledges success before returning',async()=>{
+ const ui=fixture();ui.root.children.push({});ui.setRefresh(async()=>{throw Error('offline');});await ui.sync.update(true);assert.equal(ui.status.hidden,false);
+ ui.setRefresh(async()=>{ui.sync.acknowledgeSuccess();});await ui.sync.update();ui.advance(200);
+ assert.equal(ui.status.hidden,true);
+});
+
 test('stale refresh results never dismiss current feedback or claim success',async()=>{
  const ui=fixture();let finish;ui.setRefresh(()=>new Promise(resolve=>finish=resolve));const stale=ui.sync.update(true);ui.sync.reset();ui.setRefresh(async()=>{throw Error('new failure');});await ui.sync.update(true);finish(false);await stale;
  assert.equal(ui.status.hidden,false);assert.match(ui.status.textContent,/点击重试/);

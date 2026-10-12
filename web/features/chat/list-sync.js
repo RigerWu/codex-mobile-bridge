@@ -44,8 +44,8 @@ class ListSync {
     if(this.frame)cancelAnimationFrame(this.frame);this.frame=0;
     if(refresh)this.update(true);else{this.setPull(0);this.hide();}
   }
-  reset(){this.revision++;this.busy=false;this.automaticFailures=0;this.failureVisible=false;this.endPull(true);this.setPull(0);clearTimeout(this.hideTimer);clearTimeout(this.dismissTimer);this.status.classList.remove('list-sync-visible');this.status.hidden=true;}
-  acknowledgeSuccess(){this.automaticFailures=0;if(this.failureVisible){this.failureVisible=false;if(!this.busy)this.hide();}}
+  reset(){this.revision++;this.busy=false;this.automaticFailures=0;this.failureVisible=false;this.recoveredWhileBusy=false;this.endPull(true);this.setPull(0);clearTimeout(this.hideTimer);clearTimeout(this.dismissTimer);this.status.classList.remove('list-sync-visible');this.status.hidden=true;}
+  acknowledgeSuccess(){this.automaticFailures=0;if(this.failureVisible){this.failureVisible=false;if(this.busy)this.recoveredWhileBusy=true;else this.hide();}}
   reportFailure(error,explicit=false){
     if(error?.status===401){this.failureVisible=false;this.hide();return;}
     this.automaticFailures++;
@@ -57,10 +57,10 @@ class ListSync {
     if(document.hidden||!this.visible()||!this.ready()||(!explicit&&this.root.scrollTop>24)){
       if(explicit){this.setPull(0);this.hide();}return;
     }
-    this.busy=true;const revision=this.revision;
+    this.busy=true;this.recoveredWhileBusy=false;const revision=this.revision;
     if(explicit){this.setPull(32);this.show('正在刷新聊天列表…',32);}
-    try{const updated=await this.refresh();if(revision!==this.revision)return;if(updated===false){this.setPull(0);this.hide();return;}const hadFailure=this.failureVisible;this.acknowledgeSuccess();if(explicit){this.setPull(0);this.show('聊天列表已更新');this.hideTimer=setTimeout(()=>this.hide(),500);}else if(hadFailure)this.hide();}
+    try{const updated=await this.refresh();if(revision!==this.revision)return;if(updated===false){this.setPull(0);this.hide();return;}const hadFailure=this.failureVisible;this.acknowledgeSuccess();if(explicit){this.setPull(0);this.show('聊天列表已更新');this.hideTimer=setTimeout(()=>this.hide(),500);}else if(hadFailure||this.recoveredWhileBusy)this.hide();}
     catch(e){if(revision===this.revision){this.setPull(0);this.reportFailure(e,explicit);}}
-    finally{if(revision===this.revision)this.busy=false;}
+    finally{if(revision===this.revision){this.busy=false;this.recoveredWhileBusy=false;}}
   }
 }

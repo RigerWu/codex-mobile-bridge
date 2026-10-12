@@ -7,16 +7,17 @@ async function fixture(){
   const nodes=new Map(),saved=new Map(),writes=[],listRequests=[];
   const node=(tag='')=>({tagName:tag.toUpperCase(),children:[],value:'',checked:false,disabled:false,hidden:false,open:false,textContent:'',dataset:{},options:[],style:{setProperty(k,v){this[k]=v;}},scrollTop:0,parentElement:{},listeners:{},
     setAttribute(k,v){this[k]=v;},after(child){this.nextSibling=child;},getBoundingClientRect(){return {width:390,height:844};},classList:{add(){},remove(){},toggle(){},contains(){return false;}},addEventListener(type,listener){(this.listeners[type]??=[]).push(listener);},dispatchEvent(event){for(const listener of this.listeners[event.type]||[])listener(event);},replaceChildren(...values){this.children=values;},append(...values){this.children.push(...values);},querySelectorAll(){return [];},querySelector(){return {disabled:false};},
-    showModal(){this.open=true;},close(){this.open=false;}});
+    showModal(){this.open=true;},close(){this.open=false;this.dispatchEvent({type:'close'});}});
   const html=fs.readFileSync(path.join(__dirname,'../web/index.html'),'utf8');
   for(const match of html.matchAll(/\bid="([^"]+)"/g))nodes.set(match[1],node());
+  const channelButtons=['bark','ntfy','pushplus'].map(channel=>Object.assign(node('button'),{dataset:{notificationChannel:channel}}));
   const storage=()=>({getItem(){return null;},setItem(){},removeItem(){}});
   const archiveToggles=[];
   const archiveFilter={classList:{toggle:(name,enabled)=>archiveToggles.push([name,enabled])}};
-  let nextPost;
+  let nextPost,nextGet;
   const response=(data,status=200)=>({ok:status===200,status,json:async()=>data});
   let listResponse=()=>response({sessions:[],unavailableHosts:[]});
-  const context=vm.createContext({ClientNavigation:class{constructor(){this.provider="codex";}async refresh(){}acknowledgeList(){}},DesktopSessionsView:class{clear(){}},Workbench:class{open(){}reset(){}setThumbnails(){}relabel(){}},navigator:{userAgent:'test'},document:{addEventListener(){},documentElement:{},getElementById:id=>nodes.get(id),querySelector:selector=>selector==='.archive-filter'?archiveFilter:{disabled:false},querySelectorAll:()=>[],createElement:node},
+  const context=vm.createContext({ClientNavigation:class{constructor(){this.provider="codex";}async refresh(){}acknowledgeList(){}},DesktopSessionsView:class{clear(){}},Workbench:class{open(){}reset(){}setThumbnails(){}relabel(){}},navigator:{userAgent:'test'},document:{addEventListener(){},documentElement:{},getElementById:id=>nodes.get(id),querySelector:selector=>selector==='.archive-filter'?archiveFilter:{disabled:false},querySelectorAll:selector=>selector==='[data-notification-channel]'?channelButtons:[],createElement:node},
     renderMarkdown(){},window:{addEventListener(){}},localStorage:storage(),sessionStorage:storage(),
     location:{hash:'',pathname:'/',search:''},history:{replaceState(){}},setTimeout(){},clearTimeout(){},setInterval(){},
     ChatTimeline:class{constructor(){this.abort=new AbortController();}async start(){}dispose(){this.abort.abort();}relabel(){}},
@@ -26,15 +27,21 @@ async function fixture(){
       if(url.includes('/reconnect'))return response({ok:true});
       if(url.startsWith('/api/sessions?')){listRequests.push(url);return listResponse(url);}
       if(url==='/api/activity')return response({sessions:[]});
-      if(url.startsWith('/api/notifications/pushplus')||url.includes('/rename?')){
+      if(url.startsWith('/api/notifications/channels/')||url.includes('/rename?')){
+        if(options.method!=='POST'&&nextGet){const handle=nextGet;nextGet=null;return handle(url);}
         if(options.method==='POST'){
           const body=JSON.parse(options.body);writes.push({url,body});
           if(nextPost){const handle=nextPost;nextPost=null;return handle(body);}
           if(url.includes('/rename?'))return response({title:body.title});
           if(url.endsWith('/test'))return response({ok:true});
-          saved.set(url,{pushplusEnabled:body.pushplusEnabled,hasPushplusToken:!!body.pushplusToken||!body.clearPushplusToken&&!!saved.get(url)?.hasPushplusToken});
+          if(url.endsWith('/common'))saved.set(url,body);
+          else {
+            const secret=url.endsWith('/bark')?'barkKey':url.endsWith('/ntfy')?'token':'pushplusToken';
+            const marker=url.endsWith('/bark')?'hasBarkKey':url.endsWith('/ntfy')?'hasToken':'hasPushplusToken';
+            saved.set(url,{...body,[secret]:undefined,[marker]:!!body[secret]||!body['clear'+secret[0].toUpperCase()+secret.slice(1)]&&!!saved.get(url)?.[marker]});
+          }
         }
-        return response(saved.get(url)||{pushplusEnabled:false,hasPushplusToken:false});
+        return response(saved.get(url)||{pushplusEnabled:false,hasPushplusToken:false,barkServer:'https://api.day.app',server:'https://ntfy.sh'});
       }
       assert.match(url,/\/notifications\?/);
       if(options.method==='POST'){
@@ -47,7 +54,7 @@ async function fixture(){
   for(const file of ['web/hosts/environment.js','web/shared/i18n.js','web/features/chat/list-sync.js','web/features/accounts/account.js','web/features/chat/modes.js','web/features/chat/attachments.js','web/features/chat/activity.js','web/features/chat/fast-mode.js','web/features/chat/message-actions.js','web/features/chat/permissions.js','web/shell/app.js'])vm.runInContext(fs.readFileSync(path.join(__dirname,'..',file),'utf8'),context);
   await new Promise(setImmediate);
   const run=code=>vm.runInContext(code,context);
-  return {nodes,writes,saved,run,html,response,archiveToggles,listRequests,setList:handle=>{listResponse=handle;},setPost:handle=>{nextPost=handle;},
+  return {nodes,channelButtons,writes,saved,run,html,response,archiveToggles,listRequests,setList:handle=>{listResponse=handle;},setPost:handle=>{nextPost=handle;},setGet:handle=>{nextGet=handle;},
     async open(id='11111111-1111-4111-8111-111111111111',host='local'){
       await run(`openChat(${JSON.stringify(id)},${JSON.stringify(host)})`);await new Promise(setImmediate);
     },
@@ -124,21 +131,81 @@ test('notification controls have English translations and language changes prese
 });
 
 
-test('PushPlus saves and tests settings without redisplaying its token',async()=>{
+test('third-party notification channels save independently, mask secrets and test the selected saved channel',async()=>{
   const ui=await fixture();await ui.open();
   await ui.nodes.get('pushplus-settings').onclick();
+  assert.equal(ui.nodes.get('notification-channels-dialog').open,true);
+  await ui.channelButtons[2].onclick();
   assert.equal(ui.nodes.get('pushplus-dialog').open,true);
   ui.nodes.get('pushplus-enabled').checked=true;ui.nodes.get('pushplus-token').value='secret';
   await ui.nodes.get('pushplus-form').onsubmit({preventDefault(){}});
   assert.deepEqual(ui.writes[0].body,{pushplusEnabled:true,pushplusToken:'secret',clearPushplusToken:false});
   assert.equal(ui.nodes.get('pushplus-token').value,'');
   assert.equal(ui.nodes.get('pushplus-token').placeholder,'已保存，留空保留');
-  await ui.nodes.get('pushplus-test').onclick();assert.equal(ui.writes[1].url,'/api/notifications/pushplus/test');
+  await ui.nodes.get('pushplus-test').onclick();assert.equal(ui.writes[1].url,'/api/notifications/channels/pushplus/test');
+  ui.nodes.get('notification-channel-back').onclick();await ui.channelButtons[0].onclick();
+  assert.equal(ui.nodes.get('notification-server').value,'https://api.day.app');
+  ui.nodes.get('pushplus-enabled').checked=true;ui.nodes.get('pushplus-token').value='bark-secret';
+  await ui.nodes.get('pushplus-form').onsubmit({preventDefault(){}});
+  assert.deepEqual(ui.writes[2].body,{barkEnabled:true,barkKey:'bark-secret',clearBarkKey:false,barkServer:'https://api.day.app'});
+  await ui.nodes.get('pushplus-test').onclick();assert.equal(ui.writes[3].url,'/api/notifications/channels/bark/test');
   ui.nodes.get('pushplus-token').value='retry-token';
   ui.setPost(()=>ui.response({error:'Network failure'},400));
   await ui.nodes.get('pushplus-form').onsubmit({preventDefault(){}});
   assert.equal(ui.nodes.get('pushplus-token').value,'retry-token');
   assert.equal(ui.nodes.get('pushplus-error').textContent,'Network failure');
+});
+
+test('common notification controls save once outside provider detail',async()=>{
+  const ui=await fixture();await ui.nodes.get('pushplus-settings').onclick();
+  ui.nodes.get('notification-security-enabled').checked=true;
+  ui.nodes.get('notification-address-enabled').checked=false;
+  ui.nodes.get('notification-address-name').value='Home gateway';
+  ui.nodes.get('notification-include-title').checked=true;
+  ui.nodes.get('notification-click-base').value='https://bridge.example';
+  await ui.nodes.get('notification-common-save').onclick();
+  assert.deepEqual(ui.writes[0].body,{securityEnabled:true,addressEnabled:false,addressName:'Home gateway',includeTitle:true,clickBase:'https://bridge.example'});
+  assert.equal(ui.nodes.get('notification-channels-dialog').open,true);
+});
+
+test('provider list reports configured and enabled states',async()=>{
+  const ui=await fixture();
+  ui.saved.set('/api/notifications/channels/bark',{barkEnabled:true,hasBarkKey:true});
+  ui.saved.set('/api/notifications/channels/ntfy',{enabled:false,topic:'saved-topic'});
+  await ui.nodes.get('pushplus-settings').onclick();
+  assert.equal(ui.nodes.get('notification-status-bark').textContent,'已开启');
+  assert.equal(ui.nodes.get('notification-status-ntfy').textContent,'已关闭');
+  assert.equal(ui.nodes.get('notification-status-pushplus').textContent,'未配置');
+});
+
+test('common settings wait for a valid read and ignore late responses after close',async()=>{
+  const ui=await fixture();let finish;
+  ui.setGet(url=>url.endsWith('/common')?new Promise(resolve=>{finish=resolve;}):ui.response({}));
+  const opening=ui.nodes.get('pushplus-settings').onclick();
+  assert.equal(ui.nodes.get('notification-common-save').disabled,true);
+  await ui.nodes.get('notification-common-save').onclick();
+  assert.equal(ui.writes.length,0);
+  ui.nodes.get('notification-channels-dialog').close();
+  finish(ui.response({securityEnabled:false,addressEnabled:false,addressName:'old',includeTitle:false,clickBase:''}));
+  await opening;
+  assert.equal(ui.nodes.get('notification-common-save').disabled,true);
+  ui.saved.set('/api/notifications/channels/common',{securityEnabled:true,addressEnabled:true,addressName:'new',includeTitle:true,clickBase:''});
+  await ui.nodes.get('pushplus-settings').onclick();
+  assert.equal(ui.nodes.get('notification-address-name').value,'new');
+  assert.equal(ui.nodes.get('notification-common-save').disabled,false);
+});
+
+test('failed common read blocks save and permits explicit retry',async()=>{
+  const ui=await fixture();
+  ui.setGet(()=>ui.response({error:'Read failed'},500));
+  await ui.nodes.get('pushplus-settings').onclick();
+  assert.equal(ui.nodes.get('notification-common-save').disabled,true);
+  assert.equal(ui.nodes.get('notification-common-retry').hidden,false);
+  assert.equal(ui.nodes.get('notification-common-error').textContent,'Read failed');
+  await ui.nodes.get('notification-common-save').onclick();
+  assert.equal(ui.writes.length,0);
+  await ui.nodes.get('notification-common-retry').onclick();
+  assert.equal(ui.nodes.get('notification-common-save').disabled,false);
 });
 
 test('rename stays scoped to its original host and cannot overwrite a newly opened chat',async()=>{

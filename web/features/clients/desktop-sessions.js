@@ -272,7 +272,7 @@ class DesktopSessionsView {
         for(const [id,text] of [['inherit','跟随全局设置'],['on','开启'],['off','未开启']]){const option=this.translated('option',text);option.value=id;select.add(option);}select.value=value[key]||'inherit';fields[key]=select;form.append(label);
       }
       const error=this.node('p','error');error.setAttribute('role','alert');const save=this.button('保存配置',()=>{});save.type='submit';save.className='primary';
-      form.append(this.translated('p',value.available?'通知通道已开启':'尚未配置通知通道，可在设置中配置 PushPlus，或在电脑端配置 Bark、ntfy。','muted'),error,save);
+      form.append(this.translated('p',value.available?'通知通道已开启':'尚未配置通知通道，请在第三方通知中配置。','muted'),error,save);
       form.onsubmit=async event=>{event.preventDefault();if(!current())return dialog.close();if(save.disabled)return;save.disabled=true;error.textContent='';try{await this.request(this.path('notifications',sid,provider),{requests:fields.requests.value,completion:fields.completion.value});if(current()){dialog.close();this.notify(BridgeI18n.t('聊天提醒设置已保存'));}}catch(failure){if(current())error.textContent=BridgeI18n.t(failure.message);}finally{save.disabled=false;}};
       dialog.append(form);
     }catch(error){if(current()){loading.textContent=BridgeI18n.t(error.message);loading.className='error';}}

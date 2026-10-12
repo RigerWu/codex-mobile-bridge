@@ -13,3 +13,11 @@ test('Android persists session immediately after login without exposing credenti
 test('an already authenticated page persists its renewed session; embedded frames cannot',()=>{
  assert.equal(fixture({authenticated:true}).calls.length,1);const f=fixture({frame:true});assert.equal(f.calls.length,0);assert.equal(f.events['bridge-authenticated'],undefined);
 });
+test('successful logout asks the native shell to clear only its binding',()=>{
+ const f=fixture();f.events['bridge-logged-out']();
+ assert.deepEqual(f.calls,[['codexbridge-logout:__BRIDGE_CLIPBOARD_TOKEN__','']]);
+});
+test('an authenticated page losing authorization asks for one guarded native recovery',()=>{
+ const f=fixture({authenticated:true});f.events['bridge-auth-lost']();
+ assert.deepEqual(f.calls.at(-1),['codexbridge-auth-lost:__BRIDGE_CLIPBOARD_TOKEN__','']);
+});

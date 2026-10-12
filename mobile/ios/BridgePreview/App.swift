@@ -3,6 +3,49 @@ import UIKit
 import AVFoundation
 import UserNotifications
 import UniformTypeIdentifiers
+import Security
+
+private enum DeviceBinding {
+    struct Credential: Codable { let name: String; let token: String; var cookie: String { name + "=" + token } }
+    static func valid(_ name: String) -> Bool { name == "codex_mobile_session" || name.range(of: #"^codex_mobile_session_[a-f0-9]{24}$"#, options: .regularExpression) != nil }
+    static func query(_ address: String) -> [String: Any] { [kSecClass as String: kSecClassGenericPassword, kSecAttrService as String: "codex-bridge-device-binding-v1", kSecAttrAccount as String: address] }
+    static func load(_ address: String) -> Credential? {
+        var request = query(address); request[kSecReturnData as String] = true; request[kSecMatchLimit as String] = kSecMatchLimitOne
+        var item: CFTypeRef?; guard SecItemCopyMatching(request as CFDictionary, &item) == errSecSuccess,
+            let data = item as? Data, let value = try? JSONDecoder().decode(Credential.self, from: data), valid(value.name),
+            value.token.range(of: #"^[A-Za-z0-9_-]{32,128}$"#, options: .regularExpression) != nil else { return nil }
+        return value
+    }
+    @discardableResult static func save(_ address: String, _ credential: Credential) -> Bool {
+        guard valid(credential.name), credential.token.range(of: #"^[A-Za-z0-9_-]{32,128}$"#, options: .regularExpression) != nil,
+              let data = try? JSONEncoder().encode(credential) else { return false }
+        var request = query(address); request[kSecValueData as String] = data
+        request[kSecAttrAccessible as String] = kSecAttrAccessibleWhenUnlockedThisDeviceOnly
+        let status = SecItemAdd(request as CFDictionary, nil)
+        if status == errSecDuplicateItem { return SecItemUpdate(query(address) as CFDictionary, [kSecValueData as String: data] as CFDictionary) == errSecSuccess }
+        return status == errSecSuccess
+    }
+    static func clear(_ address: String) { SecItemDelete(query(address) as CFDictionary) }
+    /// nil is a transport error; false is a server-confirmed rejected binding.
+    static func verify(_ address: String, _ credential: Credential) async -> Bool? {
+        guard let url = URL(string: address + "/api/auth") else { return false }
+        let config = URLSessionConfiguration.ephemeral; config.httpShouldSetCookies = false; config.httpCookieStorage = nil; config.urlCredentialStorage = nil
+        config.timeoutIntervalForRequest = 4; config.timeoutIntervalForResource = 5
+        let session = URLSession(configuration: config, delegate: NoRedirect(), delegateQueue: nil)
+        defer { session.invalidateAndCancel() }
+        var request = URLRequest(url: url); request.setValue(credential.cookie, forHTTPHeaderField: "Cookie")
+        request.setValue(GatewayURL.httpOrigin(address), forHTTPHeaderField: "Origin"); request.setValue("BridgeMobile/0.1-iOS", forHTTPHeaderField: "User-Agent")
+        do {
+            let (bytes, response) = try await session.bytes(for: request)
+            guard let http = response as? HTTPURLResponse, http.statusCode == 200, http.url.map({ GatewayURL.same($0, address) }) == true, response.expectedContentLength <= 65536 else { return nil }
+            var body = Data(); for try await byte in bytes { guard body.count < 65536 else { return nil }; body.append(byte) }
+            guard let auth = try JSONSerialization.jsonObject(with: body) as? [String: Any] else { return nil }
+            guard auth["authenticated"] as? Bool == true else { return false }
+            if let name = auth["cookieName"] as? String { return name == credential.name }
+            return credential.name == "codex_mobile_session"
+        } catch { return nil }
+    }
+}
 
 final class BridgeNavigationController: UINavigationController {
     override var childForStatusBarStyle: UIViewController? { topViewController }
@@ -110,6 +153,8 @@ final class BridgeController: UIViewController, WKNavigationDelegate, WKUIDelega
     private var pollGeneration = 0
     private var pollTask: URLSessionDataTask?
     private var generation = 0
+    private var authLossAttempted = false
+    private var bindingRevision = 0
     private let defaults = UserDefaults.standard
     private func cookieName(_ address: String) -> String { defaults.string(forKey: "cookieName:" + address) ?? "codex_mobile_session" }
     private func cookieMatches(_ cookie: HTTPCookie, address: String, discover: Bool = false) -> Bool {
@@ -410,16 +455,63 @@ final class BridgeController: UIViewController, WKNavigationDelegate, WKUIDelega
         }
     }
     private func rememberConnection() {
-        let address = origin, ticket = generation
+        let address = origin, ticket = generation, revision = bindingRevision
+        WKWebsiteDataStore.default().httpCookieStore.getAllCookies { sentCookies in
+            let sent = sentCookies.filter { self.cookieMatches($0, address: address, discover: true) }
+            guard !sent.isEmpty else { return }
         self.fetch(address: address, route: "/api/auth") { result in
             guard ticket == self.generation, case .success(let auth) = result else { return }
             self.binding(address) { cookie in
                 guard let cookie, ticket == self.generation else { return }
                 self.binding(address) { current in
-                    guard ticket == self.generation, current?.value == cookie.value else { return }
+                    let previous = sent.first { $0.name == cookie.name } ?? (cookie.name == "codex_mobile_session" ? nil : sent.first { $0.name == "codex_mobile_session" })
+                    guard ticket == self.generation, revision == self.bindingRevision, self.saved.contains(address), current?.name == cookie.name,
+                          current?.value == cookie.value, previous?.value == cookie.value else { return }
+                    if auth["authenticated"] as? Bool == true, auth["trustedDevice"] as? Bool == true,
+                       (auth["cookieName"] as? String ?? "codex_mobile_session") == cookie.name {
+                        DeviceBinding.save(address, .init(name: cookie.name, token: cookie.value))
+                    } else if auth["authenticated"] as? Bool == false { DeviceBinding.clear(address) }
                     self.defaults.set(ConnectionDiscovery.descriptor(auth, secret: cookie.value), forKey: "connection:" + address)
                 }
             }
+        }
+        }
+    }
+    private func loadWithRecovery(_ web: WKWebView, url: URL, address: String, ticket: Int) {
+        Task { @MainActor in
+            guard let backup = DeviceBinding.load(address) else { if ticket == generation && self.web === web { web.load(URLRequest(url: url)) }; return }
+            let store = WKWebsiteDataStore.default().httpCookieStore
+            let cookies = await withCheckedContinuation { continuation in store.getAllCookies { continuation.resume(returning: $0) } }
+            let before = cookies.first { cookieMatches($0, address: address) }
+            if before?.name == backup.name && before?.value == backup.token {
+                if ticket == generation && self.web === web { web.load(URLRequest(url: url)) }; return
+            }
+            if let before {
+                let current = await DeviceBinding.verify(address, .init(name: before.name, token: before.value))
+                if current == true || current == nil { if ticket == generation && self.web === web { web.load(URLRequest(url: url)) }; return }
+            }
+            let valid = await DeviceBinding.verify(address, backup)
+            if valid == false, DeviceBinding.load(address)?.cookie == backup.cookie { DeviceBinding.clear(address) }
+            guard ticket == generation, self.web === web, saved.contains(address) else { return }
+            guard valid == true, DeviceBinding.load(address)?.cookie == backup.cookie,
+                  let host = URL(string: address)?.host else { web.load(URLRequest(url: url)); return }
+            var properties: [HTTPCookiePropertyKey: Any] = [.name: backup.name, .value: backup.token, .domain: host,
+                .path: GatewayURL.cookiePath(address), .expires: Date().addingTimeInterval(400 * 86400),
+                HTTPCookiePropertyKey("HttpOnly"): "TRUE", HTTPCookiePropertyKey("SameSite"): "Strict"]
+            if address.hasPrefix("https://") { properties[.secure] = "TRUE" }
+            guard let restored = HTTPCookie(properties: properties) else { web.load(URLRequest(url: url)); return }
+            let latest = await withCheckedContinuation { continuation in store.getAllCookies { continuation.resume(returning: $0) } }
+            guard latest.first(where: { cookieMatches($0, address: address) })?.value == before?.value,
+                  DeviceBinding.load(address)?.cookie == backup.cookie else { web.load(URLRequest(url: url)); return }
+            await withCheckedContinuation { continuation in store.setCookie(restored) { continuation.resume() } }
+            guard ticket == generation, self.web === web, saved.contains(address),
+                  DeviceBinding.load(address)?.cookie == backup.cookie else {
+                let after = await withCheckedContinuation { continuation in store.getAllCookies { continuation.resume(returning: $0) } }
+                if after.contains(where: { $0.name == restored.name && $0.value == restored.value && $0.domain == restored.domain && $0.path == restored.path }) { await store.deleteCookie(restored) }
+                return
+            }
+            defaults.set(backup.name, forKey: "cookieName:" + address)
+            web.load(URLRequest(url: url))
         }
     }
     private func recoverConnection() {
@@ -458,6 +550,8 @@ final class BridgeController: UIViewController, WKNavigationDelegate, WKUIDelega
                 var all = self.saved.filter { $0 != address }; if !all.contains(next) { all.append(next) }; self.defaults.set(all, forKey: "origins")
                 self.defaults.set(descriptor, forKey: "connection:" + next); self.defaults.removeObject(forKey: "connection:" + address)
                 if let name = self.defaults.string(forKey: "cookieName:" + address) { self.defaults.set(name, forKey: "cookieName:" + next) }; self.defaults.removeObject(forKey: "cookieName:" + address)
+                if let backup = DeviceBinding.load(address), backup.name == cookie.name, backup.token == cookie.value,
+                   DeviceBinding.load(next) == nil, DeviceBinding.save(next, backup) { DeviceBinding.clear(address) }
                 for prefix in ["name:", "computer-name:", "cursor:", "stream:", "last-opened:"] {
                     if let value = self.defaults.object(forKey: prefix + address) { self.defaults.set(value, forKey: prefix + next) }; self.defaults.removeObject(forKey: prefix + address)
                 }
@@ -484,13 +578,13 @@ final class BridgeController: UIViewController, WKNavigationDelegate, WKUIDelega
         configuration.ignoresViewportScaleLimits = false
         configuration.userContentController.addUserScript(WKUserScript(source: WebScripts.fixedViewport, injectionTime: .atDocumentEnd, forMainFrameOnly: true))
         clipboardToken = UUID().uuidString
-        let appearanceScript = scripts.appearance.replacingOccurrences(of: "__BRIDGE_CLIPBOARD_TOKEN__", with: clipboardToken)
+        let appearanceScript = scripts.appearance.replacingOccurrences(of: "__BRIDGE_CLIPBOARD_TOKEN__", with: clipboardToken) + "\ndocument.addEventListener('bridge-authenticated', () => window.prompt('codexbridge-session:" + clipboardToken + "', ''));document.addEventListener('bridge-logged-out', () => window.prompt('codexbridge-logout:" + clipboardToken + "', ''));document.addEventListener('bridge-auth-lost', () => window.prompt('codexbridge-auth-lost:" + clipboardToken + "', ''));"
         configuration.userContentController.addUserScript(WKUserScript(source: appearanceScript, injectionTime: .atDocumentEnd, forMainFrameOnly: true))
         let clipboardScript = scripts.clipboard.replacingOccurrences(of: "__BRIDGE_CLIPBOARD_TOKEN__", with: clipboardToken)
         configuration.userContentController.addUserScript(WKUserScript(source: clipboardScript, injectionTime: .atDocumentEnd, forMainFrameOnly: true))
         let systemBarsScript = scripts.systemBars.replacingOccurrences(of: "__BRIDGE_CLIPBOARD_TOKEN__", with: clipboardToken)
         configuration.userContentController.addUserScript(WKUserScript(source: systemBarsScript, injectionTime: .atDocumentEnd, forMainFrameOnly: true))
-        let web = WKWebView(frame: .zero, configuration: configuration); self.web = web; web.scrollView.contentInsetAdjustmentBehavior = .never; web.navigationDelegate = self; web.uiDelegate = self; web.allowsBackForwardNavigationGestures = true; web.customUserAgent = nil; page.addArrangedSubview(web); gatewayMenuTop = gatewayMenu.topAnchor.constraint(equalTo: web.topAnchor, constant: 4); gatewayMenuTop?.isActive = true; web.load(URLRequest(url: url))
+        let web = WKWebView(frame: .zero, configuration: configuration); self.web = web; web.scrollView.contentInsetAdjustmentBehavior = .never; web.navigationDelegate = self; web.uiDelegate = self; web.allowsBackForwardNavigationGestures = true; web.customUserAgent = nil; page.addArrangedSubview(web); gatewayMenuTop = gatewayMenu.topAnchor.constraint(equalTo: web.topAnchor, constant: 4); gatewayMenuTop?.isActive = true; loadWithRecovery(web, url: url, address: address, ticket: generation)
         web.scrollView.pinchGestureRecognizer?.isEnabled = false
     }
     @objc private func refresh() { routeAttempted = false; web?.reload() }
@@ -537,6 +631,29 @@ final class BridgeController: UIViewController, WKNavigationDelegate, WKUIDelega
             guard webView === web, frame.isMainFrame, let source = frame.request.url, GatewayURL.same(source, origin),
                   let current = webView.url, GatewayURL.same(current, origin) else { completionHandler(nil); return }
             completionHandler(computerName(origin)); return
+        }
+        if prompt == "codexbridge-logout:" + clipboardToken {
+            guard webView === web, UIApplication.shared.applicationState == .active, frame.isMainFrame,
+                  let source = frame.request.url, GatewayURL.same(source, origin),
+                  let current = webView.url, GatewayURL.same(current, origin) else { completionHandler(nil); return }
+            bindingRevision += 1
+            DeviceBinding.clear(origin)
+            binding(origin) { cookie in if let cookie { WKWebsiteDataStore.default().httpCookieStore.delete(cookie) } }
+            completionHandler("cleared"); return
+        }
+        if prompt == "codexbridge-auth-lost:" + clipboardToken {
+            guard webView === web, UIApplication.shared.applicationState == .active, frame.isMainFrame,
+                  let source = frame.request.url, GatewayURL.same(source, origin),
+                  let current = webView.url, GatewayURL.same(current, origin), !authLossAttempted,
+                  let target = URL(string: origin + "/") else { completionHandler(nil); return }
+            authLossAttempted = true; loadWithRecovery(webView, url: target, address: origin, ticket: generation)
+            completionHandler("recovering"); return
+        }
+        if prompt == "codexbridge-session:" + clipboardToken {
+            guard webView === web, UIApplication.shared.applicationState == .active, frame.isMainFrame,
+                  let source = frame.request.url, GatewayURL.same(source, origin),
+                  let current = webView.url, GatewayURL.same(current, origin) else { completionHandler(nil); return }
+            authLossAttempted = false; rememberConnection(); completionHandler("saved"); return
         }
         if prompt == "codexbridge-language:" + clipboardToken {
             guard webView === web, frame.isMainFrame, let source = frame.request.url, GatewayURL.same(source, origin),
@@ -969,6 +1086,7 @@ final class BridgeController: UIViewController, WKNavigationDelegate, WKUIDelega
             let revision = self.generation
             self.downloads.cancel(origin: target)
             self.revokeConnection(target) {
+                DeviceBinding.clear(target)
                 if target == self.origin, #available(iOS 16.2, *) { Task { await LiveActivityController.shared.stop() } }
                 self.defaults.set(self.saved.filter { $0 != target }, forKey: "origins"); self.computerSnapshots.removeValue(forKey: target)
                 if self.defaults.string(forKey: "active") == target { self.defaults.removeObject(forKey: "active") }

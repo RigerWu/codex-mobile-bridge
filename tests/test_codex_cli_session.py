@@ -1,12 +1,14 @@
 import tempfile
+import json
 import shlex
+import subprocess
 import threading
 import unittest
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 from bridge.clients.codex.app_server import AppServerUnavailable, AppServerUnsupported, AppServerUnknownResult
-from bridge.clients.codex.cli_session import CliSessions, _local_cli, _ssh_proxy_command
+from bridge.clients.codex.cli_session import CliSessions, _local_cli, _managed_cli, _ssh_daemon_start_command, _ssh_proxy_command
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -64,15 +66,60 @@ class CliSessionTests(unittest.TestCase):
         self.temp.cleanup()
 
     def test_passive_attach_does_not_connect_or_resume(self):
+        self.sessions._start_daemon = Mock()
+        Path(self.fake.socket_path).unlink()
         self.assertIsNone(self.sessions.attach('thread-a'))
         self.assertEqual(self.fake.sent, [])
+        self.sessions._start_daemon.assert_not_called()
 
-    def test_explicit_attach_requires_loaded_runtime_and_preserves_identity(self):
+    def test_unavailable_proxy_starts_daemon_only_for_explicit_attach(self):
+        info = {'codexHome': str(self.home)}
+        self.fake.connect = Mock(side_effect=[AppServerUnavailable('offline'),
+                                              AppServerUnavailable('offline'), info])
+        with patch.object(self.sessions, '_start_daemon') as start:
+            self.assertEqual(self.sessions.attach('thread-a', explicit=True)['id'], 'thread-a')
+        start.assert_called_once_with(None)
+        self.assertEqual(self.fake.connect.call_count, 3)
+
+    def test_explicit_attach_resumes_saved_thread_and_preserves_identity(self):
         self.fake.loaded = False
-        with self.assertRaises(AppServerUnavailable):
-            self.sessions.attach('thread-a', explicit=True)
+        saved = {'id': 'thread-a', 'origin': 'cli', 'cwd': '/original/project',
+                 'model_provider': 'original-provider'}
+        with patch.object(self.sessions.store, 'get', return_value=saved):
+            state = self.sessions.attach('thread-a', explicit=True)
+        self.assertEqual(state['modelProvider'], 'original-provider')
+        self.assertEqual(state['cwd'], '/original/project')
+        self.assertEqual([params for method, params in self.fake.sent if method == 'thread/resume'],
+                         [{'threadId': 'thread-a', 'excludeTurns': True}])
+        self.assertFalse(any('model' in params or 'cwd' in params or 'sandbox' in params
+                             for method, params in self.fake.sent if method == 'thread/resume'))
+
+    def test_cold_resume_rejects_saved_identity_mismatch(self):
+        self.fake.loaded = False
+        saved = {'id': 'thread-a', 'origin': 'cli', 'cwd': '/other/project',
+                 'model_provider': 'original-provider'}
+        with patch.object(self.sessions.store, 'get', return_value=saved):
+            with self.assertRaises(AppServerUnsupported):
+                self.sessions.attach('thread-a', explicit=True)
         self.assertFalse(any(method == 'thread/resume' for method, _ in self.fake.sent))
-        self.fake.loaded = True
+
+    def test_resume_response_identity_mismatch_is_not_joined(self):
+        self.fake.loaded = False
+        saved = {'id': 'thread-a', 'origin': 'cli', 'cwd': '/original/project',
+                 'model_provider': 'original-provider'}
+        original = self.fake.request
+        def request(method, params, **kwargs):
+            result = original(method, params, **kwargs)
+            if method == 'thread/resume':
+                result['modelProvider'] = 'different-provider'
+            return result
+        self.fake.request = request
+        with patch.object(self.sessions.store, 'get', return_value=saved):
+            with self.assertRaises(AppServerUnsupported):
+                self.sessions.attach('thread-a', explicit=True)
+        self.assertNotIn('thread-a', self.sessions.joined)
+
+    def test_loaded_thread_preserves_identity(self):
         state = self.sessions.attach('thread-a', explicit=True)
         self.assertEqual(state['modelProvider'], 'original-provider')
         self.assertEqual(state['cwd'], '/original/project')
@@ -224,6 +271,57 @@ class CliSessionTests(unittest.TestCase):
         with patch('bridge.clients.codex.cli_session.shutil.which', return_value=None), \
                 patch('bridge.clients.codex.cli_session.Path.home', return_value=self.home):
             self.assertEqual(_local_cli(self.home, 'codex'), str(runtime))
+
+    def test_missing_daemon_package_does_not_start_or_install(self):
+        self.socket = Path(self.fake.socket_path)
+        self.socket.unlink()
+        with self.assertRaises(AppServerUnavailable):
+            self.sessions.attach('thread-a', explicit=True)
+        self.assertEqual(self.fake.sent, [])
+        self.assertIsNone(_managed_cli(self.home))
+
+    def test_remote_start_uses_saved_login_shell_and_checks_package(self):
+        command = _ssh_daemon_start_command('saved-host')
+        self.assertEqual(command[-2], 'saved-host')
+        inner = shlex.split(command[-1])[3]
+        self.assertIn('CODEX_HOME', inner)
+        self.assertIn('packages/app-server-daemon', inner)
+        self.assertIn('app-server daemon start', inner)
+        self.assertNotIn('daemon bootstrap', inner)
+
+    def test_explicit_start_uses_selected_home_without_installing(self):
+        managed = self.home / 'packages/app-server-daemon/current/bin/codex'
+        managed.parent.mkdir(parents=True)
+        managed.write_text('#!/bin/sh\n')
+        managed.chmod(0o700)
+        self.assertTrue(self.sessions.available())
+        report = {'status': 'started', 'socketPath': self.fake.socket_path}
+        with patch('bridge.clients.codex.cli_session.subprocess.run',
+                   return_value=subprocess.CompletedProcess([], 0, json.dumps(report))) as run:
+            self.sessions._start_daemon(str(managed))
+        self.assertEqual(run.call_args.args[0], [str(managed), 'app-server', 'daemon', 'start'])
+        self.assertEqual(run.call_args.kwargs['env']['CODEX_HOME'], str(self.home))
+
+    def test_same_thread_explicit_attaches_share_one_resume(self):
+        entered, release = threading.Event(), threading.Event()
+        original = self.fake.request
+        def request(method, params, **kwargs):
+            if method == 'thread/resume':
+                entered.set()
+                release.wait(2)
+            return original(method, params, **kwargs)
+        self.fake.request = request
+        results = []
+        first = threading.Thread(target=lambda: results.append(self.sessions.attach('thread-a', explicit=True)))
+        second = threading.Thread(target=lambda: results.append(self.sessions.attach('thread-a', explicit=True)))
+        first.start()
+        self.assertTrue(entered.wait(2))
+        second.start()
+        release.set()
+        first.join(2)
+        second.join(2)
+        self.assertEqual(len(results), 2)
+        self.assertEqual(len([method for method, _ in self.fake.sent if method == 'thread/resume']), 1)
 
 
 if __name__ == '__main__':

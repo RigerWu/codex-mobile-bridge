@@ -2,6 +2,8 @@
 
 Status: implemented
 
+The source-based Desktop exclusion below is partially superseded by [existing-owner routing](../bug-fix/2026-10-14-cli-existing-owner.md): CLI origin is provenance, and an already active Desktop owner is reused without creating a replacement runtime.
+
 ## Problem
 
 The loaded-only policy in [CLI access](2026-10-14-codex-cli-access.md) leaves a visible chat unusable after its terminal exits and the native runtime unloads it. The user explicitly requires continuing from the phone without first reopening a computer terminal. The old error was reproduced against an actual saved CLI 0.162.1 thread, without changing its origin metadata.

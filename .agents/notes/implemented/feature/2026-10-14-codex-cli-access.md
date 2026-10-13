@@ -2,6 +2,8 @@
 
 Status: implemented
 
+The source-based Desktop exclusion below is partially superseded by [existing-owner routing](../bug-fix/2026-10-14-cli-existing-owner.md): CLI origin is provenance, and an already active Desktop owner is reused without creating a replacement runtime.
+
 The loaded-only connection decision below is superseded by [explicit CLI resume](2026-10-14-codex-cli-resume.md). Discovery and write-isolation decisions remain in effect.
 
 ## Problem

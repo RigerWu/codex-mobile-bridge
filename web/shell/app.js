@@ -361,7 +361,7 @@ function renderState(view){
   contextUsageControl.update(view);state=view;
   if(view.connected)reconnectFailure=null;
   const access=sessionAccess(view.access),limited=!!view.access;
-  $('permissions-button').textContent=t({'ask':'请求批准','auto-review':'帮我批准','full-access':'完全访问权限'}[view.permissionMode]||'权限');
+  $('permissions-button').textContent=t({'ask':'请求批准','auto-review':'帮我批准','full-access':'完全访问'}[view.permissionMode]||'权限');
   $('permissions-button').disabled=!view.connected||!access.canConfigure;
   $('fork-source').hidden=!view.forkedFrom;$('fork-source').textContent=view.forkedFrom?t('来源会话：')+view.forkedFrom.title:'';
   if($('model-dialog').open&&modelTarget===chatKey())fastModeControl.sync(view);

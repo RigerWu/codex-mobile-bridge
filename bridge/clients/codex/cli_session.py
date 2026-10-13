@@ -8,15 +8,30 @@ from bridge.clients.codex.app_server import (
     AppServerError, AppServerUnavailable, AppServerUnsupported, CodexAppServer)
 
 
+def _ssh_proxy_command(alias):
+    if not alias or alias.startswith('-') or any(c.isspace() for c in alias):
+        raise ValueError('Invalid SSH host alias')
+    remote = ('sh -lc \'if command -v codex >/dev/null 2>&1; then '
+              'exec codex app-server proxy; '
+              'elif test -x "$HOME/.local/bin/codex"; then '
+              'exec "$HOME/.local/bin/codex" app-server proxy; else exit 127; fi\'')
+    return ['ssh', '-T', '-o', 'BatchMode=yes', '-o', 'ClearAllForwardings=yes',
+            '-o', 'ConnectTimeout=8', '-o', 'StrictHostKeyChecking=yes',
+            '-o', 'UpdateHostKeys=no', alias, remote]
+
+
 class CliSessions:
     def __init__(self, home, on_state, on_disconnect, cli='codex', alias=None,
                  process_factory=None):
         self.home = Path(home)
         self.alias = alias
+        self.remote_home = None
+        command = _ssh_proxy_command(alias) if alias else None
         self.on_state = on_state
         self.on_disconnect = on_disconnect
         self.lock = threading.RLock()
         self.joined = {}
+        self.attaching = set()
         self.metadata = {}
         self.states = {}
         self.requests = {}
@@ -25,10 +40,11 @@ class CliSessions:
         self.client = CodexAppServer(
             self.home / 'app-server-control/app-server-control.sock', cli=cli,
             on_event=self._event, on_server_request=self._server_request,
-            on_disconnect=self._disconnect, process_factory=process_factory)
+            on_disconnect=self._disconnect, process_factory=process_factory,
+            command=command, check_socket=alias is None)
 
     def available(self):
-        return self.alias is None and Path(self.client.socket_path).exists()
+        return self.alias is not None or Path(self.client.socket_path).exists()
 
     def attach(self, thread_id, explicit=False):
         """Passive inspection never resumes a thread; explicit joins require loaded state."""
@@ -37,8 +53,14 @@ class CliSessions:
         if not self.available():
             raise AppServerUnavailable('Existing Codex CLI runtime is unavailable')
         info = self.client.connect()
-        if Path(info['codexHome']) != self.home:
+        if self.alias is None and Path(info['codexHome']) != self.home:
             raise AppServerUnavailable('Codex CLI runtime belongs to another home')
+        if self.alias is not None:
+            remote_home = Path(info['codexHome'])
+            if not remote_home.is_absolute() or (self.remote_home is not None and
+                    remote_home != self.remote_home):
+                raise AppServerUnavailable('Remote Codex CLI runtime identity changed')
+            self.remote_home = remote_home
         with self.lock:
             if thread_id in self.joined:
                 return copy.deepcopy(self.states[thread_id])
@@ -51,13 +73,25 @@ class CliSessions:
         # Resume rejoins a running thread. The protocol has no atomic loaded-only
         # guard, so an unload between this check and resume remains a fail-closed
         # limitation for callers that require strict ownership guarantees.
-        resumed = self.client.request('thread/resume', {'threadId': thread_id, 'excludeTurns': True})
+        with self.lock:
+            self.attaching.add(thread_id)
+        try:
+            resumed = self.client.request('thread/resume', {'threadId': thread_id, 'excludeTurns': True})
+        except Exception:
+            with self.lock:
+                self.attaching.discard(thread_id)
+                self.requests.pop(thread_id, None)
+            raise
         after = resumed.get('thread') or {}
         if (after.get('id') != thread_id or after.get('cwd') != before.get('cwd') or
                 resumed.get('modelProvider') != before.get('modelProvider')):
+            with self.lock:
+                self.attaching.discard(thread_id)
+                self.requests.pop(thread_id, None)
             raise AppServerUnsupported('CLI thread identity changed during join')
         with self.lock:
             self.joined[thread_id] = self.client.process
+            self.attaching.discard(thread_id)
             self.metadata[thread_id] = {'model': resumed.get('model'),
                                         'modelProvider': resumed.get('modelProvider'),
                                         'cwd': resumed.get('cwd')}
@@ -70,6 +104,9 @@ class CliSessions:
         thread = result.get('thread') or {}
         if thread.get('id') != thread_id:
             raise AppServerUnsupported('CLI thread read returned a different thread')
+        if (thread.get('status') or {}).get('type') == 'notLoaded':
+            self._invalidate(thread_id)
+            raise AppServerUnavailable('CLI thread unloaded')
         with self.lock:
             pending = list(self.requests.get(thread_id, {}).values())
             state = self._state(thread, pending, self.metadata[thread_id])
@@ -79,6 +116,9 @@ class CliSessions:
 
     def call(self, thread_id, desktop_method, params, timeout=30):
         self._require_joined(thread_id)
+        if not self.client.is_loaded(thread_id):
+            self._invalidate(thread_id)
+            raise AppServerUnavailable('CLI thread unloaded before the operation')
         if desktop_method == 'thread-follower-start-turn':
             start = params.get('turnStart') or {}
             request = start.get('request') or {}
@@ -121,7 +161,9 @@ class CliSessions:
             request_id = params.get('requestId')
             with self.lock:
                 pending = self.requests.get(thread_id, {}).get(request_id)
-            if not pending or pending['method'] != approval_methods[desktop_method]:
+            expected = approval_methods[desktop_method]
+            if not pending or (pending['method'] != expected and not (
+                    expected == 'item/tool/requestUserInput' and pending['method'] == 'tool/requestUserInput')):
                 raise AppServerUnavailable('CLI approval is no longer pending')
             if desktop_method in ('thread-follower-command-approval-decision',
                                   'thread-follower-file-approval-decision'):
@@ -141,7 +183,7 @@ class CliSessions:
         for value in inputs:
             kind = value.get('type')
             if kind in ('text', 'localImage', 'skill'):
-                result.append({key: value[key] for key in ('type', 'text', 'path', 'name') if key in value})
+                result.append({key: value[key] for key in ('type', 'text', 'text_elements', 'path', 'name') if key in value})
             else:
                 raise AppServerUnsupported('Unsupported CLI input type')
         files = context.get('fileAttachments') or []
@@ -180,19 +222,88 @@ class CliSessions:
                 raise AppServerUnavailable('CLI thread is not joined on this connection')
 
     def _event(self, event):
-        thread_id = (event.get('params') or {}).get('threadId')
+        method = event.get('method')
+        params = event.get('params') or {}
+        thread_id = params.get('threadId')
         with self.lock:
             joined = thread_id in self.joined
-        if joined:
-            self._queue_refresh(thread_id)
+        if not joined:
+            return
+        if method == 'thread/closed' or (method == 'thread/status/changed' and
+                (params.get('status') or {}).get('type') == 'notLoaded'):
+            self._invalidate(thread_id)
+            return
+        with self.lock:
+            state = self.states.get(thread_id)
+            if state is None:
+                self._queue_refresh(thread_id)
+                return
+            if method == 'serverRequest/resolved':
+                self.requests.get(thread_id, {}).pop(params.get('requestId'), None)
+                state['requests'] = list(self.requests.get(thread_id, {}).values())
+            elif method == 'thread/status/changed':
+                state['threadRuntimeStatus'] = params.get('status') or state['threadRuntimeStatus']
+            elif method in ('turn/started', 'turn/completed'):
+                turn = params.get('turn') or {}
+                row = next((item for item in state['turns'] if item['turnId'] == turn.get('id')), None)
+                if row is None:
+                    row = {'turnId': turn.get('id'), 'items': []}
+                    state['turns'].append(row)
+                row.update(status=turn.get('status'), error=turn.get('error'))
+                state['threadRuntimeStatus'] = {'type': 'active' if method == 'turn/started' else 'idle'}
+                if turn.get('items'):
+                    row['items'] = turn['items']
+                if method == 'turn/completed':
+                    pending = self.requests.get(thread_id, {})
+                    for request_id in list(pending):
+                        if (pending[request_id].get('params') or {}).get('turnId') == turn.get('id'):
+                            pending.pop(request_id)
+                    state['requests'] = list(pending.values())
+            elif method in ('item/started', 'item/completed'):
+                turn = next((item for item in state['turns'] if item['turnId'] == params.get('turnId')), None)
+                if turn and isinstance(params.get('item'), dict):
+                    item = params['item']
+                    items = turn['items']
+                    for index, existing in enumerate(items):
+                        if existing.get('id') == item.get('id'):
+                            items[index] = item
+                            break
+                    else:
+                        items.append(item)
+            elif method == 'item/agentMessage/delta':
+                turn = next((item for item in state['turns'] if item['turnId'] == params.get('turnId')), None)
+                if turn:
+                    item = next((item for item in turn['items'] if item.get('id') == params.get('itemId')), None)
+                    if item is None:
+                        item = {'id': params.get('itemId'), 'type': 'agentMessage', 'text': ''}
+                        turn['items'].append(item)
+                    if isinstance(params.get('delta'), str):
+                        item['text'] = item.get('text', '') + params['delta']
+            elif method == 'item/commandExecution/outputDelta':
+                turn = next((item for item in state['turns'] if item['turnId'] == params.get('turnId')), None)
+                if turn:
+                    item = next((item for item in turn['items'] if item.get('id') == params.get('itemId')), None)
+                    if item is not None and isinstance(params.get('delta'), str):
+                        item['aggregatedOutput'] = item.get('aggregatedOutput', '') + params['delta']
+            else:
+                return
+            snapshot = copy.deepcopy(state)
+        self.on_state(thread_id, snapshot)
 
     def _server_request(self, request):
         thread_id = (request.get('params') or {}).get('threadId')
         with self.lock:
-            if thread_id not in self.joined:
+            if thread_id not in self.joined and thread_id not in self.attaching:
                 return
             self.requests.setdefault(thread_id, {})[request['id']] = request
-        self._queue_refresh(thread_id)
+            state = self.states.get(thread_id)
+            if state is not None:
+                state['requests'] = list(self.requests[thread_id].values())
+                snapshot = copy.deepcopy(state)
+            else:
+                snapshot = None
+        if snapshot is not None:
+            self.on_state(thread_id, snapshot)
 
     def _queue_refresh(self, thread_id):
         with self.lock:
@@ -209,7 +320,7 @@ class CliSessions:
                             break
                         self.refresh_pending.discard(thread_id)
             except AppServerError:
-                pass
+                self._invalidate(thread_id)
             finally:
                 with self.lock:
                     self.refreshing.discard(thread_id)
@@ -219,10 +330,20 @@ class CliSessions:
     def _disconnect(self):
         with self.lock:
             self.joined.clear()
+            self.attaching.clear()
             self.metadata.clear()
             self.states.clear()
             self.requests.clear()
             self.refresh_pending.clear()
+        self.on_disconnect()
+
+    def _invalidate(self, thread_id):
+        with self.lock:
+            self.joined.pop(thread_id, None)
+            self.attaching.discard(thread_id)
+            self.metadata.pop(thread_id, None)
+            self.states.pop(thread_id, None)
+            self.requests.pop(thread_id, None)
         self.on_disconnect()
 
     def close(self):

@@ -3,7 +3,7 @@ import unittest
 from pathlib import Path
 
 from bridge.clients.codex.app_server import AppServerUnavailable, AppServerUnsupported
-from bridge.clients.codex.cli_session import CliSessions
+from bridge.clients.codex.cli_session import CliSessions, _ssh_proxy_command
 
 
 class FakeClient:
@@ -96,6 +96,48 @@ class CliSessionTests(unittest.TestCase):
         self.sessions.attach('thread-a', explicit=True)
         with self.assertRaises(AppServerUnsupported):
             self.sessions.call('thread-a', 'thread-follower-update-thread-settings', {})
+
+    def test_live_events_update_state_and_resolve_pending_without_refresh(self):
+        self.sessions.attach('thread-a', explicit=True)
+        self.sessions._event({'method': 'turn/started', 'params': {
+            'threadId': 'thread-a', 'turn': {'id': 'turn-1', 'status': 'inProgress', 'items': []}}})
+        self.sessions._event({'method': 'item/started', 'params': {
+            'threadId': 'thread-a', 'turnId': 'turn-1',
+            'item': {'id': 'msg-1', 'type': 'agentMessage', 'text': ''}}})
+        self.sessions._event({'method': 'item/agentMessage/delta', 'params': {
+            'threadId': 'thread-a', 'turnId': 'turn-1', 'itemId': 'msg-1', 'delta': 'hello'}})
+        self.assertEqual(self.states[-1][1]['turns'][0]['items'][0]['text'], 'hello')
+        self.sessions._server_request({'id': 42, 'method': 'item/fileChange/requestApproval',
+                                       'params': {'threadId': 'thread-a', 'turnId': 'turn-1'}})
+        self.assertEqual(self.states[-1][1]['requests'][0]['id'], 42)
+        self.sessions._event({'method': 'serverRequest/resolved', 'params': {
+            'threadId': 'thread-a', 'requestId': 42}})
+        self.assertEqual(self.states[-1][1]['requests'], [])
+        self.sessions._event({'method': 'turn/completed', 'params': {
+            'threadId': 'thread-a', 'turn': {'id': 'turn-1', 'status': 'completed'}}})
+        self.assertEqual(self.states[-1][1]['turns'][0]['status'], 'completed')
+
+    def test_unload_revokes_write_access(self):
+        self.sessions.attach('thread-a', explicit=True)
+        self.sessions._event({'method': 'thread/closed', 'params': {'threadId': 'thread-a'}})
+        with self.assertRaises(AppServerUnavailable):
+            self.sessions.call('thread-a', 'thread-follower-interrupt-turn',
+                               {'expectedTurnId': 'turn-1'})
+
+    def test_ssh_proxy_uses_strict_existing_runtime_connection(self):
+        command = _ssh_proxy_command('saved-host')
+        self.assertIn('BatchMode=yes', command)
+        self.assertIn('ClearAllForwardings=yes', command)
+        self.assertIn('StrictHostKeyChecking=yes', command)
+        self.assertEqual(command[-2], 'saved-host')
+        self.assertIn('codex app-server proxy', command[-1])
+        with self.assertRaises(ValueError):
+            _ssh_proxy_command('-unsafe')
+        remote = CliSessions(self.home / 'local-only-path', lambda *_: None,
+                             lambda: None, alias='saved-host')
+        remote.client = FakeClient(self.home)
+        self.assertTrue(remote.available())
+        self.assertEqual(remote.attach('thread-a', explicit=True)['id'], 'thread-a')
 
 
 if __name__ == '__main__':

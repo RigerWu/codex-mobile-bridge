@@ -1,4 +1,4 @@
-"""JSON-line client for an already running Codex app-server control socket.
+"""WebSocket client for an already running Codex app-server control socket.
 
 The proxy command only connects to the given socket. This module never starts a
 daemon, resumes a thread, or changes its model, provider, cwd, or approvals.
@@ -37,12 +37,12 @@ class _WebSocket:
     def __init__(self, reader, writer):
         self.reader = reader
         self.writer = writer
+        self.write_lock = threading.Lock()
         key = base64.b64encode(os.urandom(16)).decode('ascii')
         request = ('GET / HTTP/1.1\r\nHost: localhost\r\nUpgrade: websocket\r\n'
                    'Connection: Upgrade\r\nSec-WebSocket-Key: ' + key + '\r\n'
                    'Sec-WebSocket-Version: 13\r\n\r\n').encode('ascii')
-        self.writer.write(request)
-        self.writer.flush()
+        self._write(request)
         header = bytearray()
         while not header.endswith(b'\r\n\r\n'):
             byte = self.reader.read(1)
@@ -69,15 +69,13 @@ class _WebSocket:
         else:
             header = bytes((0x81, 0xff)) + struct.pack('!Q', len(data))
         payload = bytes(byte ^ mask[i % 4] for i, byte in enumerate(data))
-        self.writer.write(header + mask + payload)
-        self.writer.flush()
+        self._write(header + mask + payload)
 
     def receive(self):
         fragments = []
+        total = 0
         while True:
-            head = self.reader.read(2)
-            if len(head) != 2:
-                raise EOFError()
+            head = self._exact(2)
             opcode = head[0] & 15
             length = head[1] & 127
             if length == 126:
@@ -95,31 +93,50 @@ class _WebSocket:
             if opcode not in (0, 1):
                 continue
             fragments.append(payload)
+            total += len(payload)
+            if total > 64 * 1024 * 1024:
+                raise AppServerUnsupported('Codex WebSocket message is too large')
             if head[0] & 128:
                 return json.loads(b''.join(fragments))
 
     def _exact(self, length):
-        data = self.reader.read(length)
-        if len(data) != length:
-            raise EOFError()
-        return data
+        chunks = bytearray()
+        while len(chunks) < length:
+            data = self.reader.read(length - len(chunks))
+            if not data:
+                raise EOFError()
+            chunks.extend(data)
+        return chunks
+
+    def _write(self, data):
+        with self.write_lock:
+            view = memoryview(data)
+            while view:
+                count = self.writer.write(view)
+                if not count:
+                    raise OSError('Codex proxy pipe closed')
+                view = view[count:]
+            self.writer.flush()
 
     def _control(self, opcode, payload):
         mask = os.urandom(4)
-        self.writer.write(bytes((0x80 | opcode, 0x80 | len(payload))) + mask +
-                          bytes(byte ^ mask[i % 4] for i, byte in enumerate(payload)))
-        self.writer.flush()
+        self._write(bytes((0x80 | opcode, 0x80 | len(payload))) + mask +
+                    bytes(byte ^ mask[i % 4] for i, byte in enumerate(payload)))
 
 
 class CodexAppServer:
     MAX_LINE = 64 * 1024 * 1024
 
     def __init__(self, socket_path, cli='codex', on_event=None,
-                 on_server_request=None, on_disconnect=None, process_factory=None):
+                 on_server_request=None, on_disconnect=None, process_factory=None,
+                 command=None, check_socket=True):
         if not socket_path or not Path(socket_path).is_absolute():
             raise ValueError('An absolute existing control socket path is required')
         self.socket_path = str(socket_path)
         self.cli = str(cli)
+        self.command = list(command) if command is not None else [
+            self.cli, 'app-server', 'proxy', '--sock', self.socket_path]
+        self.check_socket = check_socket
         self.on_event = on_event or (lambda event: None)
         self.on_server_request = on_server_request or (lambda request: None)
         self.on_disconnect = on_disconnect or (lambda: None)
@@ -137,18 +154,28 @@ class CodexAppServer:
         with self.connect_lock:
             if self.process is not None and self.server_info is not None:
                 return self.server_info
-            if not Path(self.socket_path).exists():
+            if self.check_socket and not Path(self.socket_path).exists():
                 raise AppServerUnavailable('Codex app-server control socket is unavailable')
             try:
                 process = self.process_factory(
-                    [self.cli, 'app-server', 'proxy', '--sock', self.socket_path],
+                    self.command,
                     stdin=subprocess.PIPE, stdout=subprocess.PIPE,
                     stderr=subprocess.DEVNULL)
             except OSError as exc:
                 raise AppServerUnavailable('Could not connect to the existing Codex runtime') from exc
             self.process = process
+            handshake = Future()
+            def open_websocket():
+                try:
+                    handshake.set_result(_WebSocket(process.stdout, process.stdin))
+                except Exception as exc:
+                    handshake.set_exception(exc)
+            threading.Thread(target=open_websocket, daemon=True).start()
             try:
-                self.transport = _WebSocket(process.stdout, process.stdin)
+                self.transport = handshake.result(timeout=timeout)
+            except TimeoutError as exc:
+                self.close()
+                raise AppServerUnavailable('Codex control socket handshake timed out') from exc
             except Exception:
                 self.close()
                 raise

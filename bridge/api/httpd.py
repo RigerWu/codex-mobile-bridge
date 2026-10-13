@@ -37,9 +37,10 @@ from bridge.features.sessions.store import StoreUnavailable
 from bridge.clients.codex.remote import RemoteUnavailable
 from bridge.features.sessions.create import CreationError
 from bridge.features.accounts.account import AccountError
+from bridge.api.html_preview import SHELL_PATH, SHELL_FILE, SHELL_CSP
 
 LOG = logging.getLogger(__name__)
-from bridge.api.assets import STATIC, FONT_ROUTE, asset_bytes
+from bridge.api.assets import STATIC, FONT_ROUTE, PDF_CMAP_ROUTE, PDF_FONT_ROUTE, asset_bytes
 
 THREAD_ROUTE = re.compile(r"^/api/sessions/([0-9a-f-]{36})(?:/(events|send|stop|history|respond|reconnect|queue|catalog|settings|permissions|poll|timeline|changes|detail|notifications|uploads|message-action|rename))?$")
 UPLOAD_PREVIEW_ROUTE = re.compile(r"^/api/sessions/([0-9a-f-]{36})/uploads/([0-9a-f-]{36})/preview$")
@@ -140,16 +141,20 @@ class Handler(BaseHTTPRequestHandler):
         # Request bodies, cookies, query strings and conversation IDs are private.
         pass
 
-    def headers_common(self, cache_control="no-store"):
+    def headers_common(self, cache_control="no-store", preview_shell=False):
         self.send_header("Cache-Control", cache_control)
         self.send_header("X-Content-Type-Options", "nosniff")
         self.send_header("Referrer-Policy", "no-referrer")
-        self.send_header("X-Frame-Options", "DENY")
+        self.send_header("X-Frame-Options", "SAMEORIGIN" if preview_shell else "DENY")
         # KaTeX emits inline layout styles; scripts and stylesheets stay same-origin.
-        self.send_header("Content-Security-Policy", "default-src 'self'; script-src 'self'; style-src 'self'; style-src-attr 'unsafe-inline'; img-src 'self' data:; connect-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'; object-src 'none'")
+        host = self.headers.get('Host', '')
+        origin = ('https://' if host in self.server.secure_hosts else 'http://') + host
+        frame_source = origin + SHELL_PATH if host in self.server.hosts else "'none'"
+        self.send_header("Content-Security-Policy", SHELL_CSP if preview_shell else
+                         "default-src 'self'; script-src 'self'; style-src 'self'; style-src-attr 'unsafe-inline'; img-src 'self' data:; connect-src 'self'; frame-src " + frame_source + "; frame-ancestors 'none'; base-uri 'none'; form-action 'self'; object-src 'none'")
         self.send_header("Permissions-Policy", "camera=(), microphone=(), geolocation=()")
 
-    def output(self, status, data, content_type="application/json; charset=utf-8", cookie=None, content_disposition=None):
+    def output(self, status, data, content_type="application/json; charset=utf-8", cookie=None, content_disposition=None, preview_shell=False):
         # Keep the browser cookie in step with the renewed server-side deadline,
         # including long-lived pages that do not revisit /api/auth.
         if cookie is None and 200 <= status < 300 and urlsplit(self.path).path.startswith('/api/'):
@@ -166,7 +171,7 @@ class Handler(BaseHTTPRequestHandler):
             if len(candidate) < len(body):
                 body, compressed = candidate, True
         self.send_response(status)
-        self.headers_common()
+        self.headers_common(preview_shell=preview_shell)
         self.send_header("Content-Type", content_type)
         self.send_header('Vary', 'Accept-Encoding')
         if compressed:
@@ -295,6 +300,16 @@ class Handler(BaseHTTPRequestHandler):
                 file = self.server.web_dir / 'vendor/katex/fonts' / font[1]
                 if file.is_file():
                     return self.output(200, file.read_bytes(), 'font/'+font[2])
+            cmap = PDF_CMAP_ROUTE.fullmatch(path)
+            if not write and cmap:
+                file = self.server.web_dir / 'vendor/pdfjs/cmaps' / cmap[1]
+                if file.is_file():
+                    return self.output(200, file.read_bytes(), 'application/octet-stream')
+            pdf_font = PDF_FONT_ROUTE.fullmatch(path)
+            if not write and pdf_font:
+                file = self.server.web_dir / 'vendor/pdfjs/standard_fonts' / pdf_font[1]
+                if file.is_file():
+                    return self.output(200, file.read_bytes(), 'font/ttf' if file.suffix == '.ttf' else 'application/octet-stream')
             if not write and path == "/api/auth":
                 session = self.login_session()
                 discovery = getattr(self.server, 'connection_discovery', None)
@@ -336,6 +351,11 @@ class Handler(BaseHTTPRequestHandler):
             auth = self.authorized(write)
             if not auth:
                 return
+            if path == SHELL_PATH:
+                if write or query:
+                    return self.output(405, {'error': '请求方式无效'})
+                return self.output(200, (self.server.web_dir / SHELL_FILE).read_bytes(),
+                                   'text/html; charset=utf-8', preview_shell=True)
             mobile_update = re.fullmatch(r'/api/mobile/update(?:/(prepare|status/([a-f0-9]{64})|packages/([a-f0-9]{64})))?', path)
             if mobile_update:
                 if self.server.auth.config.get('mode') == 'none':
@@ -693,8 +713,11 @@ class Handler(BaseHTTPRequestHandler):
                     policy = transfer_settings(self.server.transfer_directory)
                     if query.get('info') == ['1']:
                         return self.output(200, {**bridge.workspace(thread_id, 'info', {'path': relative}), **policy, 'locatable': True})
+                    preview = query.get('preview') == ['1']
+                    if 'preview' in query and (not preview or 'explicit' in query or 'archive' in query):
+                        raise ValueError('无效 PDF 预览下载参数')
                     explicit = query.get('explicit') == ['1']
-                    params = {'path': relative, 'limit': None if explicit else policy['clickDownloadMiB'] * 1024 * 1024, **self.download_request()}
+                    params = {'path': relative, 'limit': min(MAX_TRANSFER, policy['clickDownloadMiB'] * 1024 * 1024) if preview else None if explicit else policy['clickDownloadMiB'] * 1024 * 1024, **self.download_request()}
                     action = 'archive-stream' if explicit and query.get('archive') == ['1'] else 'download-stream'
                     with bridge.workspace(thread_id, action, params) as (metadata, stream):
                         return self.download_response(metadata, stream)

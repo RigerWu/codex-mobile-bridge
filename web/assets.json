@@ -59,6 +59,8 @@
     "features/workspace/workbench-input.css"
   ],
   "/workbench.js": "features/workspace/workbench.js",
+  "/source-view.js": "features/workspace/source-view.js",
+  "/vendor/prism/source-view.min.js": "vendor/prism/source-view.min.js",
   "/presentation.js": "features/settings/presentation.js",
   "/i18n.js": "shared/i18n.js",
   "/markdown.js": "shared/markdown.js",
@@ -73,5 +75,9 @@
   ],
   "/host.js": "hosts/environment.js",
   "/layout.js": "layouts/viewport.js",
-  "/file-actions.js": "features/workspace/file-actions.js"
+  "/file-actions.js": "features/workspace/file-actions.js",
+  "/pdf-preview.js": "features/workspace/pdf-preview.js",
+  "/html-preview.js": "features/workspace/html-preview.js",
+  "/vendor/pdfjs/pdf.min.mjs": "vendor/pdfjs/pdf.min.mjs",
+  "/vendor/pdfjs/pdf.worker.min.mjs": "vendor/pdfjs/pdf.worker.min.mjs"
 }

@@ -7,7 +7,7 @@ import tempfile
 import unittest
 from pathlib import Path, PurePosixPath
 
-from bridge.api.assets import FONT_ROUTE, STATIC
+from bridge.api.assets import FONT_ROUTE, PDF_CMAP_ROUTE, PDF_FONT_ROUTE, STATIC
 from bridge.clients.codex.remote import RemoteCatalog
 from bridge.features.auth import tls
 from bridge.resources import project_root, source_text
@@ -24,7 +24,7 @@ PUBLIC_URLS = set('''
 /client-accounts.js /desktop-sessions.css /vendor/xterm/xterm.js
 /vendor/xterm/addon-fit.js /vendor/xterm/xterm.css /command-terminal-panel.js
 /list-sync.js /agents-panel.js /side-chat.js /terminal-panel.js /floating-panel.js
-/git-panel.js /file-actions.js /workbench.js /image-viewer.js /workbench.css /i18n.js /app.js
+/git-panel.js /file-actions.js /workbench.js /source-view.js /pdf-preview.js /html-preview.js /vendor/pdfjs/pdf.min.mjs /vendor/pdfjs/pdf.worker.min.mjs /vendor/prism/source-view.min.js /image-viewer.js /workbench.css /i18n.js /app.js
 /modes.js /attachments.js /activity.js /fast-mode.js /accounts.js /account.js
 /account.css /presentation.js /presentation.css /markdown.js /message-actions.js
 /timeline.js /vendor/markdown-it.min.js /vendor/texmath.js
@@ -104,6 +104,16 @@ class ResourceLayoutTests(unittest.TestCase):
         for path in fonts.iterdir():
             if path.suffix in ('.woff', '.woff2', '.ttf'):
                 self.assertIsNotNone(FONT_ROUTE.fullmatch('/vendor/katex/fonts/'+path.name))
+        for path in (ROOT/'web/vendor/pdfjs/cmaps').iterdir():
+            if path.suffix == '.bcmap':
+                self.assertIsNotNone(PDF_CMAP_ROUTE.fullmatch('/vendor/pdfjs/cmaps/'+path.name))
+        for path in (ROOT/'web/vendor/pdfjs/standard_fonts').iterdir():
+            if path.suffix in ('.pfb', '.ttf'):
+                self.assertIsNotNone(PDF_FONT_ROUTE.fullmatch('/vendor/pdfjs/standard_fonts/'+path.name))
+        for url in ('/vendor/pdfjs/cmaps/../LICENSE', '/vendor/pdfjs/cmaps/sample.js',
+                    '/vendor/pdfjs/standard_fonts/../LICENSE', '/vendor/pdfjs/standard_fonts/sample.js'):
+            self.assertIsNone(PDF_CMAP_ROUTE.fullmatch(url))
+            self.assertIsNone(PDF_FONT_ROUTE.fullmatch(url))
 
     def test_gateway_manifest_contains_all_remote_sources_and_client_assets(self):
         manifest = json.loads((ROOT/'scripts/gateway-resources.json').read_text())

@@ -4,7 +4,7 @@ class DesktopClientAccountsPanel {
   constructor({root,provider,read,request,readModels=null,desktop=false,visible=null,onChanged=()=>{},onUpdate=()=>{}}){
     Object.assign(this,{root,provider,read,request,readModels,desktop,onChanged,onUpdate});
     this.visible=visible||(()=>!document.hidden&&!root.closest('[hidden]')&&(!root.closest('dialog')||root.closest('dialog').open));
-    this.value=null;this.generation=0;this.checkedAt=0;this.busy=false;this.loading=false;this.error='';this.models=null;this.modelsOpen=false;this.modelsRevision=0;
+    this.value=null;this.generation=0;this.checkedAt=0;this.busy=false;this.loading=false;this.queryingId=null;this.error='';this.models=null;this.modelsOpen=false;this.modelsRevision=0;
     this.languageListener=()=>{BridgeI18n.apply(this.root);this.render();};this.visibilityListener=()=>this.resume();
     document.addEventListener('bridge-language',this.languageListener);document.addEventListener('visibilitychange',this.visibilityListener);
     this.build();this.render();
@@ -71,7 +71,7 @@ class DesktopClientAccountsPanel {
     if(this.disposed||this.loading||this.busy)return;clearTimeout(this.timer);this.loading=true;this.error='';this.render();const generation=this.generation;
     try{
       const value=await this.read();if(generation!==this.generation)return;this.accept(value);
-      if(this.visible())for(const row of this.value.accounts){
+      if(this.provider!=='claude'&&this.visible())for(const row of this.value.accounts){
         if(!this.visible()||generation!==this.generation)break;
         const details=await this.request({action:'details',id:row.id,refresh:force});if(generation!==this.generation)return;this.accept(details);
       }
@@ -79,10 +79,10 @@ class DesktopClientAccountsPanel {
     finally{if(generation===this.generation){this.checkedAt=Date.now();this.loading=false;this.render();if(this.value)this.onUpdate(this.value);this.schedule();}}
   }
   async perform(value){
-    if(this.disposed||this.busy||this.loading)return false;clearTimeout(this.timer);this.busy=true;this.error='';this.render();const generation=this.generation;
+    if(this.disposed||this.busy||this.loading)return false;clearTimeout(this.timer);this.busy=true;this.queryingId=this.provider==='claude'&&value.action==='details'?value.id:null;this.error='';this.render();const generation=this.generation;
     try{const result=await this.request(value);if(generation!==this.generation)return false;this.accept(result,!['import-current','save-api','rename','remove'].includes(value.action));return true;}
     catch(error){if(generation===this.generation)this.error=error.message;return false;}
-    finally{if(generation===this.generation){this.busy=false;this.checkedAt=Date.now();this.render();if(this.value)this.onUpdate(this.value);this.schedule();}}
+    finally{if(generation===this.generation){this.busy=false;this.queryingId=null;this.checkedAt=Date.now();this.render();if(this.value)this.onUpdate(this.value);this.schedule();}}
   }
   async importCurrent(kind){
     if(!this.desktop||this.busy||this.loading)return;
@@ -96,6 +96,7 @@ class DesktopClientAccountsPanel {
     if(window.confirm(prompt))return this.perform({action:'switch',id:row.id});
   }
   duration(minutes){return !minutes?'额度窗口':minutes%1440===0?minutes/1440+this.text(' 天'):minutes%60===0?minutes/60+this.text(' 小时'):minutes+this.text(' 分钟');}
+  queryTime(seconds){const date=new Date(seconds*1000),pad=value=>String(value).padStart(2,'0');return `${date.getFullYear()}-${pad(date.getMonth()+1)}-${pad(date.getDate())} ${pad(date.getHours())}:${pad(date.getMinutes())}`;}
   usage(box,row){
     const usage=row.usage||row.quota;
     if(row.kind==='api'&&!usage?.balance)return;
@@ -113,10 +114,10 @@ class DesktopClientAccountsPanel {
       if(wallet.toppedUp!=null||wallet.granted!=null)line.append(this.node('small',[wallet.toppedUp!=null?this.text('充值余额：')+wallet.toppedUp:'',wallet.granted!=null?this.text('赠送余额：')+wallet.granted:''].filter(Boolean).join(' · '),'account-reset-time'));
       box.append(line);shown=true;
     }
-    if(!shown)box.append(this.node('span',usage?.status==='error'?(usage.error||'额度查询失败'):usage?.status==='loading'?'查询中…':usage?.status==='unsupported'?'暂未提供额度信息':!usage?'正在读取额度…':'暂未提供额度信息','account-muted'));
-    if(shown&&usage?.status==='error')box.append(this.node('small','保留上次结果，数据尚未更新','account-muted'));
-    if(usage?.checkedAt)box.append(this.node('small',this.text('更新于：')+new Date(usage.checkedAt*1000).toLocaleString(BridgeI18n.locale()),'account-updated'));
-    const refresh=this.button('查看剩余额度',()=>this.perform({action:'details',id:row.id,refresh:true}));refresh.disabled=this.busy||this.loading;box.append(refresh);
+    if(!shown)box.append(this.node('span',usage?.status==='error'?(usage.error||'额度查询失败'):usage?.status==='loading'?'查询中…':usage?.status==='unsupported'?'暂未提供额度信息':!usage&&this.provider==='claude'?'尚未查询':!usage?'正在读取额度…':'暂未提供额度信息','account-muted'));
+    if(shown&&usage?.status==='error')box.append(this.node('small',this.text(usage.error||'额度查询失败')+' · '+this.text('保留上次结果，数据尚未更新'),'account-muted'));
+    if(usage?.checkedAt)box.append(this.node('small',this.text(this.provider==='claude'?'查询时间：':'更新于：')+(this.provider==='claude'?this.queryTime(usage.checkedAt):new Date(usage.checkedAt*1000).toLocaleString(BridgeI18n.locale())),'account-updated'));
+    const refresh=this.button(this.queryingId===row.id?'查询中…':'查看剩余额度',()=>this.perform({action:'details',id:row.id,refresh:true}));refresh.disabled=this.busy||this.loading;box.append(refresh);
   }
   async toggleModels(){
     this.modelsOpen=!this.modelsOpen;if(!this.modelsOpen||this.models){this.render();return;}

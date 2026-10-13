@@ -1,4 +1,5 @@
 import tempfile
+import shlex
 import unittest
 from pathlib import Path
 from unittest.mock import patch
@@ -144,7 +145,9 @@ class CliSessionTests(unittest.TestCase):
         self.assertIn('StrictHostKeyChecking=yes', command)
         self.assertEqual(command[-2], 'saved-host')
         self.assertIn('codex app-server proxy', command[-1])
-        self.assertNotIn('sh -lc', command[-1])
+        self.assertTrue(command[-1].startswith('exec "$SHELL" -lc '))
+        self.assertEqual(shlex.split(command[-1])[2], '-lc')
+        self.assertIn('exec codex app-server proxy', shlex.split(command[-1])[3])
         with self.assertRaises(ValueError):
             _ssh_proxy_command('-unsafe')
         remote = CliSessions(self.home / 'local-only-path', lambda *_: None,

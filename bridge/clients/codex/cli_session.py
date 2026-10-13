@@ -2,6 +2,7 @@
 
 import copy
 import os
+import shlex
 import shutil
 import threading
 from pathlib import Path
@@ -14,12 +15,13 @@ from bridge.clients.codex.catalog import Catalog
 def _ssh_proxy_command(alias):
     if not alias or alias.startswith('-') or any(c.isspace() for c in alias):
         raise ValueError('Invalid SSH host alias')
-    # SSH runs this in the target user's login shell, matching RemoteStore's
-    # CODEX_HOME and PATH. Do not replace the login shell with `sh -lc`.
-    remote = ('if command -v codex >/dev/null 2>&1; then '
-              'exec codex app-server proxy; '
-              'elif test -x "$HOME/.local/bin/codex"; then '
-              'exec "$HOME/.local/bin/codex" app-server proxy; else exit 127; fi')
+    # Match RemoteStore's explicit user login shell, so it resolves the same
+    # CODEX_HOME and PATH. Quote the inner program as one -lc argument.
+    inner = ('if command -v codex >/dev/null 2>&1; then '
+             'exec codex app-server proxy; '
+             'elif test -x "$HOME/.local/bin/codex"; then '
+             'exec "$HOME/.local/bin/codex" app-server proxy; else exit 127; fi')
+    remote = 'exec "$SHELL" -lc ' + shlex.quote(inner)
     return ['ssh', '-T', '-o', 'BatchMode=yes', '-o', 'ClearAllForwardings=yes',
             '-o', 'ConnectTimeout=8', '-o', 'StrictHostKeyChecking=yes',
             '-o', 'UpdateHostKeys=no', alias, remote]

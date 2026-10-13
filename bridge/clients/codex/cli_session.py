@@ -230,11 +230,15 @@ class CliSessions:
                 'thread/goal/get', {'threadId': thread_id}, replay_safe=True))
         except AppServerUnsupported:
             goal = None
-        except AppServerError:
+        except (AppServerUnavailable, AppServerUnknownResult):
             with self.lock:
                 self.attaching.discard(thread_id)
                 self.requests.pop(thread_id, None)
             raise
+        except AppServerError:
+            # Goal is optional; a deterministic policy error must not prevent
+            # joining the thread for turns, models and Skills.
+            goal = None
         with self.lock:
             self.joined[thread_id] = self.client.process
             self.attaching.discard(thread_id)

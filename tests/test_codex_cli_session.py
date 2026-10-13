@@ -8,7 +8,7 @@ import unittest
 from pathlib import Path
 from unittest.mock import Mock, patch
 
-from bridge.clients.codex.app_server import AppServerUnavailable, AppServerUnsupported, AppServerUnknownResult
+from bridge.clients.codex.app_server import AppServerError, AppServerUnavailable, AppServerUnsupported, AppServerUnknownResult
 from bridge.features.sessions.goal import GoalUnavailable, GoalUnsupported
 from bridge.clients.codex.cli_session import CliSessions, _local_cli, _managed_cli, _ssh_daemon_start_command, _ssh_proxy_command
 
@@ -283,6 +283,30 @@ class CliSessionTests(unittest.TestCase):
         self.assertEqual(state['threadGoal']['objective'], 'Existing goal')
         self.sessions._event({'method': 'thread/goal/cleared', 'params': {'threadId': 'thread-a'}})
         self.assertNotIn('threadGoal', self.sessions.refresh('thread-a'))
+
+    def test_goal_policy_error_does_not_block_baseline_attach(self):
+        original = self.fake.request
+        def request(method, params, **kwargs):
+            if method == 'thread/goal/get':
+                raise AppServerError('goals disabled by policy')
+            return original(method, params, **kwargs)
+        self.fake.request = request
+        state = self.sessions.attach('thread-a', explicit=True)
+        self.assertEqual(state['id'], 'thread-a')
+        self.assertNotIn('threadGoal', state)
+        self.assertIn('thread-a', self.sessions.joined)
+
+    def test_goal_transport_failure_aborts_attach(self):
+        original = self.fake.request
+        def request(method, params, **kwargs):
+            if method == 'thread/goal/get':
+                raise AppServerUnavailable('connection lost')
+            return original(method, params, **kwargs)
+        self.fake.request = request
+        with self.assertRaises(AppServerUnavailable):
+            self.sessions.attach('thread-a', explicit=True)
+        self.assertNotIn('thread-a', self.sessions.joined)
+        self.assertNotIn('thread-a', self.sessions.attaching)
 
     def test_custom_provider_catalog_never_offers_openai_models(self):
         self.sessions.attach('thread-a', explicit=True)

@@ -2,6 +2,13 @@
 // UI messages only. Never translate chat content, commands, model IDs or user input.
 const BridgeI18n=(()=>{
 const en={
+"诊断":"Diagnostics",
+"导出会话诊断":"Export session diagnostics",
+"其他来源":"Other source",
+"连接 CLI":"Connect CLI",
+"已保存的历史可阅读；当前来源未提供远程控制。":"Saved history is available. Remote control is unavailable for this source.",
+"CLI 聊天历史可阅读；点击连接 CLI 后尝试接入正在运行的会话。":"CLI history is available. Connect CLI to join the running session.",
+"CLI 聊天历史可阅读；当前无法接入正在运行的会话。":"CLI history is available. The running session cannot be joined now.",
 "第三方通知":"Third-party notifications",
 "显示第三方通知入口":"Show notification shortcut",
 "微信":"WeChat",

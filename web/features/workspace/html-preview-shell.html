@@ -10,6 +10,7 @@
 (() => {
   'use strict';
   const sourceOrigin = new URL(location.href).origin;
+  const parentWindow = parent;
   const receive = event => {
     if (event.source !== parent || event.origin !== sourceOrigin ||
         event.data?.type !== 'bridge-html-preview-content' || typeof event.data.text !== 'string' ||
@@ -18,6 +19,9 @@
     document.open();
     document.write(event.data.text);
     document.close();
+    window.addEventListener('keydown', event => {
+      if (event.key === 'Escape') parentWindow.postMessage({type: 'bridge-html-preview-escape'}, sourceOrigin);
+    }, true);
   };
   window.addEventListener('message', receive);
   parent.postMessage({type: 'bridge-html-preview-ready'}, sourceOrigin);

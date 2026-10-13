@@ -65,4 +65,31 @@ test('fixed shell accepts one same-origin parent message and rejects oversized c
   receive({source: parent, origin: 'https://bridge.test', data: {type: 'bridge-html-preview-content', text: '<button>OK</button>'}});
   assert.deepEqual(writes.slice(1), [['open'], ['write', '<button>OK</button>'], ['close']]);
   assert.equal(listeners.has('message'), false);
+  listeners.get('keydown')({key:'Enter'}); assert.equal(writes.length,4);
+  listeners.get('keydown')({key:'Escape'});
+  assert.equal(writes[4][1].type,'bridge-html-preview-escape');
+  assert.equal(writes[4][2],'https://bridge.test');
+});
+
+
+test('fullscreen Escape accepts only the ready opaque preview and never resends HTML', () => {
+  const listeners = new Map(), sent = [];
+  let exits = 0;
+  const document = {createElement(tag) {
+    const node = {children:[],setAttribute(){},append(child){this.children.push(child);},remove(){}};
+    if(tag==='iframe')node.contentWindow={postMessage:value=>sent.push(value)};
+    return node;
+  }};
+  const window = {addEventListener:(name,fn)=>listeners.set(name,fn),removeEventListener:(name,fn)=>{if(listeners.get(name)===fn)listeners.delete(name);}};
+  const context=vm.createContext({document,window,TextEncoder,module:{exports:{}},setTimeout:()=>1,clearTimeout(){}});
+  vm.runInContext(fs.readFileSync(path.join(root,'web/features/workspace/html-preview.js'),'utf8'),context);
+  const preview=context.module.exports.create({text:'<button>OK</button>',onEscape:()=>exits++});
+  const frame=preview.element.children[0], receive=listeners.get('message');
+  const send=(type,source=frame.contentWindow,origin='null')=>receive({source,origin,data:{type}});
+  send('bridge-html-preview-escape'); assert.equal(exits,0);
+  send('bridge-html-preview-ready'); send('bridge-html-preview-ready'); assert.equal(sent.length,1);
+  send('bridge-html-preview-escape',{}); send('bridge-html-preview-escape',frame.contentWindow,'https://bridge.test'); assert.equal(exits,0);
+  send('bridge-html-preview-escape'); assert.equal(exits,1);
+  preview.dispose(); assert.equal(listeners.has('message'),false);
+  send('bridge-html-preview-escape'); assert.equal(exits,1);
 });

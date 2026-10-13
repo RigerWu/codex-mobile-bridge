@@ -39,11 +39,11 @@ test('joined CLI enables send, steer and approvals while keeping collaboration m
   assert.equal($('send').disabled,false);assert.equal($('send-mode').disabled,false);assert.equal($('work-mode').disabled,true);assert.equal($('rename-chat').disabled,true);
   assert.equal($('stop').hidden,false);assert.equal(ctx.approvals.length,1);assert.equal(ctx.selectedSkills.size,1);
 });
-test('joined CLI exposes model, Skill, and modes without enabling rename or permissions',()=>{
-  const {ctx,$}=fixture(),access={...cli,readOnly:false,canSend:true,canReconnect:true,canChangeModel:true,canSelectSkills:true,canUseModes:true,canUseGoal:true};
+test('joined CLI exposes model, Skill, modes and permissions without enabling rename',()=>{
+  const {ctx,$}=fixture(),access={...cli,readOnly:false,canSend:true,canReconnect:true,canChangePermissions:true,canChangeModel:true,canSelectSkills:true,canUseModes:true,canUseGoal:true};
   ctx.selectedSkills.add('draft-skill');ctx.renderState({host:'local',title:'CLI thread',cwd:'/work',access,connected:true,status:'idle',requests:[],submissions:[],historyComplete:true,goalRuntimeAvailable:true});
   assert.equal($('model-button').disabled,false);assert.equal($('skills-button').disabled,false);assert.equal($('work-mode').disabled,false);
-  assert.equal($('permissions-button').disabled,true);assert.equal($('rename-chat').disabled,true);assert.equal(ctx.catalogLoads,1);
+  assert.equal($('permissions-button').disabled,false);assert.equal($('rename-chat').disabled,true);assert.equal(ctx.catalogLoads,1);
   assert.equal(ctx.selectedSkills.size,1);assert.equal(ctx.modesView.goalRuntimeAvailable,true);
   ctx.renderState({host:'local',title:'CLI thread',cwd:'/work',access:{...cli,canReconnect:true},connected:false,status:'idle',requests:[],submissions:[],historyComplete:true});
   assert.equal(ctx.selectedSkills.size,1);assert.equal(ctx.catalogLoads,1);

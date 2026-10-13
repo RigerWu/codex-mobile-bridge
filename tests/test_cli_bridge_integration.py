@@ -145,6 +145,7 @@ class CliBridgeTests(CliBridgeFixture):
         self.assertTrue(session.access['canSelectSkills'])
         self.assertTrue(session.access['canUseModes'])
         self.assertFalse(session.access['canConfigure'])
+        self.assertTrue(session.access['canChangePermissions'])
         self.cli.attach.assert_not_called()
         self.bridge.ipc.request = Mock(return_value={'result': {'ok': True}})
         self.bridge.send(self.thread_id, 'fixture message', str(uuid.uuid4()))
@@ -307,6 +308,7 @@ class CliBridgeTests(CliBridgeFixture):
         self.cli.validate_skills.return_value = [{'id': 'fixture-skill', 'name': 'Fixture', 'path': '/skills/fixture'}]
         self.assertTrue(self.bridge.view(self.thread_id, attach=False)['access']['canChangeModel'])
         self.assertFalse(self.bridge.view(self.thread_id, attach=False)['access']['canConfigure'])
+        self.assertTrue(self.bridge.view(self.thread_id, attach=False)['access']['canChangePermissions'])
         self.bridge.catalog(self.thread_id, kind='models')
         self.cli.get_kind.assert_called_with(self.thread_id, 'models', refresh=False, query='', offset=0, limit=200, ids=None)
         self.cli.call.return_value = {'applied': True}
@@ -339,6 +341,32 @@ class CliBridgeTests(CliBridgeFixture):
         self.cli.attach.assert_not_called()
         self.cli.get_kind.assert_not_called()
         self.bridge.catalog_reader.get_kind.assert_not_called()
+
+    def test_native_permissions_use_daemon_policy_and_effective_state(self):
+        session = self.bridge.activate(self.thread_id)
+        facts = {'requirements': {}, 'config': {'guardian': True},
+                 'profiles': {':workspace': True, ':danger-full-access': True},
+                 'guardianEnabled': True}
+        options = {'current': 'ask', 'options': [
+            {'preset': preset, 'available': True, 'reason': None}
+            for preset in ('ask', 'auto-review', 'full-access')]}
+        self.cli.permission_options.return_value = (facts, options)
+        self.assertEqual(self.bridge.linux_permission_options(self.thread_id), options)
+        self.cli.permission_options.assert_called_with(self.thread_id)
+        with self.assertRaisesRegex(ValueError, '确认完全访问权限'):
+            self.bridge.permissions(self.thread_id, 'full-access')
+        self.cli.call.side_effect = lambda thread_id, method, params, **kwargs: (
+            self.bridge._cli_state(thread_id, {**self.native_state, 'currentPermissions': {
+                'approvalPolicy': 'on-request', 'approvalsReviewer': 'auto_review',
+                'activePermissionProfile': {'id': ':workspace'}}}) or {'applied': True})
+        result = self.bridge.permissions(self.thread_id, 'auto-review')
+        self.assertTrue(result['confirmed'])
+        self.assertEqual(self.bridge.view(self.thread_id, attach=False)['permissionMode'], 'auto-review')
+        self.assertEqual(self.cli.call.call_args.args[2]['threadSettings'], {
+            'permissions': ':workspace', 'approvalPolicy': 'on-request',
+            'approvalsReviewer': 'auto_review'})
+        self.assertFalse(self.bridge.view(self.thread_id, attach=False)['access']['canConfigure'])
+        self.assertEqual(session.runtime, 'cli')
 
     def test_native_goal_is_probed_and_routed_only_to_joined_daemon(self):
         session = self.bridge.activate(self.thread_id)

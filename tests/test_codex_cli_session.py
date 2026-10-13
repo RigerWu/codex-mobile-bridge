@@ -193,6 +193,51 @@ class CliSessionTests(unittest.TestCase):
         self.assertNotIn('modelProvider', native)
         self.assertEqual(self.states[-1][1]['latestCollaborationMode']['mode'], 'plan')
 
+    def test_native_permission_update_waits_for_effective_settings_event(self):
+        self.sessions.attach('thread-a', explicit=True)
+        self.sessions._queue_refresh = Mock()
+        self.sessions.call('thread-a', 'thread-follower-update-thread-settings',
+                           {'threadSettings': {'permissions': ':workspace',
+                                               'approvalPolicy': 'on-request',
+                                               'approvalsReviewer': 'auto_review'}})
+        self.assertIn(('thread/settings/update', {'threadId': 'thread-a',
+            'permissions': ':workspace', 'approvalPolicy': 'on-request',
+            'approvalsReviewer': 'auto_review'}), self.fake.sent)
+        self.assertNotIn('currentPermissions', self.states[-1][1])
+        self.sessions._event({'method': 'thread/settings/updated', 'params': {
+            'threadId': 'thread-a', 'threadSettings': {
+                'cwd': '/original/project', 'modelProvider': 'original-provider',
+                'approvalPolicy': 'on-request', 'approvalsReviewer': 'auto_review',
+                'sandboxPolicy': {'type': 'workspaceWrite'},
+                'activePermissionProfile': {'id': ':workspace'}}}})
+        self.assertEqual(self.states[-1][1]['currentPermissions']['approvalsReviewer'], 'auto_review')
+        self.assertEqual(self.sessions.refresh('thread-a')['currentPermissions']['activePermissionProfile']['id'], ':workspace')
+        with self.assertRaises(AppServerUnsupported):
+            self.sessions.call('thread-a', 'thread-follower-update-thread-settings',
+                               {'threadSettings': {'permissions': ':workspace', 'cwd': '/other'}})
+
+    def test_native_permission_options_require_daemon_policy_evidence(self):
+        self.sessions.attach('thread-a', explicit=True)
+        original = self.fake.request
+        def request(method, params, **kwargs):
+            if method == 'config/read':
+                return {'config': {'features': {'guardian_approval': True}}}
+            if method == 'configRequirements/read':
+                return {'requirements': {'allowedPermissionProfiles': {
+                    ':workspace': True, ':danger-full-access': False}}}
+            if method == 'permissionProfile/list':
+                return {'data': [{'id': ':workspace', 'allowed': True},
+                                 {'id': ':danger-full-access', 'allowed': True}]}
+            if method == 'experimentalFeature/list':
+                return {'data': [{'name': 'guardian_approval', 'enabled': True}]}
+            return original(method, params, **kwargs)
+        self.fake.request = request
+        _, options = self.sessions.permission_options('thread-a')
+        indexed = {row['preset']: row for row in options['options']}
+        self.assertTrue(indexed['ask']['available'])
+        self.assertTrue(indexed['auto-review']['available'])
+        self.assertFalse(indexed['full-access']['available'])
+
     def test_native_catalog_and_skill_input_use_joined_daemon(self):
         import hashlib
         self.fake.thread['modelProvider'] = 'openai'
@@ -283,6 +328,21 @@ class CliSessionTests(unittest.TestCase):
         self.assertEqual(state['threadGoal']['objective'], 'Existing goal')
         self.sessions._event({'method': 'thread/goal/cleared', 'params': {'threadId': 'thread-a'}})
         self.assertNotIn('threadGoal', self.sessions.refresh('thread-a'))
+
+    def test_resume_projects_effective_native_permission_state(self):
+        original = self.fake.request
+        def request(method, params, **kwargs):
+            result = original(method, params, **kwargs)
+            if method == 'thread/resume':
+                result.update({'approvalPolicy': 'never', 'approvalsReviewer': 'user',
+                               'sandbox': {'type': 'dangerFullAccess'},
+                               'activePermissionProfile': {'id': ':danger-full-access'}})
+            return result
+        self.fake.request = request
+        state = self.sessions.attach('thread-a', explicit=True)
+        self.assertEqual(state['currentPermissions']['approvalPolicy'], 'never')
+        self.assertEqual(state['currentPermissions']['activePermissionProfile']['id'], ':danger-full-access')
+        self.assertEqual(self.sessions.refresh('thread-a')['currentPermissions']['sandboxPolicy']['type'], 'dangerFullAccess')
 
     def test_goal_policy_error_does_not_block_baseline_attach(self):
         original = self.fake.request

@@ -16,6 +16,7 @@ from bridge.clients.codex.app_server import (
 from bridge.clients.codex.catalog import Catalog
 from bridge.clients.codex.remote import RemoteStore, RemoteUnavailable
 from bridge.features.sessions.goal import GoalError, GoalUnavailable, GoalUnsupported, normalize_goal_result
+from bridge.features.sessions import linux_permissions
 from bridge.features.sessions.store import SessionStore, StoreUnavailable
 
 
@@ -248,6 +249,9 @@ class CliSessions:
                                         'reasoningEffort': resumed.get('reasoningEffort'),
                                         'serviceTier': resumed.get('serviceTier'),
                                         'collaborationMode': resumed.get('collaborationMode'),
+                                        'permissions': {key: copy.deepcopy(resumed[key]) for key in
+                                                        ('approvalPolicy', 'approvalsReviewer', 'sandbox', 'activePermissionProfile')
+                                                        if key in resumed},
                                         'goal': goal}
         try:
             return self.refresh(thread_id)
@@ -284,7 +288,7 @@ class CliSessions:
                 state['latestModel'] = previous['latestModel']
             if 'reasoningEffort' not in thread and 'latestReasoningEffort' in previous:
                 state['latestReasoningEffort'] = previous['latestReasoningEffort']
-            for key in ('latestThreadSettings', 'latestCollaborationMode', 'threadGoal',
+            for key in ('latestThreadSettings', 'currentPermissions', 'latestCollaborationMode', 'threadGoal',
                         'completedThreadGoal', 'turnPlan'):
                 if key in previous:
                     state[key] = copy.deepcopy(previous[key])
@@ -325,16 +329,25 @@ class CliSessions:
             return result
         if desktop_method == 'thread-follower-update-thread-settings':
             settings = params.get('threadSettings') or {}
-            allowed = {'model', 'effort', 'serviceTier'}
+            model_keys = {'model', 'effort', 'serviceTier'}
+            permission_keys = {'permissions', 'approvalPolicy', 'approvalsReviewer'}
+            allowed = model_keys | permission_keys
             if not isinstance(settings, dict) or not settings or set(settings) - allowed:
-                raise AppServerUnsupported('Only explicit CLI model and effort settings are supported')
+                raise AppServerUnsupported('Unsupported CLI thread settings')
+            if set(settings) & permission_keys and (set(settings) != permission_keys or
+                    settings['permissions'] not in (':workspace', ':danger-full-access') or
+                    settings['approvalPolicy'] not in ('on-request', 'never') or
+                    settings['approvalsReviewer'] not in ('user', 'auto_review', 'guardian_subagent') or
+                    (settings['permissions'] == ':danger-full-access') != (settings['approvalPolicy'] == 'never') or
+                    (settings['permissions'] == ':danger-full-access' and settings['approvalsReviewer'] != 'user')):
+                raise AppServerUnsupported('Invalid CLI permission settings')
             native = {'threadId': thread_id, **settings}
             self.client.request('thread/settings/update', native, timeout=timeout)
             with self.lock:
                 state = self.states.get(thread_id)
                 if state is not None:
                     settings_state = state.setdefault('latestThreadSettings', {})
-                    settings_state.update(settings)
+                    settings_state.update({key: value for key, value in settings.items() if key in model_keys})
                     if 'model' in settings:
                         state['latestModel'] = settings['model']
                     if 'effort' in settings:
@@ -412,6 +425,19 @@ class CliSessions:
             self._invalidate(thread_id)
             raise AppServerUnavailable('CLI thread unloaded before the operation')
         self._check_identity(thread_id)
+
+    def permission_options(self, thread_id):
+        self._check_joined_identity(thread_id)
+        with self.lock:
+            cwd = self.metadata[thread_id]['cwd']
+            state = copy.deepcopy(self.states[thread_id])
+        facts = linux_permissions.read_permission_facts(
+            lambda method, params: self.client.request(method, params, replay_safe=True), cwd)
+        # CLI support belongs to the selected daemon and its policy, not the
+        # gateway computer's desktop UI preferences.
+        options = linux_permissions.permission_options(facts, {'fullAccess': True},
+            linux_permissions.current_mode(state), native=False)
+        return facts, options
 
     def get_kind(self, thread_id, kind, refresh=False, query='', offset=0, limit=200, ids=None):
         self._check_joined_identity(thread_id)
@@ -591,6 +617,11 @@ class CliSessions:
                 'threadRuntimeStatus': status, 'turns': turns, 'requests': requests}
         if metadata.get('serviceTier') is not None:
             state['latestThreadSettings'] = {'serviceTier': metadata['serviceTier']}
+        if metadata.get('permissions'):
+            permissions = copy.deepcopy(metadata['permissions'])
+            if 'sandbox' in permissions:
+                permissions['sandboxPolicy'] = permissions.pop('sandbox')
+            state['currentPermissions'] = permissions
         if metadata.get('collaborationMode') is not None:
             state['latestCollaborationMode'] = copy.deepcopy(metadata['collaborationMode'])
         if metadata.get('goal') is not None:
@@ -639,6 +670,9 @@ class CliSessions:
             elif method == 'thread/settings/updated':
                 settings = params.get('threadSettings') or {}
                 state['latestThreadSettings'] = copy.deepcopy(settings)
+                if all(key in settings for key in ('approvalPolicy', 'approvalsReviewer', 'sandboxPolicy')):
+                    state['currentPermissions'] = {key: copy.deepcopy(settings[key]) for key in
+                        ('approvalPolicy', 'approvalsReviewer', 'sandboxPolicy', 'activePermissionProfile') if key in settings}
                 if settings.get('model'):
                     state['latestModel'] = settings['model']
                 if settings.get('effort') is not None:

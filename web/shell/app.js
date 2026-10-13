@@ -10,7 +10,7 @@ let initialPairingToken=takePairingToken();
 const $ = id => document.getElementById(id),t=BridgeI18n.t;
 let csrf='', currentId=null, state=null, listOffset=0, listQuery='', approvalStamp='', sending=false;
 let currentHost='local', listRows=[], listGeneration=0, listHasMore=false, listArchived=false, listRenderStamp='';
-let chatTimeline=null;
+let chatTimeline=null,reconnectFailure=null;
 const submittedRequestIds=new Set();
 const sessionActivity=new SessionActivity();
 const recentInteractions=new Map();
@@ -242,6 +242,7 @@ $('fork-source').onclick=()=>{const source=state?.forkedFrom;if(source){$('chat-
 function saveDraft(){if(currentId)sessionStorage.setItem('draft:'+chatKey(),$('message').value);}
 $('message').oninput=saveDraft;
 async function openChat(id,host="local"){if(messageActions.pending&&messageActions.dialog.open)return;messageActions.dialog.close();workbench.open(id,host);saveDraft();chatTimeline?.dispose();currentId=id;currentHost=host;state=null;workbench.current.access=sessionAccess(listRows.find(row=>row.id===id&&row.host===host)?.access);contextUsageControl.update(null);workModes.open(chatKey(id,host));attachments.open(chatKey(id,host));modelCatalogGeneration++;catalogData={models:null,skills:null};catalogResults={models:null,skills:null};catalogTasks={models:null,skills:null};skillIndex=new Map();skillTotal=0;skillPages=[];skillQuery={q:'',offset:0,limit:200};invalidSkills=new Set();skillRequest++;modelRequest++;modelTarget=null;fastModeControl.reset();$('model-dialog').close();notificationState={available:false,watching:false,notifyOnCompletion:false};notificationRequest++;$('notify-dialog').close();$('rename-dialog').close();$('chat-details-dialog').close();$('notify-button').disabled=true;$('notify-button').textContent=t('提醒');try{selectedSkills=new Set(JSON.parse(sessionStorage.getItem('skills:'+chatKey(id,host))||'[]'));}catch{selectedSkills=new Set();}renderSkillPills();approvalStamp='';submittedRequestIds.clear();$('messages').replaceChildren();$('approvals').replaceChildren();$('queued').replaceChildren();$('message').value=sessionStorage.getItem('draft:'+chatKey(id,host))||'';$('send-error').textContent='';$('chat-title').textContent=t('正在连接…');$('chat-meta').textContent='';$('status').textContent=t('连接中');$('welcome').hidden=true;$('chat').hidden=false;$('app').classList.add('chat-open');$('send').disabled=true;history.replaceState(null,'','#'+id+'~'+encodeURIComponent(host));document.querySelectorAll('.session').forEach(n=>n.classList.toggle('selected',n.dataset.id===id&&n.dataset.host===host));const timeline=chatTimeline=new ChatTimeline({url:action=>sessionUrl(id,action,host),request:api,renderMeta:renderState,canEdit:()=>currentAccess().canEditMessages,renderText:(node,text,files,fullText)=>renderMarkdown(node,text,files,file=>sessionUrl(id,'files/'+file.id,host),{fullText}),onAction:(action,row,timeline)=>{if(!currentAccess().canEditMessages)return;const pendingKey='fork-edit:'+host+'|'+id;let pending;try{pending=JSON.parse(sessionStorage.getItem(pendingKey));}catch{}if(pending&&pending.sourceTurnId===row.turnId&&action==='edit'){sessionStorage.setItem('message-edit:'+timeline.url('message-action')+':'+row.key,pending.text);sessionStorage.removeItem(pendingKey);}return messageActions.open(action,row,timeline);},status:text=>{$('status').textContent=t(text);}});
+  reconnectFailure=null;
   window.BridgePresentation?.openChat();
   if(currentAccess().canConfigure)startCatalog();
   const reading=timeline.start();
@@ -306,6 +307,7 @@ $('notification-requests').onchange=$('notification-completions').onchange=saveN
 $('back').onclick=()=>{if(workbench.back())return;desktopSessions.onListEnter();workbench.rememberScroll();workbench.stopThumbnails();$('app').classList.remove('chat-open');history.replaceState(null,'',location.pathname);loadList(true).catch(e=>toast(e.message));};
 function renderState(view){
   contextUsageControl.update(view);state=view;
+  if(view.connected)reconnectFailure=null;
   const access=sessionAccess(view.access),limited=!!view.access;
   $('permissions-button').textContent=t({'ask':'请求批准','auto-review':'帮我批准','full-access':'完全访问权限'}[view.permissionMode]||'权限');
   $('permissions-button').disabled=!view.connected||!access.canConfigure;
@@ -322,7 +324,7 @@ function renderState(view){
   $('status').textContent=!view.connected?(view.loadingHistory?t('读取历史中'):access.source==='cli'?t('历史记录'):view.activating?t('正在加载桌面聊天…'):view.connecting?t('连接桌面中'):t('历史记录')):view.requests.length?t('等待回应'):view.status==='active'?t('运行中'):t('已连接');
   $('status').classList.toggle('offline',!view.connected);
   $('notice').hidden=view.connected;
-  $('notice-text').textContent=access.source==='cli'?(t(access.reason)||t(access.canReconnect?'CLI 聊天历史可阅读；点击连接 CLI 后尝试接入正在运行的会话。':'CLI 聊天历史可阅读；当前无法接入正在运行的会话。')):limited&&!access.canReconnect?(t(access.reason)||t('已保存的历史可阅读；当前来源未提供远程控制。')):view.activating?t('正在自动连接；必要时会在电脑 Codex 中打开此聊天。'):view.connecting?t('正在连接桌面，可先阅读已保存的历史。'):t(view.connectionError)||t('暂未连接，可先阅读历史或点击重新连接。');
+  $('notice-text').textContent=access.source==='cli'?(t(reconnectFailure||view.connectionError||access.reason)||t(access.canReconnect?'CLI 聊天历史可阅读；点击连接 CLI 后尝试接入正在运行的会话。':'CLI 聊天历史可阅读；当前无法接入正在运行的会话。')):limited&&!access.canReconnect?(t(access.reason)||t('已保存的历史可阅读；当前来源未提供远程控制。')):view.activating?t('正在自动连接；必要时会在电脑 Codex 中打开此聊天。'):view.connecting?t('正在连接桌面，可先阅读已保存的历史。'):t(view.connectionError)||t('暂未连接，可先阅读历史或点击重新连接。');
   $('reconnect').hidden=limited&&!access.canReconnect;
   $('reconnect').textContent=t(access.source==='cli'?'连接 CLI':'重新连接');
   $('history').hidden=view.historyComplete||!view.connected;
@@ -332,10 +334,11 @@ function renderState(view){
   $('attach-button').disabled=limited&&!access.canSend;
   $('model-button').disabled=limited&&!access.canConfigure;
   $('skills-button').disabled=limited&&!access.canConfigure;
-  $('send-mode').disabled=limited&&!access.canUseModes;
-  $('send-mode').querySelector('[value=steer]').disabled=view.status!=='active'||!access.canUseModes;
-  if((view.status!=='active'||!access.canUseModes)&&$('send-mode').value==='steer')$('send-mode').value='send';
-  if(limited&&!access.canUseModes)$('send-mode').value='send';
+  $('rename-chat').disabled=limited&&!access.canConfigure;
+  if(limited&&!access.canConfigure&&(selectedSkills.size||invalidSkills.size)){selectedSkills.clear();invalidSkills.clear();renderSkillPills();}
+  $('send-mode').disabled=limited&&!access.canSend;
+  $('send-mode').querySelector('[value=steer]').disabled=view.status!=='active'||!access.canSend;
+  if((view.status!=='active'||!access.canSend)&&$('send-mode').value==='steer')$('send-mode').value='send';
   const modesView=limited&&!access.canUseGoal?{...view,goalRuntimeAvailable:false}:view;
   workModes.render(modesView,$('send-mode').value,sending);
   $('work-mode').disabled=limited&&!access.canUseModes;
@@ -434,7 +437,7 @@ $('composer').onsubmit=async event=>{event.preventDefault();if(sending||!current
 $('message').onkeydown=event=>{if(event.key==='Enter'&&(event.metaKey||event.ctrlKey)){event.preventDefault();$('composer').requestSubmit();}};
 $('stop').onclick=async()=>{if(!currentAccess().canInterrupt)return;try{await api(sessionUrl(currentId,'stop'),{});toast('已请求停止');}catch(e){toast(e.message);}};
 $('history').onclick=async()=>{$('history').disabled=true;try{await api('/api/sessions/'+currentId+'/history',{});}catch(e){toast(e.message);}finally{$('history').disabled=false;}};
-$('reconnect').onclick=async()=>{const access=currentAccess();if(!access.canReconnect)return;const id=currentId,host=currentHost;$('reconnect').disabled=true;try{await api(sessionUrl(id,'reconnect',host),{activate:true});}catch(e){toast(e.message);}finally{$('reconnect').disabled=false;}};
+$('reconnect').onclick=async()=>{const access=currentAccess();if(!access.canReconnect)return;const id=currentId,host=currentHost;$('reconnect').disabled=true;reconnectFailure=null;try{await api(sessionUrl(id,'reconnect',host),{activate:true});}catch(e){if(id===currentId&&host===currentHost&&access.source==='cli'){reconnectFailure=e.message;$('notice').hidden=false;$('notice-text').textContent=t(e.message);}toast(e.message);}finally{$('reconnect').disabled=false;}};
 document.querySelectorAll('[data-close]').forEach(button=>button.onclick=()=>$(button.dataset.close).close());
 async function loadCatalogKind(kind,refresh=false){
   if(kind!=='models')throw Error(t('未知目录类型'));
@@ -629,13 +632,13 @@ BridgeI18n.apply();
 
 let renameTarget=null,renameBusy=false;
 $('rename-chat').onclick=()=>{
-  if(!currentId||renameBusy)return;
+  if(!currentId||renameBusy||!currentAccess().canConfigure)return;
   renameTarget={id:currentId,host:currentHost};
   $('rename-title').value=state?.title||$('chat-title').textContent;
   $('rename-error').textContent='';$('chat-details-dialog').close();$('rename-dialog').showModal();
 };
 $('rename-form').onsubmit=async event=>{
-  event.preventDefault();if(renameBusy||!renameTarget)return;
+  event.preventDefault();if(renameBusy||!renameTarget||!currentAccess().canConfigure)return;
   const target=renameTarget,title=$('rename-title').value.trim();
   if(!title)return;
   renameBusy=true;$('rename-save').disabled=true;$('rename-error').textContent='';

@@ -1762,12 +1762,14 @@ class Bridge:
 
     def catalog(self, thread_id, refresh=False, kind=None, query='', offset=0, limit=200, ids=None):
         session = self.session(thread_id, attach=False, background=True)
+        if session.origin != 'cli':
+            session = self.session(thread_id)
         with session.condition:
             state = session.state or {}
             native = session.origin == 'cli' and session.runtime == 'cli' and session.connected
             if session.origin == 'cli' and not session.connected:
                 raise ValueError('请先继续此会话，再读取模型或 Skill')
-            cwd = state.get("cwd") or session.saved_cwd
+            cwd = state.get("cwd") if session.origin != 'cli' else state.get("cwd") or session.saved_cwd
             model = state.get("latestModel")
             effort = state.get("latestReasoningEffort") or (state.get("latestThreadSettings") or {}).get("effort")
             provider = session.view().get('provider')

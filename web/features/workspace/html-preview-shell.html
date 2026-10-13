@@ -1,0 +1,27 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>HTML preview</title>
+</head>
+<body>
+<script>
+(() => {
+  'use strict';
+  const sourceOrigin = new URL(location.href).origin;
+  const receive = event => {
+    if (event.source !== parent || event.origin !== sourceOrigin ||
+        event.data?.type !== 'bridge-html-preview-content' || typeof event.data.text !== 'string' ||
+        new TextEncoder().encode(event.data.text).length > 512 * 1024) return;
+    window.removeEventListener('message', receive);
+    document.open();
+    document.write(event.data.text);
+    document.close();
+  };
+  window.addEventListener('message', receive);
+  parent.postMessage({type: 'bridge-html-preview-ready'}, sourceOrigin);
+})();
+</script>
+</body>
+</html>

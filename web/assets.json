@@ -75,5 +75,9 @@
   ],
   "/host.js": "hosts/environment.js",
   "/layout.js": "layouts/viewport.js",
-  "/file-actions.js": "features/workspace/file-actions.js"
+  "/file-actions.js": "features/workspace/file-actions.js",
+  "/pdf-preview.js": "features/workspace/pdf-preview.js",
+  "/html-preview.js": "features/workspace/html-preview.js",
+  "/vendor/pdfjs/pdf.min.mjs": "vendor/pdfjs/pdf.min.mjs",
+  "/vendor/pdfjs/pdf.worker.min.mjs": "vendor/pdfjs/pdf.worker.min.mjs"
 }

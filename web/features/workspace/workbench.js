@@ -143,7 +143,7 @@ class Workbench {
   reset(provider=null) {
     const visible=!provider||this.current?.provider===provider;
     if(visible){this.stopThumbnails();this.uploadController?.abort();}
-    for(const [key,session] of this.sessions)if(!provider||session.provider===provider){for(const tab of session.files){tab.controller?.abort();tab.git?.dispose();tab.terminal?.dispose();tab.agents?.dispose();tab.sideChat?.dispose();}this.sessions.delete(key);}
+    for(const [key,session] of this.sessions)if(!provider||session.provider===provider){for(const tab of session.files){tab.controller?.abort();tab.pdf?.dispose();tab.html?.dispose();tab.git?.dispose();tab.terminal?.dispose();tab.agents?.dispose();tab.sideChat?.dispose();}this.sessions.delete(key);}
     if(visible){this.current=null;this.chat.classList.remove('workbench-active','wb-split');this.endDrag();this.panel.replaceChildren();this.panel.hidden=true;this.tabs.replaceChildren();}
   }
   get isFileVisible() { return !!this.current && !this.splitMode && this.current.active !== 'chat'; }
@@ -202,7 +202,7 @@ class Workbench {
     if (index < 0) return;
     if (session.files[index].sideChat && !await session.files[index].sideChat.end()) return;
     if (!session.files[index] || session.files[index].id !== id) return;
-    session.files[index].controller?.abort(); session.files[index].git?.dispose(); session.files[index].terminal?.dispose(); session.files[index].agents?.dispose(); session.files[index].sideChat?.dispose(); session.files.splice(index, 1);
+    session.files[index].controller?.abort(); session.files[index].pdf?.dispose(); session.files[index].html?.dispose(); session.files[index].git?.dispose(); session.files[index].terminal?.dispose(); session.files[index].agents?.dispose(); session.files[index].sideChat?.dispose(); session.files.splice(index, 1);
     if(session.splitTab===id)session.splitTab=(session.files[index]||session.files[index-1])?.id||null;
     const wasActive=session.active===id;
     if(wasActive)session.active=session.splitTab||(session.files.some(t=>t.id==='files')?'files':'chat');
@@ -320,16 +320,40 @@ class Workbench {
     const tab = {id, name: entry.name, body: this.node('div', 'wb-preview'), controller: new AbortController()}; session.files.push(tab);
     tab.body.append(this.node('p', 'wb-status', BridgeI18n.t('正在读取文件…'))); this.select(id);
     try {
-      const result = await this.request(this.url(session, 'preview', entry.path), undefined, tab.controller.signal);
-      if (tab.controller.signal.aborted || !this.sessions.has(session.key)) return;
+      const pdf = /\.pdf$/i.test(entry.name);
+      const downloadUrl = this.url(session, 'download', entry.path);
+      const result = pdf
+        ? {...await this.request(downloadUrl + '&info=1', undefined, tab.controller.signal), kind:'pdf'}
+        : await this.request(this.url(session, 'preview', entry.path), undefined, tab.controller.signal);
+      if (tab.controller.signal.aborted || !this.sessions.has(session.key) || !session.files.includes(tab)) return;
       const head = this.node('div', 'wb-preview-head'), title = this.node('div');
       title.append(this.raw(this.node('strong', '', result.name)), this.node('small', '', this.size(result.size) + ' · ' + entry.path));
       head.append(title);
-      { const download = this.node('a', 'wb-download', BridgeI18n.t('下载')); download.href = this.url(session, 'download', entry.path); download.download = result.name; head.append(download); }
+      { const download = this.node('a', 'wb-download', BridgeI18n.t('下载')); download.href = pdf && result.size > result.clickDownloadMiB * 1024 * 1024 ? downloadUrl + '&explicit=1' : downloadUrl; download.download = result.name; head.append(download); }
       const content = this.node('div', 'wb-preview-content');
-      if (result.kind === 'image') { const image = this.node('img'); image.src = 'data:' + result.mime + ';base64,' + result.data; image.alt = result.name; window.BridgeImageViewer?.registerWorkspaceImage(image, result); content.append(image); }
+      if (result.kind === 'pdf') {
+        tab.pdf = BridgePdfPreview.create({url:downloadUrl, info:result});
+        content.classList.add('wb-pdf-content'); content.append(tab.pdf.element);
+      } else if (result.kind === 'image') { const image = this.node('img'); image.src = 'data:' + result.mime + ';base64,' + result.data; image.alt = result.name; window.BridgeImageViewer?.registerWorkspaceImage(image, result); content.append(image); }
       else if (result.kind === 'text') {
         if (/\.md$/i.test(result.name)) renderMarkdown(content, result.text);
+        else if (/\.html?$/i.test(result.name)) {
+          head.classList.add('wb-source-head');
+          const preview = this.button('预览', () => show('preview'));
+          const source = this.button('源代码', () => show('source'));
+          const copy = this.button('复制代码', () => window.BridgeClipboard.copy(() => result.text, copy));
+          preview.className = source.className = 'wb-source-copy'; copy.className = 'wb-source-copy';
+          head.append(preview, source, copy);
+          const show = mode => {
+            tab.html?.dispose(); tab.html = null;
+            preview.setAttribute('aria-pressed', String(mode === 'preview'));
+            source.setAttribute('aria-pressed', String(mode === 'source'));
+            copy.hidden = mode !== 'source';
+            if (mode === 'preview') { tab.html = BridgeHtmlPreview.create({text:result.text}); content.replaceChildren(tab.html.element); }
+            else content.replaceChildren(BridgeSourceView.create({name:result.name, text:result.text}));
+          };
+          show('preview');
+        }
         else {
           head.classList.add('wb-source-head');
           const copy = this.button('复制代码', () => window.BridgeClipboard.copy(() => result.text, copy));
@@ -338,6 +362,7 @@ class Workbench {
         }
       } else content.append(this.node('p', 'wb-empty', BridgeI18n.t(result.size > 512 * 1024 ? '文件超过 512 KB，无法在线预览。可下载后打开。' : '此文件不是 UTF-8 文本或可预览图片，可下载后打开。')));
       tab.body.replaceChildren(head, content);
+      if (tab.pdf) tab.pdf.load();
     } catch (error) { if (error.name !== 'AbortError') tab.body.replaceChildren(this.node('p', 'wb-status error', error.message), this.button(BridgeI18n.t('重试'), () => { this.close(id); this.preview(session, entry); })); }
   }
   uploadDialog(session, tab, directory) {

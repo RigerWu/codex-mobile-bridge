@@ -261,7 +261,7 @@ test('tall touch viewport displays every visible short page within a 12 MP canva
     const fake=fixture(), reader=pdf.create({url:'/api/workspace/download?path=file.pdf',
       info:{size:1000,clickDownloadMiB:1},loadLibrary:fake.loadLibrary});
     const stage=reader.element.children[2];
-    stage.clientHeight=2400;
+    stage.clientHeight=3000;
     await reader.load(); await tick();
     const sheets=stage.children[0].children;
     const visible=sheets.filter(sheet=>sheet.children.length);
@@ -273,6 +273,28 @@ test('tall touch viewport displays every visible short page within a 12 MP canva
     assert.ok(fake.events.includes('cleanup 1'));
     assert.ok(sheets.filter(sheet=>sheet.children.length).reduce(
       (pixels,sheet)=>pixels+sheet.children[0].width*sheet.children[0].height,0)<=12*1024*1024);
+    reader.dispose();
+  } finally { cleanup(); }
+});
+
+test('mixed natural page widths each fit the panel at 100 percent and pan after zoom', async () => {
+  setup(true);
+  try {
+    const fake=fixture(3), reader=pdf.create({url:'/api/workspace/download?path=file.pdf',
+      info:{size:1000,clickDownloadMiB:1},loadLibrary:fake.loadLibrary});
+    const stage=reader.element.children[2]; stage.clientHeight=2400;
+    await reader.load(); await tick();
+    const sheets=stage.children[0].children;
+    assert.deepEqual(sheets.map(sheet=>Math.round(parseFloat(sheet.style.width))),[568,568,568]);
+    assert.deepEqual(sheets.map(sheet=>Math.round(parseFloat(sheet.children[0].style.width))),[568,568,568]);
+    const scales=sheets.map(sheet=>Number(sheet.style['--total-scale-factor']));
+    assert.ok(scales[0]!==scales[1] && scales[1]!==scales[2]);
+    const points=(a,b)=>[{clientX:a,clientY:300},{clientX:b,clientY:300}];
+    stage.dispatch('touchstart',{touches:points(200,300)});
+    stage.dispatch('touchmove',{touches:points(150,350),preventDefault(){}});
+    stage.dispatch('touchend',{touches:[]}); await tick();
+    assert.deepEqual(sheets.map(sheet=>Math.round(parseFloat(sheet.style.width))),[1136,1136,1136]);
+    assert.ok(parseFloat(sheets[0].style.width)>stage.clientWidth);
     reader.dispose();
   } finally { cleanup(); }
 });

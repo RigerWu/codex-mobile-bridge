@@ -32,9 +32,10 @@ const BridgePdfPreview = (() => {
     const touch = !!window.matchMedia?.('(pointer: coarse)').matches;
     if (touch) element.classList.add('wb-pdf-touch');
     let documentProxy, loadingTask, resizeObserver, started = false, disposed = false;
-    let slots = [], fit = 1, zoom = 1, firstWidth = 0, firstHeight = 0, current = 1, measuredWidth = 0;
+    let slots = [], zoom = 1, firstWidth = 0, firstHeight = 0, current = 1, measuredWidth = 0;
     let scheduled = null, resizeScheduled = null, gesture = null;
     const availableWidth = () => Math.max(1, stage.clientWidth - 32);
+    const scaleOf = slot => measuredWidth * zoom / slot.naturalWidth;
     const wrapperWidth = () => slots.reduce((max, slot) => Math.max(max, slot.width), availableWidth());
     const topOf = index => slots.slice(0, index).reduce((sum, slot) => sum + slot.height + GAP, 0);
     const locate = y => {
@@ -94,13 +95,14 @@ const BridgePdfPreview = (() => {
     const sizeSlot = (slot, preserveScroll = true) => {
       const old = slot.height;
       const anchor = preserveScroll && old ? anchorAt(0) : null;
-      slot.width = slot.naturalWidth * fit * zoom;
-      slot.height = slot.naturalHeight * fit * zoom;
+      const scale = scaleOf(slot);
+      slot.width = slot.naturalWidth * scale;
+      slot.height = slot.naturalHeight * scale;
       if (!Number.isFinite(slot.width) || !Number.isFinite(slot.height)
           || slot.width <= 0 || slot.height <= 0) throw Error('Invalid PDF dimensions');
       slot.element.style.width = slot.width + 'px';
       slot.element.style.height = slot.height + 'px';
-      slot.element.style.setProperty('--total-scale-factor', String(fit * zoom));
+      slot.element.style.setProperty('--total-scale-factor', String(scale));
       if (anchor) {
         const anchored = slots[anchor.number - 1];
         stage.scrollTop = Math.max(0, topOf(anchor.number - 1) + anchored.height * anchor.fraction);
@@ -122,7 +124,7 @@ const BridgePdfPreview = (() => {
             || natural.width <= 0 || natural.height <= 0) throw Error('Invalid PDF dimensions');
         slot.naturalWidth = natural.width; slot.naturalHeight = natural.height;
         sizeSlot(slot); schedule();
-        const viewport = proxy.getViewport({scale:fit * zoom});
+        const viewport = proxy.getViewport({scale:scaleOf(slot)});
         const ratio = Math.min(window.devicePixelRatio || 1, 2,
           Math.sqrt(budget / (viewport.width * viewport.height)),
           16384 / viewport.width, 16384 / viewport.height);
@@ -234,8 +236,7 @@ const BridgePdfPreview = (() => {
     const initialize = () => {
       if (slots.length || !documentProxy || !firstWidth || !firstHeight
           || stage.clientWidth <= 0 || stage.clientHeight <= 0) return;
-      measuredWidth = availableWidth(); fit = measuredWidth / firstWidth;
-      if (!Number.isFinite(fit) || fit <= 0) throw Error('Invalid PDF dimensions');
+      measuredWidth = availableWidth();
       slots = Array.from({length:documentProxy.numPages}, (_, index) => {
         const sheet = document.createElement('div'); sheet.className = 'wb-pdf-sheet';
         const slot = {number:index + 1, element:sheet, naturalWidth:firstWidth, naturalHeight:firstHeight,
@@ -251,7 +252,7 @@ const BridgePdfPreview = (() => {
         const nextWidth = availableWidth();
         if (nextWidth !== measuredWidth) {
           const anchor = anchorAt((stage.clientHeight || 800) / 2);
-          measuredWidth = nextWidth; fit = measuredWidth / firstWidth;
+          measuredWidth = nextWidth;
           relayout(anchor);
         } else schedule();
       } catch (error) {

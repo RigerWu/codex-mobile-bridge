@@ -87,6 +87,8 @@ class LiveSession:
     def view(self):
         with self.condition:
             result = normalize_state(self.state or {"id": self.id}, self.connected)
+            if self.runtime == 'cli':
+                result['permissionMode'] = linux_permissions.current_mode(self.state)
             if self.saved_view and result['contextUsage'] is None:
                 saved_usage = self.saved_view.get('contextUsage')
                 if saved_usage:
@@ -816,7 +818,8 @@ class Bridge:
         return {'source': origin, 'runtime': (session.runtime if connected else None),
                 'readOnly': not writable, 'canSend': writable, 'canInterrupt': writable,
                 'canApprove': writable, 'canReconnect': reconnect,
-                'canConfigure': desktop, 'canChangeModel': desktop or cli_controls,
+                'canConfigure': desktop, 'canChangePermissions': desktop or cli_controls,
+                'canChangeModel': desktop or cli_controls,
                 'canSelectSkills': desktop or cli_controls,
                 'canUseModes': desktop or cli_controls,
                 'canUseGoal': desktop or cli_controls and goal,
@@ -1867,21 +1870,38 @@ class Bridge:
 
     @operation
     def linux_permission_options(self, thread_id):
+        session = self.session(thread_id, attach=False, background=True)
+        if session.connected and session.runtime == 'cli':
+            return self.cli_sessions.permission_options(thread_id)[1]
         if not linux_permissions.enabled(self.host):
             raise ValueError('此主机未启用 Linux 权限检查')
         self.store.get(thread_id)
         # Picker inspection must not activate the desktop or change the owner.
-        return self._linux_permission_options(self.session(thread_id, attach=False, background=True))[1]
+        return self._linux_permission_options(session)[1]
 
     @operation
     def permissions(self, thread_id, preset, confirmed=False):
-        self._require_desktop_feature(thread_id)
         if preset not in ('ask', 'auto-review', 'full-access'):
             raise ValueError('权限设置无效')
         if preset == 'full-access' and confirmed is not True:
             raise ValueError('请确认完全访问权限')
         session = self._target(thread_id)
+        if not self._access(session.origin, session)['canChangePermissions']:
+            raise ValueError('此会话暂不能修改权限')
         with session.action_lock:
+            if session.runtime == 'cli':
+                facts, options = self.cli_sessions.permission_options(thread_id)
+                linux_permissions.require_permission(options, preset)
+                settings = linux_permissions.permission_settings(preset, facts)
+                with session.condition:
+                    before = session.sequence
+                self._call(session, 'thread-follower-update-thread-settings', {'threadSettings': settings})
+                with session.condition:
+                    applied = session.condition.wait_for(lambda:
+                        session.sequence > before and
+                        linux_permissions.current_mode(session.state) == preset, timeout=5)
+                return {'applied': True, 'confirmed': applied, 'permissionMode':
+                        linux_permissions.current_mode(session.state)}
             profile = ':danger-full-access' if preset == 'full-access' else ':workspace'
             settings = {'approvalPolicy': 'never' if preset == 'full-access' else 'on-request',
                         'approvalsReviewer': 'auto_review' if preset == 'auto-review' else 'user',

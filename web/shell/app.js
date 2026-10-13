@@ -132,11 +132,11 @@ $('list-mode').value=localStorage.getItem('list-mode')||'recent';
 $('list-mode').onchange=()=>{localStorage.setItem('list-mode',$('list-mode').value);renderList();};
 if(typeof bindChatListToolbar==='function')bindChatListToolbar(document.querySelector('#sidebar .chat-list-toolbar'));
 function sessionAccess(access){
-  if(!access)return {source:'desktop',runtime:'desktop',canSend:true,canInterrupt:true,canApprove:true,canReconnect:true,canConfigure:true,canChangeModel:true,canSelectSkills:true,canUseModes:true,canUseGoal:true,canUseSideChat:true,canEditMessages:true,readOnly:false};
+  if(!access)return {source:'desktop',runtime:'desktop',canSend:true,canInterrupt:true,canApprove:true,canReconnect:true,canConfigure:true,canChangePermissions:true,canChangeModel:true,canSelectSkills:true,canUseModes:true,canUseGoal:true,canUseSideChat:true,canEditMessages:true,readOnly:false};
   const legacy=access.source==='desktop';
   const allowed=name=>(name==='canReconnect'||!access.readOnly)&&(access[name]===undefined?legacy:access[name]===true);
   const specific=name=>access[name]===undefined?allowed('canConfigure'):allowed(name);
-  return {...access,source:access.source||'unknown',runtime:access.runtime||null,canSend:allowed('canSend'),canInterrupt:allowed('canInterrupt'),canApprove:allowed('canApprove'),canReconnect:allowed('canReconnect'),canConfigure:allowed('canConfigure'),canChangeModel:specific('canChangeModel'),canSelectSkills:specific('canSelectSkills'),canUseModes:allowed('canUseModes'),canUseGoal:allowed('canUseGoal'),canUseSideChat:allowed('canUseSideChat'),canEditMessages:allowed('canEditMessages'),readOnly:access.readOnly===true};
+  return {...access,source:access.source||'unknown',runtime:access.runtime||null,canSend:allowed('canSend'),canInterrupt:allowed('canInterrupt'),canApprove:allowed('canApprove'),canReconnect:allowed('canReconnect'),canConfigure:allowed('canConfigure'),canChangePermissions:specific('canChangePermissions'),canChangeModel:specific('canChangeModel'),canSelectSkills:specific('canSelectSkills'),canUseModes:allowed('canUseModes'),canUseGoal:allowed('canUseGoal'),canUseSideChat:allowed('canUseSideChat'),canEditMessages:allowed('canEditMessages'),readOnly:access.readOnly===true};
 }
 function currentAccess(){return sessionAccess(state?.access||listRows.find(row=>row.id===currentId&&row.host===currentHost)?.access);}
 function sourceLabel(access){return access?.source==='cli'?'CLI':access?.source==='ide'?'IDE':access?.source==='unknown'?t('其他来源'):'';}
@@ -362,7 +362,7 @@ function renderState(view){
   if(view.connected)reconnectFailure=null;
   const access=sessionAccess(view.access),limited=!!view.access;
   $('permissions-button').textContent=t({'ask':'请求批准','auto-review':'帮我批准','full-access':'完全访问'}[view.permissionMode]||'权限');
-  $('permissions-button').disabled=!view.connected||!access.canConfigure;
+  $('permissions-button').disabled=!view.connected||!access.canChangePermissions;
   $('fork-source').hidden=!view.forkedFrom;$('fork-source').textContent=view.forkedFrom?t('来源会话：')+view.forkedFrom.title:'';
   if($('model-dialog').open&&modelTarget===chatKey())fastModeControl.sync(view);
   if(visibleChat()){sessionActivity.read(chatKey());renderActivity();}
@@ -866,7 +866,7 @@ $('permissions-button').onclick=()=>{
   if(!currentId||!state?.connected)return;
   const id=currentId,host=currentHost,dialog=el('dialog','picker'),head=el('div','picker-head');
   head.append(el('h2','',t('会话权限')));const close=el('button','icon-button','×');close.type='button';close.setAttribute('aria-label',t('关闭'));close.onclick=()=>dialog.close();head.append(close);dialog.append(head,el('p','muted',t('保存后从下一轮生效')));
-  if(state.linuxPermissionChecks===true){
+  if(state.linuxPermissionChecks===true||state.access?.runtime==='cli'){
     document.body.append(dialog);dialog.addEventListener('close',()=>dialog.remove());dialog.showModal();
     permissionPicker(dialog,{load:()=>api(sessionUrl(id,'permissions',host)),
       save:preset=>api(sessionUrl(id,'permissions',host),{preset,confirmed:preset==='full-access'}),

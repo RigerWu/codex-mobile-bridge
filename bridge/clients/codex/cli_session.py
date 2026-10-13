@@ -1,18 +1,21 @@
 """Explicitly resume saved CLI threads through their native app-server."""
 
 import copy
+import hashlib
 import json
 import os
 import shlex
 import shutil
 import subprocess
 import threading
+import time
 from pathlib import Path
 
 from bridge.clients.codex.app_server import (
-    AppServerError, AppServerUnavailable, AppServerUnsupported, CodexAppServer)
+    AppServerError, AppServerUnavailable, AppServerUnknownResult, AppServerUnsupported, CodexAppServer)
 from bridge.clients.codex.catalog import Catalog
 from bridge.clients.codex.remote import RemoteStore, RemoteUnavailable
+from bridge.features.sessions.goal import GoalError, GoalUnavailable, GoalUnsupported, normalize_goal_result
 from bridge.features.sessions.store import SessionStore, StoreUnavailable
 
 
@@ -258,26 +261,67 @@ class CliSessions:
         with self.lock:
             pending = list(self.requests.get(thread_id, {}).values())
             state = self._state(thread, pending, metadata)
+            previous = self.states.get(thread_id) or {}
+            for key in ('latestThreadSettings', 'latestCollaborationMode', 'threadGoal',
+                        'completedThreadGoal', 'turnPlan'):
+                if key in previous:
+                    state[key] = copy.deepcopy(previous[key])
+            if state.get('latestThreadSettings'):
+                state['latestThreadSettings']['model'] = state['latestModel']
+                state['latestThreadSettings']['effort'] = state['latestReasoningEffort']
             self.states[thread_id] = state
         self.on_state(thread_id, copy.deepcopy(state))
         return copy.deepcopy(state)
 
     def call(self, thread_id, desktop_method, params, timeout=30):
-        self._require_joined(thread_id)
-        if not self.client.is_loaded(thread_id):
-            self._invalidate(thread_id)
-            raise AppServerUnavailable('CLI thread unloaded before the operation')
-        self._check_identity(thread_id)
+        self._check_joined_identity(thread_id)
         if desktop_method == 'thread-follower-start-turn':
             start = params.get('turnStart') or {}
             request = start.get('request') or {}
             context = start.get('context') or {}
             inputs = self._inputs(request.get('input', []), context)
-            if request.get('collaborationMode'):
-                raise AppServerUnsupported('CLI collaboration mode override is unavailable')
-            result = self.client.request('turn/start', {
+            native = {
                 'threadId': thread_id, 'input': inputs,
-                'clientUserMessageId': request.get('clientUserMessageId')}, timeout=timeout)
+                'clientUserMessageId': request.get('clientUserMessageId')}
+            if request.get('collaborationMode') is not None:
+                mode = request['collaborationMode']
+                if not isinstance(mode, dict) or mode.get('mode') not in ('plan', 'default') or not isinstance(mode.get('settings'), dict):
+                    raise AppServerUnsupported('Invalid CLI collaboration mode')
+                native['collaborationMode'] = mode
+            result = self.client.request('turn/start', native, timeout=timeout)
+            if 'collaborationMode' in native:
+                with self.lock:
+                    state = self.states.get(thread_id)
+                    if state is not None:
+                        state['latestCollaborationMode'] = copy.deepcopy(native['collaborationMode'])
+                        snapshot = copy.deepcopy(state)
+                    else:
+                        snapshot = None
+                if snapshot is not None:
+                    self.on_state(thread_id, snapshot)
+            self._queue_refresh(thread_id)
+            return result
+        if desktop_method == 'thread-follower-update-thread-settings':
+            settings = params.get('threadSettings') or {}
+            allowed = {'model', 'effort', 'serviceTier'}
+            if not isinstance(settings, dict) or not settings or set(settings) - allowed:
+                raise AppServerUnsupported('Only explicit CLI model and effort settings are supported')
+            native = {'threadId': thread_id, **settings}
+            result = self.client.request('thread/settings/update', native, timeout=timeout)
+            with self.lock:
+                state = self.states.get(thread_id)
+                if state is not None:
+                    settings_state = state.setdefault('latestThreadSettings', {})
+                    settings_state.update(settings)
+                    if 'model' in settings:
+                        state['latestModel'] = settings['model']
+                    if 'effort' in settings:
+                        state['latestReasoningEffort'] = settings['effort']
+                    snapshot = copy.deepcopy(state)
+                else:
+                    snapshot = None
+            if snapshot is not None:
+                self.on_state(thread_id, snapshot)
             self._queue_refresh(thread_id)
             return result
         if desktop_method == 'thread-follower-steer-turn':
@@ -339,6 +383,150 @@ class CliSessions:
             self._queue_refresh(thread_id)
             return {'submitted': True}
         raise AppServerUnsupported('CLI operation is not supported by this adapter')
+
+    def _check_joined_identity(self, thread_id):
+        self._require_joined(thread_id)
+        if not self.client.is_loaded(thread_id):
+            self._invalidate(thread_id)
+            raise AppServerUnavailable('CLI thread unloaded before the operation')
+        self._check_identity(thread_id)
+
+    def get_kind(self, thread_id, kind, refresh=False, query='', offset=0, limit=200, ids=None):
+        self._check_joined_identity(thread_id)
+        if kind == 'models':
+            with self.lock:
+                state = self.states[thread_id]
+                cwd = self.metadata[thread_id]['cwd']
+                provider = self.metadata[thread_id]['modelProvider']
+            config = self.client.request('config/read', {'includeLayers': False, 'cwd': cwd},
+                                         replay_safe=True).get('config') or {}
+            profile = (config.get('profiles') or {}).get(config.get('profile')) or {}
+            effective = {**config, **profile}
+            definition = (effective.get('model_providers') or {}).get(provider) or {}
+            custom = (provider != 'openai' or effective.get('openai_base_url') or
+                      any(definition.get(key) for key in ('base_url', 'env_key',
+                          'experimental_bearer_token', 'http_headers', 'env_http_headers',
+                          'auth', 'gateway_oauth')))
+            if not custom:
+                account = self.client.request('account/read', {'refreshToken': False},
+                                              replay_safe=True).get('account') or {}
+                custom = account.get('type') == 'apiKey'
+            if custom:
+                return {'kind': 'models', 'models': [], 'modelSource': 'api',
+                        'fastMode': {'allowed': False}, 'modelError': None,
+                        'currentModel': state.get('latestModel'),
+                        'currentEffort': state.get('latestReasoningEffort')}
+            raw_models, cursor = [], None
+            for _ in range(10):
+                raw = self.client.request('model/list', {'cursor': cursor, 'limit': 100,
+                                                         'includeHidden': False}, replay_safe=True)
+                raw_models.extend(raw.get('data', []))
+                cursor = raw.get('nextCursor')
+                if not cursor:
+                    break
+            models = [{'id': m['model'], 'name': m.get('displayName') or m['model'],
+                       'description': m.get('description', ''),
+                       'efforts': [e['reasoningEffort'] for e in m.get('supportedReasoningEfforts', [])],
+                       'defaultEffort': m.get('defaultReasoningEffort'),
+                       'isDefault': m.get('isDefault', False), 'fastTier': Catalog.fast_tier(m),
+                       'defaultServiceTier': m.get('defaultServiceTier')}
+                      for m in raw_models if not m.get('hidden') and m.get('model')]
+            try:
+                fast_mode = Catalog.fast_mode(lambda method, params: self.client.request(
+                    method, params, replay_safe=True), cwd)
+            except AppServerError:
+                fast_mode = {'allowed': False}
+            return {'kind': 'models', 'models': models, 'modelSource': 'codex',
+                    'fastMode': fast_mode,
+                    'modelError': None, 'currentModel': state.get('latestModel'),
+                    'currentEffort': state.get('latestReasoningEffort')}
+        if kind != 'skills':
+            raise ValueError('未知目录类型')
+        rows, errors = self._native_skills(thread_id, force_reload=bool(refresh))
+        ids = set(ids or [])
+        selected = [row for row in rows if row['id'] in ids]
+        query = (query or '').strip().casefold()
+        filtered = [row for row in rows if query in ' '.join(str(row.get(key) or '') for key in
+                    ('name', 'displayName', 'description')).casefold()]
+        offset = max(0, int(offset))
+        limit = min(500, max(1, int(limit)))
+        return {'kind': 'skills', 'skills': filtered[offset:offset + limit],
+                'selectedSkills': selected, 'errors': errors, 'total': len(filtered),
+                'offset': offset, 'limit': limit,
+                'cache': {'state': 'fresh', 'updatedAt': int(time.time()),
+                          'bucketId': None, 'backgroundRefresh': False}}
+
+    def _native_skills(self, thread_id, force_reload=False):
+        with self.lock:
+            cwd = self.metadata[thread_id]['cwd']
+        raw = self.client.request('skills/list', {'cwds': [cwd], 'forceReload': force_reload},
+                                  replay_safe=True)
+        rows, errors = [], []
+        for entry in raw.get('data', []):
+            if entry.get('cwd') != cwd:
+                continue
+            errors.extend(entry.get('errors') or [])
+            for skill in entry.get('skills') or []:
+                if not skill.get('enabled', True) or not skill.get('path') or not skill.get('name'):
+                    continue
+                path = skill['path']
+                rows.append({'id': hashlib.sha256(path.encode()).hexdigest(),
+                             'path': path, 'name': skill['name'],
+                             'description': skill.get('description', ''),
+                             'scope': skill.get('scope'),
+                             'displayName': (skill.get('interface') or {}).get('displayName') or skill['name']})
+        return rows, errors
+
+    def validate_skills(self, thread_id, ids):
+        self._check_joined_identity(thread_id)
+        ids = list(dict.fromkeys(ids or []))[:8]
+        if not ids:
+            return []
+        rows, _ = self._native_skills(thread_id, force_reload=True)
+        indexed = {row['id']: row for row in rows}
+        if any(identifier not in indexed for identifier in ids):
+            raise ValueError('Skill 不可用，请刷新列表')
+        return [indexed[identifier] for identifier in ids]
+
+    def _goal_request(self, thread_id, method, params, *, read=False):
+        try:
+            self._check_joined_identity(thread_id)
+            return self.client.request(method, {'threadId': thread_id, **params},
+                                       replay_safe=read)
+        except AppServerUnsupported as exc:
+            raise GoalUnsupported('当前 CLI runtime 不支持原生目标') from exc
+        except (AppServerUnavailable, AppServerUnknownResult) as exc:
+            raise GoalUnavailable('CLI runtime 目标操作结果未知，请刷新后确认') from exc
+        except AppServerError as exc:
+            raise GoalError('CLI runtime 目标操作未完成') from exc
+
+    def supports_goal(self, thread_id):
+        try:
+            self._goal_request(thread_id, 'thread/goal/get', {}, read=True)
+            return True
+        except GoalUnsupported:
+            return False
+
+    def get_goal(self, thread_id):
+        return normalize_goal_result(self._goal_request(thread_id, 'thread/goal/get', {}, read=True))
+
+    def set_goal(self, thread_id, objective):
+        return normalize_goal_result(self._goal_request(thread_id, 'thread/goal/set',
+                                                       {'objective': objective, 'status': 'active'}))
+
+    def set_goal_status(self, thread_id, status):
+        if status not in ('active', 'paused'):
+            raise ValueError('目标状态无效')
+        return normalize_goal_result(self._goal_request(thread_id, 'thread/goal/set', {'status': status}))
+
+    def edit_goal(self, thread_id, objective, token_budget=None):
+        params = {'objective': objective, 'status': 'paused'}
+        if token_budget is not None:
+            params['tokenBudget'] = token_budget
+        return normalize_goal_result(self._goal_request(thread_id, 'thread/goal/set', params))
+
+    def clear_goal(self, thread_id):
+        return self._goal_request(thread_id, 'thread/goal/clear', {})
 
     @staticmethod
     def _inputs(inputs, context):
@@ -418,6 +606,24 @@ class CliSessions:
             if method == 'serverRequest/resolved':
                 self.requests.get(thread_id, {}).pop(params.get('requestId'), None)
                 state['requests'] = list(self.requests.get(thread_id, {}).values())
+            elif method == 'thread/settings/updated':
+                settings = params.get('threadSettings') or {}
+                state['latestThreadSettings'] = copy.deepcopy(settings)
+                if settings.get('model'):
+                    state['latestModel'] = settings['model']
+                if settings.get('effort') is not None:
+                    state['latestReasoningEffort'] = settings['effort']
+                if settings.get('collaborationMode') is not None:
+                    state['latestCollaborationMode'] = copy.deepcopy(settings['collaborationMode'])
+            elif method == 'thread/goal/updated':
+                goal = params.get('goal')
+                state['threadGoal'] = copy.deepcopy(goal)
+                state.pop('completedThreadGoal', None)
+            elif method == 'thread/goal/cleared':
+                state.pop('threadGoal', None)
+                state.pop('completedThreadGoal', None)
+            elif method == 'turn/plan/updated':
+                state['turnPlan'] = copy.deepcopy(params.get('plan') or [])
             elif method == 'thread/status/changed':
                 state['threadRuntimeStatus'] = params.get('status') or state['threadRuntimeStatus']
             elif method in ('turn/started', 'turn/completed'):

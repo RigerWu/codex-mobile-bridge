@@ -9,6 +9,7 @@ from pathlib import Path
 from unittest.mock import Mock, patch
 
 from bridge.clients.codex.app_server import AppServerUnavailable, AppServerUnsupported, AppServerUnknownResult
+from bridge.features.sessions.goal import GoalUnavailable, GoalUnsupported
 from bridge.clients.codex.cli_session import CliSessions, _local_cli, _managed_cli, _ssh_daemon_start_command, _ssh_proxy_command
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -40,6 +41,21 @@ class FakeClient:
                     'cwd': '/original/project', 'model': 'original-model'}
         if method == 'turn/start':
             return {'turn': {'id': 'turn-1'}}
+        if method == 'model/list':
+            return {'data': [{'model': 'native-model', 'displayName': 'Native model',
+                              'supportedReasoningEfforts': [{'reasoningEffort': 'high'}],
+                              'defaultReasoningEffort': 'high'}]}
+        if method == 'skills/list':
+            return {'data': [{'cwd': '/original/project', 'skills': [
+                {'name': 'writer', 'path': '/original/skills/writer/SKILL.md',
+                 'description': 'Write text', 'enabled': True, 'scope': 'user'}], 'errors': []}]}
+        if method == 'thread/goal/get':
+            return {'goal': None}
+        if method == 'thread/goal/set':
+            return {'goal': {'objective': params.get('objective', 'Existing goal'),
+                             'status': params.get('status', 'active')}}
+        if method == 'thread/goal/clear':
+            return {'cleared': True}
         return {}
 
     def respond(self, request_id, result):
@@ -153,6 +169,117 @@ class CliSessionTests(unittest.TestCase):
         self.sessions.attach('thread-a', explicit=True)
         with self.assertRaises(AppServerUnsupported):
             self.sessions.call('thread-a', 'thread-follower-update-thread-settings', {})
+
+    def test_native_model_settings_and_collaboration_mode_keep_thread_identity(self):
+        self.sessions.attach('thread-a', explicit=True)
+        self.sessions._queue_refresh = Mock()
+        self.sessions.call('thread-a', 'thread-follower-update-thread-settings',
+                           {'threadSettings': {'model': 'native-model', 'effort': 'high'}})
+        self.assertIn(('thread/settings/update', {'threadId': 'thread-a',
+                                                   'model': 'native-model', 'effort': 'high'}), self.fake.sent)
+        self.assertEqual(self.states[-1][1]['latestModel'], 'native-model')
+        with self.assertRaises(AppServerUnsupported):
+            self.sessions.call('thread-a', 'thread-follower-update-thread-settings',
+                               {'threadSettings': {'cwd': '/other'}})
+        mode = {'mode': 'plan', 'settings': {'model': 'native-model',
+                                           'reasoning_effort': 'high', 'developer_instructions': None}}
+        self.sessions.call('thread-a', 'thread-follower-start-turn',
+                           {'turnStart': {'request': {'input': [{'type': 'text', 'text': 'Plan'}],
+                                                      'collaborationMode': mode}}})
+        native = next(params for method, params in reversed(self.fake.sent) if method == 'turn/start')
+        self.assertEqual(native['collaborationMode'], mode)
+        self.assertNotIn('cwd', native)
+        self.assertNotIn('modelProvider', native)
+        self.assertEqual(self.states[-1][1]['latestCollaborationMode']['mode'], 'plan')
+
+    def test_native_catalog_and_skill_input_use_joined_daemon(self):
+        import hashlib
+        self.fake.thread['modelProvider'] = 'openai'
+        original = self.fake.request
+        def request(method, params, **kwargs):
+            result = original(method, params, **kwargs)
+            if method == 'thread/resume':
+                result['modelProvider'] = 'openai'
+            return result
+        self.fake.request = request
+        self.sessions.attach('thread-a', explicit=True)
+        models = self.sessions.get_kind('thread-a', 'models')
+        self.assertEqual(models['models'][0]['id'], 'native-model')
+        skills = self.sessions.get_kind('thread-a', 'skills')
+        path = '/original/skills/writer/SKILL.md'
+        identifier = hashlib.sha256(path.encode()).hexdigest()
+        self.assertEqual(skills['skills'][0]['id'], identifier)
+        selected = self.sessions.validate_skills('thread-a', [identifier])
+        self.assertEqual(selected[0]['path'], path)
+        self.sessions._queue_refresh = Mock()
+        self.sessions.call('thread-a', 'thread-follower-start-turn',
+                           {'turnStart': {'request': {'input': [{'type': 'text', 'text': 'Use it'},
+                                                                {'type': 'skill', 'name': 'writer', 'path': path}]}}})
+        native = next(params for method, params in reversed(self.fake.sent) if method == 'turn/start')
+        self.assertEqual(native['input'][1], {'type': 'skill', 'name': 'writer', 'path': path})
+        self.assertFalse(any(method == 'thread/resume' for method, _ in self.fake.sent[4:]))
+
+    def test_native_goal_methods_and_events(self):
+        self.sessions.attach('thread-a', explicit=True)
+        self.assertTrue(self.sessions.supports_goal('thread-a'))
+        self.assertIsNone(self.sessions.get_goal('thread-a'))
+        self.assertEqual(self.sessions.set_goal('thread-a', 'Build')['objective'], 'Build')
+        self.assertEqual(self.sessions.set_goal_status('thread-a', 'paused')['status'], 'paused')
+        self.assertEqual(self.sessions.edit_goal('thread-a', 'Improve', 100)['objective'], 'Improve')
+        self.assertEqual(self.sessions.clear_goal('thread-a'), {'cleared': True})
+        self.assertIn(('thread/goal/set', {'threadId': 'thread-a', 'objective': 'Improve',
+                                             'status': 'paused', 'tokenBudget': 100}), self.fake.sent)
+        self.sessions._event({'method': 'thread/goal/updated', 'params': {
+            'threadId': 'thread-a', 'goal': {'objective': 'Build', 'status': 'active'}}})
+        self.assertEqual(self.states[-1][1]['threadGoal']['objective'], 'Build')
+        self.sessions._event({'method': 'turn/plan/updated', 'params': {
+            'threadId': 'thread-a', 'turnId': 'turn-1', 'plan': [{'step': 'First', 'status': 'inProgress'}]}})
+        self.assertEqual(self.states[-1][1]['turnPlan'][0]['step'], 'First')
+        self.sessions._event({'method': 'thread/goal/cleared', 'params': {'threadId': 'thread-a'}})
+        self.assertNotIn('threadGoal', self.states[-1][1])
+
+    def test_native_settings_event_survives_thread_refresh(self):
+        self.sessions.attach('thread-a', explicit=True)
+        self.fake.thread['model'] = 'native-model'
+        self.fake.thread['reasoningEffort'] = 'high'
+        self.sessions._event({'method': 'thread/settings/updated', 'params': {
+            'threadId': 'thread-a', 'threadSettings': {
+                'model': 'native-model', 'effort': 'high', 'serviceTier': 'fast',
+                'collaborationMode': {'mode': 'default', 'settings': {}}}}})
+        state = self.sessions.refresh('thread-a')
+        self.assertEqual(state['latestModel'], 'native-model')
+        self.assertEqual(state['latestThreadSettings']['serviceTier'], 'fast')
+        self.assertEqual(state['latestCollaborationMode']['mode'], 'default')
+
+    def test_custom_provider_catalog_never_offers_openai_models(self):
+        self.sessions.attach('thread-a', explicit=True)
+        self.sessions.metadata['thread-a']['modelProvider'] = 'custom'
+        self.fake.thread['modelProvider'] = 'custom'
+        result = self.sessions.get_kind('thread-a', 'models')
+        self.assertEqual(result['modelSource'], 'api')
+        self.assertEqual(result['models'], [])
+        self.assertFalse(any(method == 'model/list' for method, _ in self.fake.sent))
+
+    def test_native_goal_unknown_result_is_not_replayed(self):
+        self.sessions.attach('thread-a', explicit=True)
+        original = self.fake.request
+        def fail(method, params, **kwargs):
+            if method == 'thread/goal/set':
+                self.fake.sent.append((method, params))
+                raise AppServerUnknownResult('unknown')
+            return original(method, params, **kwargs)
+        self.fake.request = fail
+        with self.assertRaises(GoalUnavailable):
+            self.sessions.set_goal('thread-a', 'Build')
+        self.assertEqual(len([method for method, _ in self.fake.sent if method == 'thread/goal/set']), 1)
+        def unsupported(method, params, **kwargs):
+            if method == 'thread/goal/get':
+                raise AppServerUnsupported('method not found')
+            return original(method, params, **kwargs)
+        self.fake.request = unsupported
+        self.assertFalse(self.sessions.supports_goal('thread-a'))
+        with self.assertRaises(GoalUnsupported):
+            self.sessions.get_goal('thread-a')
 
     def test_live_events_update_state_and_resolve_pending_without_refresh(self):
         self.sessions.attach('thread-a', explicit=True)

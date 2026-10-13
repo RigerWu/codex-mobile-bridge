@@ -755,12 +755,13 @@ class Bridge:
         desktop = origin != 'cli'
         connected = bool(session and session.connected)
         writable = desktop or connected
+        reconnect = desktop or self.cli_sessions.available()
         return {'source': origin, 'runtime': (session.runtime if connected else None),
                 'readOnly': not writable, 'canSend': writable, 'canInterrupt': writable,
-                'canApprove': writable, 'canReconnect': desktop or self.cli_sessions.available(),
+                'canApprove': writable, 'canReconnect': reconnect,
                 'canConfigure': desktop, 'canUseModes': desktop, 'canUseGoal': desktop,
                 'canUseSideChat': desktop, 'canEditMessages': desktop,
-                'reason': None}
+                'reason': None if reconnect else '未找到可用的 Codex CLI 后台服务或已安装的服务包；请先在电脑上安装或更新 Codex CLI，并运行一次。'}
 
     def _require_desktop_feature(self, thread_id):
         metadata = self.store.get(thread_id)
@@ -1130,7 +1131,7 @@ class Bridge:
                         raise IPCError(str(exc)) from exc
                     self._cli_state(session.id, state)
                     if not session.connected:
-                        raise IPCError('CLI 尚未连接；操作未发送，请在原终端打开此会话后重试。')
+                        raise IPCError('CLI 会话尚未恢复；操作未发送，请重试继续会话。')
                     return session
                 if session.last_activation is not None and time.monotonic() - session.last_activation < 20:
                     raise IPCError(session.error or '桌面仍在加载此聊天；操作未发送，请稍后重试。')

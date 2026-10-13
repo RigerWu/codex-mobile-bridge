@@ -81,6 +81,15 @@ class RegistryTests(unittest.TestCase):
                     validate(method, root+action)
 
     def test_protocol_v2_routes_and_management_boundary(self):
+        validate('GET', '/api/sessions/diagnostics')
+        validate('GET', '/api/sessions/diagnostics?thread=' + THREAD)
+        for method, path in [('POST', '/api/sessions/diagnostics'),
+                             ('GET', '/api/sessions/diagnostics?thread=bad'),
+                             ('GET', '/api/sessions/diagnostics?thread=' + THREAD + '&extra=1'),
+                             ('GET', '/api/sessions/diagnostics?other=1'),
+                             ('GET', '/api/sessions/diagnostics/extra')]:
+            with self.subTest(method=method, path=path), self.assertRaises(PermissionError):
+                validate(method, path)
         for method, path in [('GET', '/api/mobile/update?current=2.0.2'), ('POST', '/api/mobile/update/prepare'),
                              ('GET', '/api/mobile/update/status/' + 'a' * 64), ('GET', '/api/mobile/update/packages/' + 'a' * 64)]:
             validate(method, path)
@@ -458,7 +467,9 @@ class RelayIntegrationTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_scoped_pairing_two_computers_one_browser_cookie_jar(self):
         a, b = await self.device('A'), await self.device('B')
-        await self.real_connector(a); await self.real_connector(b)
+        for device in (a, b):
+            connector = await self.real_connector(device)
+            connector.server.bridge.discovery_diagnostics = lambda thread=None, name=device['deviceName']: {'device': name, 'target': thread}
         jar = aiohttp.CookieJar(unsafe=True)
         async with aiohttp.ClientSession(cookie_jar=jar) as browser:
             for device in (a, b):
@@ -478,11 +489,18 @@ class RelayIntegrationTests(unittest.IsolatedAsyncioTestCase):
                 self.assertEqual(auth['computer']['name'], device['deviceName'])
                 result = await (await browser.get(url + '/api/sessions')).json()
                 self.assertEqual(result['sessions'][0]['title'], device['deviceName'])
+                diagnostic = await browser.get(url + '/api/sessions/diagnostics?thread=' + THREAD)
+                self.assertEqual(diagnostic.status, 200)
+                self.assertEqual((await diagnostic.json())['device'], device['deviceName'])
+                self.assertIn('attachment', diagnostic.headers['Content-Disposition'])
+                self.assertEqual((await browser.get(url + '/api/sessions/diagnostics?extra=1')).status, 403)
             legacy = await self.phone(b)
             a_cookie = jar.filter_cookies(self.server.make_url('/d/' + a['deviceId'] + '/'))[COOKIE].value
             response = await self.client.get('/d/' + a['deviceId'] + '/api/auth', headers={'Cookie': COOKIE + '=' + a_cookie + '; ' + legacy['Cookie']})
             self.assertEqual((await response.json())['deviceId'], a['deviceId'])
             wrong = await self.client.get('/d/' + a['deviceId'] + '/api/sessions', headers=legacy)
+            self.assertEqual(wrong.status, 401)
+            wrong = await self.client.get('/d/' + a['deviceId'] + '/api/sessions/diagnostics', headers=legacy)
             self.assertEqual(wrong.status, 401)
             url = self.url + '/d/' + a['deviceId']
             auth = await (await browser.get(url + '/api/auth')).json()

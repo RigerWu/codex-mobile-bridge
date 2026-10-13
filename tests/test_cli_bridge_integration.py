@@ -68,6 +68,14 @@ class CliBridgeFixture(unittest.TestCase):
 
 
 class CliBridgeTests(CliBridgeFixture):
+    def test_missing_native_runtime_explains_how_to_enable_continuation(self):
+        self.cli.available.return_value = False
+        view = self.bridge.view(self.thread_id, attach=False)
+        self.assertFalse(view['access']['canReconnect'])
+        self.assertIn('Codex CLI', view['access']['reason'])
+        self.assertIn('安装或更新', view['access']['reason'])
+        self.cli.attach.assert_not_called()
+
     def test_passive_view_reads_saved_history_without_native_join_or_navigation(self):
         with patch('bridge.app.service.open_in_desktop') as navigation:
             view = self.bridge.view(self.thread_id, background=True)

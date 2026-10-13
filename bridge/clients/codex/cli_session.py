@@ -1,30 +1,81 @@
-"""Explicitly join threads already loaded in the existing CLI app-server."""
+"""Explicitly resume saved CLI threads through their native app-server."""
 
 import copy
+import json
 import os
 import shlex
 import shutil
+import subprocess
 import threading
 from pathlib import Path
 
 from bridge.clients.codex.app_server import (
     AppServerError, AppServerUnavailable, AppServerUnsupported, CodexAppServer)
 from bridge.clients.codex.catalog import Catalog
+from bridge.clients.codex.remote import RemoteStore, RemoteUnavailable
+from bridge.features.sessions.store import SessionStore, StoreUnavailable
+
+
+def _managed_cli(home):
+    """Mirror the 0.162 daemon's selected package without installing one."""
+    home = Path(home)
+    dedicated = home / 'packages/app-server-daemon'
+    state = home / 'app-server-daemon'
+    if os.path.lexists(dedicated / 'current') or any(os.path.lexists(state / name) for name in
+            ('daemon.pid', 'daemon.stderr.log', 'daemon-updater.pid', 'daemon-updater.stderr.log')):
+        root = dedicated
+    elif any(os.path.lexists(state / name) for name in
+            ('app-server.pid', 'app-server.stderr.log', 'app-server-updater.pid', 'app-server-updater.stderr.log')):
+        root = home / 'packages/standalone'
+    else:
+        root = dedicated
+    current = root / 'current'
+    name = 'codex.exe' if os.name == 'nt' else 'codex'
+    packaged, legacy = current / 'bin' / name, current / name
+    selected = packaged if (packaged.is_file() or
+                            (not legacy.is_file() and (os.name == 'nt' or root == dedicated))) else legacy
+    return selected if selected.is_file() and os.access(selected, os.X_OK) else None
+
+
+def _ssh_managed_exec(*args):
+    arguments = ' '.join(shlex.quote(arg) for arg in args)
+    return ('home=${CODEX_HOME:-$HOME/.codex}; '
+             'state="$home/app-server-daemon"; '
+             'if test -e "$home/packages/app-server-daemon/current" || '
+             'test -L "$home/packages/app-server-daemon/current" || '
+             'test -e "$state/daemon.pid" || test -e "$state/daemon.stderr.log" || '
+             'test -e "$state/daemon-updater.pid" || test -e "$state/daemon-updater.stderr.log"; '
+             'then root="$home/packages/app-server-daemon"; '
+             'elif test -e "$state/app-server.pid" || test -e "$state/app-server.stderr.log" || '
+             'test -e "$state/app-server-updater.pid" || test -e "$state/app-server-updater.stderr.log"; '
+             'then root="$home/packages/standalone"; '
+             'else root="$home/packages/app-server-daemon"; fi; '
+             'if test -x "$root/current/bin/codex"; then '
+             'exec "$root/current/bin/codex" app-server ' + arguments + '; '
+             'elif test -x "$root/current/codex"; then '
+             'exec "$root/current/codex" app-server ' + arguments + '; else exit 73; fi')
 
 
 def _ssh_proxy_command(alias):
     if not alias or alias.startswith('-') or any(c.isspace() for c in alias):
         raise ValueError('Invalid SSH host alias')
-    # Match RemoteStore's explicit user login shell, so it resolves the same
-    # CODEX_HOME and PATH. Quote the inner program as one -lc argument.
+    # Match RemoteStore's explicit user login shell and CODEX_HOME selection.
     inner = ('if command -v codex >/dev/null 2>&1; then '
              'exec codex app-server proxy; '
              'elif test -x "$HOME/.local/bin/codex"; then '
-             'exec "$HOME/.local/bin/codex" app-server proxy; else exit 127; fi')
+             'exec "$HOME/.local/bin/codex" app-server proxy; else '
+             + _ssh_managed_exec('proxy') + '; fi')
     remote = 'exec "$SHELL" -lc ' + shlex.quote(inner)
     return ['ssh', '-T', '-o', 'BatchMode=yes', '-o', 'ClearAllForwardings=yes',
             '-o', 'ConnectTimeout=8', '-o', 'StrictHostKeyChecking=yes',
             '-o', 'UpdateHostKeys=no', alias, remote]
+
+
+def _ssh_daemon_start_command(alias):
+    command = _ssh_proxy_command(alias)
+    inner = _ssh_managed_exec('daemon', 'start')
+    command[-1] = 'exec "$SHELL" -lc ' + shlex.quote(inner)
+    return command
 
 
 def _local_cli(home, configured):
@@ -34,7 +85,7 @@ def _local_cli(home, configured):
             return str(path)
         raise AppServerUnavailable('Configured Codex CLI is unavailable')
     candidates = (shutil.which('codex'), Path.home()/'.local/bin/codex',
-                  Path(home)/'packages/app-server-daemon/current/bin/codex')
+                  _managed_cli(home))
     for candidate in candidates:
         if candidate and Path(candidate).is_file() and os.access(candidate, os.X_OK):
             return str(candidate)
@@ -54,6 +105,8 @@ class CliSessions:
         self.on_state = on_state
         self.on_disconnect = on_disconnect
         self.lock = threading.RLock()
+        self.start_lock = threading.Lock()
+        self.attach_locks = {}
         self.joined = {}
         self.attaching = set()
         self.metadata = {}
@@ -68,20 +121,65 @@ class CliSessions:
             on_disconnect=self._disconnect, process_factory=process_factory,
             command=command, check_socket=alias is None)
         self.configured_cli = cli
+        self.store = RemoteStore(alias) if alias else SessionStore(self.home)
 
     def available(self):
-        return self.alias is not None or Path(self.client.socket_path).exists()
+        return self.alias is not None or Path(self.client.socket_path).exists() or _managed_cli(self.home) is not None
 
     def attach(self, thread_id, explicit=False):
-        """Passive inspection never resumes a thread; explicit joins require loaded state."""
+        """Passive inspection never starts or resumes a runtime."""
         if not explicit:
             return None
         if not self.available():
-            raise AppServerUnavailable('Existing Codex CLI runtime is unavailable')
+            raise AppServerUnavailable('Codex CLI daemon and installed package are unavailable')
+        with self.lock:
+            attach_lock = self.attach_locks.setdefault(thread_id, threading.Lock())
+        with attach_lock:
+            return self._attach_explicit(thread_id)
+
+    def _connect_explicit(self):
         if self.alias is None and isinstance(self.client, CodexAppServer):
             executable = _local_cli(self.home, self.configured_cli)
             self.client.command[0] = executable
-        info = self.client.connect()
+        try:
+            return self.client.connect()
+        except AppServerUnavailable:
+            with self.start_lock:
+                try:
+                    return self.client.connect()
+                except AppServerUnavailable:
+                    self._start_daemon()
+                    return self.client.connect()
+
+    def _start_daemon(self):
+        if self.alias is None:
+            managed = _managed_cli(self.home)
+            if managed is None:
+                raise AppServerUnavailable('Installed Codex daemon package is required')
+            environment = os.environ.copy()
+            environment['CODEX_HOME'] = str(self.home)
+            command = [str(managed), 'app-server', 'daemon', 'start']
+        else:
+            command = _ssh_daemon_start_command(self.alias)
+            environment = None
+        try:
+            result = subprocess.run(command, env=environment, stdin=subprocess.DEVNULL,
+                                    capture_output=True, text=True, timeout=25)
+        except (OSError, subprocess.TimeoutExpired) as exc:
+            raise AppServerUnavailable('Could not start the existing Codex CLI daemon') from exc
+        if result.returncode:
+            raise AppServerUnavailable('Installed Codex CLI daemon could not start')
+        try:
+            report = json.loads(result.stdout)
+        except ValueError as exc:
+            raise AppServerUnsupported('Unexpected Codex daemon start response') from exc
+        if not isinstance(report, dict) or report.get('status') not in ('started', 'alreadyRunning'):
+            raise AppServerUnsupported('Unexpected Codex daemon start status')
+        if self.alias is None and Path(report.get('socketPath', '')) != Path(self.client.socket_path):
+            raise AppServerUnavailable('Codex daemon started in another home')
+
+    def _attach_explicit(self, thread_id):
+        info = self._connect_explicit()
         if self.alias is None and Path(info['codexHome']) != self.home:
             raise AppServerUnavailable('Codex CLI runtime belongs to another home')
         if self.alias is not None:
@@ -93,16 +191,21 @@ class CliSessions:
         with self.lock:
             if thread_id in self.joined:
                 return copy.deepcopy(self.states[thread_id])
-        if not self.client.is_loaded(thread_id):
-            raise AppServerUnavailable('CLI thread is not loaded in the existing runtime')
+        loaded = self.client.is_loaded(thread_id)
         before = self.client.request('thread/read', {'threadId': thread_id, 'includeTurns': False},
                                      replay_safe=True)['thread']
-        if before.get('id') != thread_id or before.get('status', {}).get('type') == 'notLoaded':
-            raise AppServerUnavailable('CLI thread is no longer loaded')
-        # Resume rejoins a running thread, but this protocol has no atomic
-        # loaded-only guard. A thread unloading after the checks above can be
-        # cold-restored by resume. Only an explicit user connection reaches here;
-        # callers requiring strict existing-owner proof must not use this path.
+        if before.get('id') != thread_id:
+            raise AppServerUnavailable('CLI thread is unavailable in this runtime')
+        if not loaded or before.get('status', {}).get('type') == 'notLoaded':
+            try:
+                saved = self.store.get(thread_id)
+            except (KeyError, StoreUnavailable, RemoteUnavailable) as exc:
+                raise AppServerUnavailable('Saved CLI thread metadata is unavailable') from exc
+            if (saved.get('origin') != 'cli' or not saved.get('cwd') or
+                    saved.get('cwd') != before.get('cwd') or
+                    saved.get('model_provider') != before.get('modelProvider')):
+                raise AppServerUnsupported('Saved CLI thread identity does not match this runtime')
+        # Resume is explicit and sends no model, cwd, provider or permission overrides.
         with self.lock:
             self.attaching.add(thread_id)
         try:
@@ -125,7 +228,14 @@ class CliSessions:
             self.metadata[thread_id] = {'model': resumed.get('model'),
                                         'modelProvider': resumed.get('modelProvider'),
                                         'cwd': resumed.get('cwd')}
-        return self.refresh(thread_id)
+        try:
+            return self.refresh(thread_id)
+        except Exception:
+            with self.lock:
+                joined = thread_id in self.joined
+            if joined:
+                self._invalidate(thread_id)
+            raise
 
     def refresh(self, thread_id):
         self._require_joined(thread_id)
@@ -319,7 +429,13 @@ class CliSessions:
                 row.update(status=turn.get('status'), error=turn.get('error'))
                 state['threadRuntimeStatus'] = {'type': 'active' if method == 'turn/started' else 'idle'}
                 if turn.get('items'):
-                    row['items'] = turn['items']
+                    items = turn['items']
+                    if method == 'turn/completed':
+                        incoming_ids = {item.get('id') for item in items}
+                        # Completed event items can omit user messages still present in thread/read.
+                        items = [item for item in row['items'] if item.get('type') == 'userMessage'
+                                 and item.get('id') not in incoming_ids] + items
+                    row['items'] = items
                 if method == 'turn/completed':
                     pending = self.requests.get(thread_id, {})
                     for request_id in list(pending):

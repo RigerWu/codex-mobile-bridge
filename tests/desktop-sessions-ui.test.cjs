@@ -104,6 +104,19 @@ test('Claude lists distinguish Code and Cowork and retain archive/project filter
 test('workspace tabs use the real Workbench provider routes and split behavior',async()=>{
  const ui=await opened();assert.equal(ui.view.workbench.current.provider,'claude');ui.view.workbench.files();await Promise.resolve();assert.ok(ui.calls.some(c=>c.url.includes('/api/desktop-sessions/claude/workspace?sessionId=a')));ui.view.workbench.split('files');assert.equal(ui.view.workbench.splitMode,true);assert.ok(ui.view.conversation.classList.contains('wb-split'));assert.equal(ui.view.workbench.current.splitTab,'files');
 });
+test('PDF reading position survives file-tab and chat-back navigation',async()=>{
+ const ui=await opened(),wb=ui.view.workbench,session=wb.current;
+ const files={id:'files',name:'Files',body:wb.node('div','wb-browser')};
+ const pdf={id:'file:report.pdf',name:'report.pdf',body:wb.node('div','wb-preview')};
+ const stage=wb.node('div','wb-pdf-stage');pdf.body.append(stage);session.files=[files,pdf];
+ wb.select(pdf.id);stage.scrollTop=720;stage.scrollLeft=42;
+ wb.select(files.id);stage.scrollTop=0;stage.scrollLeft=0;
+ wb.select(pdf.id);assert.equal(stage.scrollTop,720);assert.equal(stage.scrollLeft,42);
+ stage.scrollTop=915;stage.scrollLeft=19;
+ assert.equal(wb.back(),true);assert.equal(session.active,'chat');
+ stage.scrollTop=0;stage.scrollLeft=0;
+ wb.select(pdf.id);assert.equal(stage.scrollTop,915);assert.equal(stage.scrollLeft,19);
+});
 test('file back follows parent directories before returning to chat on the shared page button',async()=>{
  const ui=await opened(),wb=ui.view.workbench,session=wb.current;
  const settle=()=>new Promise(setImmediate);

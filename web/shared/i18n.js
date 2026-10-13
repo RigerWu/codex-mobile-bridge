@@ -2228,6 +2228,8 @@ const en={
   "下载": "Download",
   "文件超过 20 MB，请在电脑上处理。": "This file exceeds 20 MB. Open it on your computer.",
   "此文件暂不支持在线预览，可下载后打开。": "Preview unavailable. Download this file to open it.",
+  "文件超过 512 KB，无法在线预览。可下载后打开。": "Files over 512 KB cannot be previewed. Download this file to open it.",
+  "此文件不是 UTF-8 文本或可预览图片，可下载后打开。": "This file is not UTF-8 text or a supported image. Download it to open it.",
   "选择上传文件": "Choose a file to upload",
   "保存文件名": "File name",
   "上传到此目录": "Upload here",

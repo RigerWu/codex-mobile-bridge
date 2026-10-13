@@ -46,18 +46,18 @@ window.BridgeFileActions = (() => {
     const chat=anchor.closest('.chat'),workbench=chat&&workbenches.get(chat);if(!workbench)return;
     event.preventDefault();event.stopImmediatePropagation();choose(anchor,workbench);
   },true);
-  function mountSettings(container,request){
+  function mountSettings(container,request,{ready=()=>document.getElementById('app')?.hidden===false}={}){
     if(!container)return;
-    const field=node('fieldset',undefined,'appearance-section'),legend=node('legend',t('文件传输')),label=node('label'),input=node('input'),save=node('button',t('保存配置'),'plain'),message=node('p','','muted');
-    legend.dataset.i18n='文件传输';input.type='number';input.min='1';input.max='1048576';input.step='1';input.required=true;save.type='button';save.dataset.i18n='保存配置';
+    const field=node('fieldset',undefined,'appearance-section'),legend=node('legend',t('文件传输')),label=node('label'),input=node('input'),save=node('button',t('保存点击下载阈值'),'plain'),message=node('p','','muted');
+    legend.dataset.i18n='文件传输';input.type='number';input.min='1';input.max='1048576';input.step='1';input.required=true;save.type='button';save.dataset.i18n='保存点击下载阈值';
     const caption=node('span',t('点击下载阈值（MiB）'));caption.dataset.i18n='点击下载阈值（MiB）';label.append(caption,input);
     const hint=node('p',t('超过阈值仅显示定位；文件标签页中长按或右键下载不限此大小。'),'muted');hint.dataset.i18n='超过阈值仅显示定位；文件标签页中长按或右键下载不限此大小。';field.append(legend,label,hint,save,message);container.append(field);
     let dirty=false,loading=false;input.oninput=e=>{e.stopPropagation();dirty=true;};input.onchange=e=>e.stopPropagation();
-    const read=async()=>{if(dirty||loading||document.hidden)return;loading=true;try{const value=await request();if(!dirty)input.value=value.clickDownloadMiB;}catch(e){message.textContent=t(e.message);}finally{loading=false;}};
+    const read=async()=>{if(dirty||loading||document.hidden||container.hidden||('open' in container&&!container.open)||!ready())return;loading=true;try{const value=await request();if(!dirty){input.value=value.clickDownloadMiB;message.textContent='';}}catch(e){message.textContent=t(e.message);}finally{loading=false;}};
     save.onclick=async()=>{if(!input.reportValidity())return;save.disabled=true;const value=Number(input.value);try{await request({clickDownloadMiB:value});if(Number(input.value)===value)dirty=false;message.textContent=t('已保存，立即生效');}catch(e){message.textContent=t(e.message);}finally{save.disabled=false;}};
     // Fetch on reveal/focus, not on a timer. Every download reads the latest server policy.
     new MutationObserver(()=>{if(!container.hidden&&(!('open' in container)||container.open))read();}).observe(container,{attributes:true,attributeFilter:['hidden','open']});
-    window.addEventListener('focus',read);read();return field;
+    window.addEventListener('focus',read);document.addEventListener('bridge-authenticated',read);return field;
   }
   return {register:(chat,workbench)=>workbenches.set(chat,workbench),bindRow,menu,mountSettings};
 })();

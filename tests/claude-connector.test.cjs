@@ -138,6 +138,6 @@ const waitFor = async predicate => {
   await waitFor(()=>response.seq===seq&&response.done);
   assert.equal(response.result.contextUsage,null);assert.equal(response.result.contextUsageStatus,'unsupported');
   window.__claudeMobileBridge.stop(); await running;
-  assert.equal(response.connected,false);
+  assert.equal(window.__claudeMobileBridge.status().stopped,true);
   console.log('Desktop file connector: handshake, original session dispatch, deduplication, same-generation reinjection without replay, expiry, allowlist, redaction, restart, replay rejection, stop passed.');
 })().catch(e=>{window.__claudeMobileBridge?.stop();console.error(e);process.exitCode=1;});

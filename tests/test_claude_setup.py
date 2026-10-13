@@ -178,7 +178,8 @@ assert.equal(start.cwd,cwd);assert.equal(start.message,'');})();
             prepared = adapter.prepare()
         source = (ROOT/'bridge/clients/claude/connector.js').read_text(encoding='utf-8')
         config = {'transport': 'file', 'cwd': str(adapter.directory), 'token': adapter.desktop.token,
-                  'generation': adapter.desktop.generation, 'reconnect': True, 'connectorRevision': 5,
+                  'generation': adapter.desktop.generation, 'reconnect': True,
+                  'inspectionMarker': prepared['inspectionMarker'], 'connectorRevision': 5,
                   'request': 'request.json', 'response': 'response.json'}
         self.assertEqual(Path(prepared['scriptPath']).read_text(encoding='utf-8'),
                          source.replace('__BRIDGE_CONFIG__', json.dumps(config)))
@@ -498,7 +499,7 @@ class ClaudeNativeConnection(unittest.TestCase):
             self.adapter._connect_native(False, self.cancel_path)
         profiles.assert_not_called()
 
-    def run_injection(self, heartbeat, trust=False):
+    def run_injection(self, heartbeat, trust=False, conflict=False):
         self.adapter.desktop = self.idle_desktop(connected=False)
         actions = []
         def native(action, **kwargs):
@@ -510,12 +511,14 @@ class ClaudeNativeConnection(unittest.TestCase):
             if action == 'close-devtools':
                 return {'setupState': 'connected'}
             if action == 'inspect-error':
+                if conflict:
+                    return {'setupState': 'owner-conflict', 'reason': 'Claude 桥接连接被其他网关占用，请先停止旧网关；旧版连接还需重新加载 Claude'}
                 return {'setupState': 'needs-trust' if trust else 'failed', 'reason': 'trust required'}
             return {'setupState': 'ready'}
         with patch('bridge.clients.claude.adapter.native_action', side_effect=native), \
              patch('bridge.clients.claude.adapter.running_app', return_value=42), \
              patch('bridge.clients.claude.adapter.developer_mode_enabled', return_value=True), \
-             patch('bridge.clients.claude.adapter.time.monotonic', side_effect=[0, 0 if heartbeat else 19]), \
+             patch('bridge.clients.claude.adapter.time.monotonic', side_effect=[0, 0, 3 if conflict else 0 if heartbeat else 19, 3]), \
              patch.object(self.adapter, 'prepare', return_value={'consolePath': str(self.root/'script')}), \
              patch.object(self.adapter.setup_cancel, 'wait', return_value=False), \
              patch.object(self.adapter, '_setup_state', wraps=self.adapter._setup_state) as state:
@@ -533,6 +536,12 @@ class ClaudeNativeConnection(unittest.TestCase):
         _, states = self.run_injection(False, trust=True)
         self.assertNotIn('connected', states)
         self.assertEqual(self.adapter.status()['setupState'], 'needs-trust')
+
+    def test_owner_conflict_reports_without_waiting_for_full_connection_timeout(self):
+        actions, states = self.run_injection(False, conflict=True)
+        self.assertEqual(actions, ['check', 'connect', 'inspect-error'])
+        self.assertIn('owner-conflict', states)
+        self.assertEqual(self.adapter.status()['setupState'], 'owner-conflict')
 
     def test_only_verified_heartbeat_allows_connected_and_console_cleanup(self):
         actions, states = self.run_injection(True)
@@ -785,6 +794,13 @@ class ClaudeNativeConnection(unittest.TestCase):
         source = Path(prepared['consolePath']).read_text(encoding='utf-8')
         self.assertNotIn('\n', source)
         self.assertIn(self.adapter.desktop.generation, source)
+
+    def test_each_console_injection_has_a_fresh_error_inspection_marker(self):
+        self.addCleanup(self.adapter.close)
+        first = self.adapter.prepare()
+        second = self.adapter.prepare()
+        self.assertNotEqual(first['inspectionMarker'], second['inspectionMarker'])
+        self.assertIn(second['inspectionMarker'], Path(second['consolePath']).read_text(encoding='utf-8'))
 
     def test_transformed_console_script_preserves_file_protocol_behavior(self):
         source = (ROOT/'bridge/clients/claude/connector.js').read_text(encoding='utf-8')

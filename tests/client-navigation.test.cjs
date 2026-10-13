@@ -8,8 +8,19 @@ function fixture(){
   let initializeChoice=false,finishInitialize;const initializations=[];context.ClientLifecycle.chooseInitialize=client=>{initializations.push(client.id);return initializeChoice==='pending'?new Promise(resolve=>finishInitialize=resolve):initializeChoice;};
   const C=vm.runInContext('ClientNavigation',context),nav=Object.create(C.prototype),painted=[];
   Object.assign(nav,{clients:[{id:'codex',enabled:true,configured:true},{id:'claude',enabled:true,configured:true},{id:'deepseek',enabled:true,configured:true}],provider:'claude',revision:0,pending:new Set(),notify(){},rememberSwipeList(){},paint(){painted.push(this.clients.filter(c=>c.enabled).map(c=>c.id));},view:{provider:'claude',choose(id){this.provider=id;return Promise.resolve();}}});
-  return {nav,painted,choices,document:context.document,setChoice:value=>choice=value,decide:value=>finishChoice(value),mobile:value=>mobile=value,initializations,setInitializeChoice:value=>initializeChoice=value,decideInitialize:value=>finishInitialize(value)};
+  return {nav,painted,choices,document:context.document,window:context.window,setChoice:value=>choice=value,decide:value=>finishChoice(value),mobile:value=>mobile=value,initializations,setInitializeChoice:value=>initializeChoice=value,decideInitialize:value=>finishInitialize(value)};
 }
+test('notification settings stay hidden on shared relay while remaining actions use all columns',()=>{
+  const ui=fixture(),classes=new Set();
+  ui.nav.switchToggle={hidden:false};ui.nav.settingsNotifications={hidden:false};
+  ui.nav.settingsActions={classList:{toggle(name,enabled){if(enabled)classes.add(name);else classes.delete(name);}}};
+  ui.window.BridgeSharedRelay=false;ui.nav.paintSettingsActions();
+  assert.equal(ui.nav.settingsNotifications.hidden,false);assert.equal(classes.size,0);
+  ui.window.BridgeSharedRelay=true;ui.nav.paintSettingsActions();
+  assert.equal(ui.nav.settingsNotifications.hidden,true);assert.equal(classes.has('two-actions'),true);
+  ui.nav.switchToggle.hidden=true;ui.nav.paintSettingsActions();
+  assert.equal(classes.has('two-actions'),false);assert.equal(classes.has('one-action'),true);
+});
 test('changing provider paints the shell before its slow read resolves',async()=>{
   const {nav,painted}=fixture();let resolve;
   nav.view.choose=()=>new Promise(done=>resolve=done);

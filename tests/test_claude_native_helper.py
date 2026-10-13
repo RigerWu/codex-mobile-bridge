@@ -64,6 +64,83 @@ class NativeConsoleSelectors(unittest.TestCase):
             self.assertEqual(result.returncode, 0, result.stderr)
             self.assertEqual(json.loads(result.stdout)['setupState'], 'ready', result.stdout)
 
+    def test_product_verify_requires_one_complete_read_and_bounded_navigation(self):
+        source = (ROOT/'bridge/platforms/macos/claude-helper.swift').read_text()
+        actual = source[source.index('    func verify(_ prompt: AXUIElement'):source.index('    func submit(_ prompt: AXUIElement')]
+        fixture = '''import Foundation
+import CoreFoundation
+struct SetupError: Error { let state: String; let reason: String }
+func fail(_ state: String, _ reason: String) throws -> Never { throw SetupError(state: state, reason: reason) }
+struct AXUIElement {}
+struct AXError: Equatable { let code: Int; static let success = AXError(code: 0); static let failure = AXError(code: 1) }
+enum FakeAXValueType { case cfRange }
+struct FakeAXValue { let range: CFRange }
+func AXValueCreate(_ type: FakeAXValueType, _ range: inout CFRange) -> FakeAXValue? { FakeAXValue(range: range) }
+let kAXValueAttribute = "AXValue", kAXSelectedTextRangeAttribute = "AXSelectedTextRange"
+struct FakeFlags { static let maskCommand = FakeFlags() }
+final class Scenario {
+    var reads: [String?], readIndex = 0, checks = 0, stopAt: Int?, stopState: String, settable: Bool
+    var keys = [Int](), positions = [Int]()
+    init(_ reads: [String?], settable: Bool = true, stopAt: Int? = nil, stopState: String = "cancelled") {
+        self.reads = reads; self.settable = settable; self.stopAt = stopAt; self.stopState = stopState
+    }
+}
+var scenario = Scenario([])
+func attribute(_ element: AXUIElement, _ name: String) -> Any? {
+    let index = min(scenario.readIndex, scenario.reads.count - 1)
+    scenario.readIndex += 1
+    return scenario.reads[index]
+}
+func AXUIElementIsAttributeSettable(_ element: AXUIElement, _ name: CFString, _ settable: inout DarwinBoolean) -> AXError {
+    settable = DarwinBoolean(scenario.settable)
+    return .success
+}
+func AXUIElementSetAttributeValue(_ element: AXUIElement, _ name: CFString, _ value: FakeAXValue) -> AXError {
+    scenario.positions.append(value.range.location)
+    return .success
+}
+final class Connector {
+    func check(_ prompt: AXUIElement) throws {
+        scenario.checks += 1
+        if scenario.stopAt == scenario.checks { try fail(scenario.stopState, "stopped") }
+    }
+    func key(_ code: Int, flags: FakeFlags = FakeFlags(), prompt: AXUIElement) throws {
+        try check(prompt)
+        scenario.keys.append(code)
+    }
+''' + actual + '''}
+let connector = Connector(), prompt = AXUIElement(), good = "abcdefghij"
+func run(_ name: String, _ reads: [String?], settable: Bool = true, stopAt: Int? = nil,
+         stopState: String = "cancelled", pass: Bool, moves: Int, selections: Int? = nil, restored: Bool = false) {
+    scenario = Scenario(reads, settable: settable, stopAt: stopAt, stopState: stopState)
+    var succeeded = false, stopped = false
+    do { try connector.verify(prompt, good); succeeded = true }
+    catch let error as SetupError { stopped = error.state == stopState }
+    catch { fatalError("unexpected error in " + name) }
+    precondition(succeeded == pass, name)
+    if stopAt != nil { precondition(stopped && scenario.keys.isEmpty, name) }
+    precondition(scenario.keys.filter { $0 == 124 }.count == moves, name)
+    precondition(scenario.keys.contains(125) == restored, name)
+    precondition(scenario.positions.count == (selections ?? moves), name)
+}
+run("exact", [good], pass: true, moves: 0)
+run("revealed", Array(repeating: "abc", count: 40) + [good], pass: true, moves: 0, restored: true)
+run("midpoint", Array(repeating: "abc", count: 42) + ["abcdef", good], pass: true, moves: 1, restored: true)
+run("same-length-middle-change", ["abcxefghij"], pass: false, moves: 3)
+run("truncated", ["abcdefghi"], pass: false, moves: 3)
+run("unreadable", [nil], pass: false, moves: 0)
+run("not-settable", ["abcdefghi"], settable: false, pass: false, moves: 0)
+run("cancelled", ["abcdefghi"], stopAt: 1, pass: false, moves: 0)
+run("focus-changed", ["abcdefghi"], stopAt: 44, stopState: "needs-attention", pass: false, moves: 0, selections: 1)
+print("9 product verify flow fixtures passed")
+'''
+        with tempfile.TemporaryDirectory(dir=ROOT/'.tmp') as folder:
+            folder = Path(folder); script = folder/'verify.swift'; script.write_text(fixture)
+            result = subprocess.run(['swift', '-module-cache-path', str(folder/'modules'), str(script)],
+                                    capture_output=True, text=True, timeout=90)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn('9 product verify flow fixtures passed', result.stdout)
+
 
 @unittest.skipUnless(sys.platform == 'win32', 'Windows native helper required')
 class WindowsNativeWindowSelectors(unittest.TestCase):

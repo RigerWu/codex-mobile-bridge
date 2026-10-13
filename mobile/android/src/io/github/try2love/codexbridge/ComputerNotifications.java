@@ -17,7 +17,7 @@ final class ComputerNotifications {
  private static void changed(){Runnable callback=onChange;if(callback!=null)callback.run();}
  static synchronized JSONArray clients(Context context,String origin){
   Snapshot snapshot=snapshots.get(origin);SharedPreferences prefs=context.getSharedPreferences("bridge",0);
-  if(snapshot==null||!prefs.getStringSet("origins",Collections.emptySet()).contains(origin)||!snapshot.binding.equals(EventClient.sessionCookie(CookieManager.getInstance().getCookie(origin+"/"))))return new JSONArray();
+  if(snapshot==null||!prefs.getStringSet("origins",Collections.emptySet()).contains(origin)||!snapshot.binding.equals(EventClient.sessionCookie(CookieManager.getInstance().getCookie(origin+"/"),origin)))return new JSONArray();
   return snapshot.clients==null?new JSONArray():snapshot.clients;
  }
  static synchronized boolean fresh(String origin){Snapshot snapshot=snapshots.get(origin);return snapshot!=null&&snapshot.fresh;}

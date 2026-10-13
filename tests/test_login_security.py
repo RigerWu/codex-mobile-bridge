@@ -199,11 +199,45 @@ class LoginHttpTests(unittest.TestCase):
             self.assertIn('HttpOnly', headers['Set-Cookie'])
             self.assertEqual('Max-Age=' in headers['Set-Cookie'], remember)
             cookie = headers['Set-Cookie'].split(';')[0]
+            self.assertTrue(cookie.startswith(self.server.auth.cookie_name + '='))
             _, refreshed, auth = self.request('/api/auth', headers={'Cookie': cookie})
             self.assertTrue(auth['authenticated'])
             self.assertEqual('Max-Age=' in refreshed['Set-Cookie'], remember)
             if remember:
                 self.assertIn('Max-Age=604800', headers['Set-Cookie'])
+
+    def test_legacy_cookie_migrates_only_if_owned_by_this_gateway(self):
+        token, _ = self.server.auth.new_session('127.0.0.1')
+        legacy = 'codex_mobile_session=' + token
+        _, headers, auth = self.request('/api/auth', headers={'Cookie': legacy})
+        self.assertTrue(auth['authenticated'])
+        self.assertEqual(auth['cookieName'], self.server.auth.cookie_name)
+        self.assertTrue(headers['Set-Cookie'].startswith(self.server.auth.cookie_name + '='))
+        _, _, foreign = self.request('/api/auth', headers={'Cookie': 'codex_mobile_session=foreign'})
+        self.assertFalse(foreign['authenticated'])
+        mixed = self.server.auth.cookie_name + '=invalid; ' + legacy
+        self.assertFalse(self.request('/api/auth', headers={'Cookie': mixed})[2]['authenticated'])
+        self.assertTrue(self.request('/api/auth', headers={'Cookie': legacy})[2]['authenticated'])
+
+    def test_two_same_host_gateways_keep_separate_cookies_and_logout(self):
+        first = self.server.auth
+        with tempfile.TemporaryDirectory(dir=ROOT / '.tmp') as directory:
+            second = Auth(CONFIG, directory)
+            self.assertNotEqual(first.cookie_name, second.cookie_name)
+            one, _ = first.new_session('127.0.0.1')
+            two, _ = second.new_session('127.0.0.1')
+            jar = f'{first.cookie_name}={one}; {second.cookie_name}={two}'
+            _, _, auth_one = self.request('/api/auth', headers={'Cookie': jar})
+            self.assertTrue(auth_one['authenticated'])
+            self.server.auth = second
+            _, _, auth_two = self.request('/api/auth', headers={'Cookie': jar})
+            self.assertTrue(auth_two['authenticated'])
+            self.server.auth = first
+            _, headers, _ = self.request('/api/logout', {}, {'Cookie': jar, 'X-CSRF-Token': auth_one['csrf']})
+            self.assertTrue(headers['Set-Cookie'].startswith(first.cookie_name + '=;'))
+            self.assertFalse(self.request('/api/auth', headers={'Cookie': jar})[2]['authenticated'])
+            self.server.auth = second
+            self.assertTrue(self.request('/api/auth', headers={'Cookie': jar})[2]['authenticated'])
 
     def test_mobile_http_stays_signed_in_and_success_clears_attempts(self):
         headers = {'User-Agent': 'BridgeMobile/0.1-Android'}

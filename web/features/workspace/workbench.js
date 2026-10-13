@@ -195,9 +195,11 @@ class Workbench {
     if (session.files[index].sideChat && !await session.files[index].sideChat.end()) return;
     if (!session.files[index] || session.files[index].id !== id) return;
     session.files[index].controller?.abort(); session.files[index].git?.dispose(); session.files[index].terminal?.dispose(); session.files[index].agents?.dispose(); session.files[index].sideChat?.dispose(); session.files.splice(index, 1);
-    if(session.splitTab===id)session.splitTab=null;
-    if (this.current !== session) { if (session.active === id) session.active = 'chat'; return; }
-    if (session.active === id) this.select(session.files.find(t => t.id === 'files') ? 'files' : 'chat'); else this.paint();
+    if(session.splitTab===id)session.splitTab=(session.files[index]||session.files[index-1])?.id||null;
+    const wasActive=session.active===id;
+    if(wasActive)session.active=session.splitTab||(session.files.some(t=>t.id==='files')?'files':'chat');
+    if (this.current !== session) return;
+    if (wasActive) this.select(session.active); else this.paint();
   }
   files() {
     const session = this.current; if (!session) return;

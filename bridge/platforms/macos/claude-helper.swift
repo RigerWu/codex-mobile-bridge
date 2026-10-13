@@ -225,11 +225,46 @@ final class Connector {
         try fail("failed", "未找到 Claude Console，请确认开发者工具窗口可用后重试")
     }
     func verify(_ prompt: AXUIElement, _ expected: String) throws {
-        for _ in 0..<40 {
+        func read() throws -> String? {
             Thread.sleep(forTimeInterval: 0.025); try check(prompt)
-            if contents(prompt) == expected { return }
+            return (attribute(prompt, kAXValueAttribute) as? String)?.trimmingCharacters(in: .newlines)
         }
-        try fail("needs-attention", "Console 内容未完整到达，未执行连接脚本，请重试")
+        var observed: String?
+        for _ in 0..<40 {
+            observed = try read()
+            if observed == expected { return }
+        }
+        if !expected.isEmpty && observed?.isEmpty == false {
+            // A long Console line can expose only a rendered slice through AX.
+            // Move the caret to reveal more; only a single full-value match
+            // establishes that the editor contains the expected source.
+            var settable = DarwinBoolean(false)
+            try check(prompt)
+            if AXUIElementIsAttributeSettable(prompt, kAXSelectedTextRangeAttribute as CFString, &settable) == .success && settable.boolValue {
+                for _ in 0..<3 {
+                    let live = try read()
+                    if live == expected {
+                        try key(125, flags: .maskCommand, prompt: prompt)
+                        return
+                    }
+                    guard let live = live, !live.isEmpty else { break }
+                    let position = min(expected.utf16.count / 2, live.utf16.count - 1)
+                    var range = CFRange(location: position, length: 0)
+                    guard let selected = AXValueCreate(.cfRange, &range) else { break }
+                    try check(prompt)
+                    guard AXUIElementSetAttributeValue(prompt, kAXSelectedTextRangeAttribute as CFString, selected) == .success else { break }
+                    // A selection alone need not scroll CodeMirror; Right updates its viewport.
+                    try key(124, prompt: prompt)
+                    for _ in 0..<4 {
+                        if try read() == expected {
+                            try key(125, flags: .maskCommand, prompt: prompt)
+                            return
+                        }
+                    }
+                }
+            }
+        }
+        try fail("needs-attention", "Console 无法核验完整内容，未执行连接脚本，请重试")
     }
     func submit(_ prompt: AXUIElement) throws {
         try check(prompt)
@@ -293,7 +328,7 @@ final class Connector {
                 if end % 128 == 0 || end == units.count { try verify(prompt, String(decoding: units[0..<end], as: UTF16.self)) }
             }
         }
-        try verify(prompt, source); try submit(prompt)
+        try submit(prompt)
         output("submitted", "连接脚本已输入，正在等待 Claude 确认")
     }
     func closeConsole() throws {
@@ -328,7 +363,16 @@ final class Connector {
         if find(root, matching: isPrompt) != nil { try fail("needs-attention", "Claude 已连接；开发者工具未自动关闭，请手动关闭") }
         output("connected", "Claude 已连接")
     }
-    func inspectError() {
+    func inspectError(marker: String?) {
+        let conflict = marker.flatMap { expected in find(root, matching: {
+            guard text($0, kAXRoleAttribute) == "AXStaticText" else { return false }
+            let value = text($0, kAXValueAttribute).isEmpty ? text($0, kAXTitleAttribute) : text($0, kAXValueAttribute)
+            return value.contains("Claude 桥接连接被其他网关占用") && value.contains("[\(expected)]")
+        }) }
+        if conflict != nil {
+            output("owner-conflict", "Claude 桥接连接被其他网关占用，请先停止旧网关；旧版连接还需重新加载 Claude")
+            return
+        }
         let error = find(root, matching: {
             guard text($0, kAXRoleAttribute) == "AXStaticText" else { return false }
             let value = text($0, kAXValueAttribute).isEmpty ? text($0, kAXTitleAttribute) : text($0, kAXValueAttribute)
@@ -401,7 +445,7 @@ do {
             if args[0] == "--enable-devtools" { try connector.developerMode() }
             else if args[0] == "--connect" && args.count == 5 { try connector.inject(args[3]) }
             else if args[0] == "--close-devtools" { try connector.closeConsole() }
-            else if args[0] == "--inspect-error" { connector.inspectError() }
+            else if args[0] == "--inspect-error" { connector.inspectError(marker: args.count > 3 ? args[3] : nil) }
             else { try fail("needs-attention", "连接组件参数无效") }
         }
     }

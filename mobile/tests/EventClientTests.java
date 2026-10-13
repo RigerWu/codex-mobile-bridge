@@ -18,7 +18,8 @@ public final class EventClientTests {
    if(mode.get().equals("replaced"))cookies.value="codex_mobile_session=newer-binding";
    if(mode.get().equals("removed"))cookies.value="";
    String attributes=mode.get().equals("domain")?"; Domain=127.0.0.1; Path=/":mode.get().equals("path")?"; Path=/other":"; Path=/";
-   exchange.getResponseHeaders().set("Set-Cookie","codex_mobile_session=legacy-binding"+attributes+"; HttpOnly; SameSite=Strict; Max-Age=34560000");
+   String name=mode.get().equals("migration")||mode.get().equals("scoped")?"codex_mobile_session_0123456789abcdef01234567":"codex_mobile_session";
+   exchange.getResponseHeaders().set("Set-Cookie",name+"=legacy-binding"+attributes+"; HttpOnly; SameSite=Strict; Max-Age=34560000");
    byte[] body="{}".getBytes(StandardCharsets.UTF_8);exchange.sendResponseHeaders(status,body.length);exchange.getResponseBody().write(body);exchange.close();
   });server.start();
   try{
@@ -29,6 +30,13 @@ public final class EventClientTests {
     check(cookies.lastSet.contains("Max-Age=34560000"),"Renewal reaches the WebView cookie store");
     check(cookies.flushes==1,"Renewal is persisted before returning");
    }
+   cookies.reset();EventClient.setName(origin,"codex_mobile_session");mode.set("migration");
+   EventClient.read(origin,0L,new EventClient.Read());
+   check(cookies.value.startsWith("codex_mobile_session_0123456789abcdef01234567="),"Valid legacy token migrates during pending read");
+   cookies.reset();cookies.value="codex_mobile_session_0123456789abcdef01234567=legacy-binding";mode.set("scoped");
+   EventClient.read(origin,0L,new EventClient.Read());
+   check(cookies.lastSet.startsWith("codex_mobile_session_0123456789abcdef01234567="),"Scoped renewal preserves binding");
+   EventClient.setName(origin,"codex_mobile_session");
    for(String state:new String[]{"denied","replaced","removed","domain","path"}){
     cookies.reset();mode.set(state);
     try{EventClient.read(origin);if(state.equals("denied"))throw new AssertionError("Unauthorized request accepted");}catch(java.io.IOException expected){if(!state.equals("denied"))throw expected;}

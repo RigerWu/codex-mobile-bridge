@@ -41,22 +41,23 @@ let listLoading=0;
 let modelCatalogGeneration=0;let catalogData={models:null,skills:null};let catalogResults={models:null,skills:null};let catalogTasks={models:null,skills:null};let selectedSkills=new Set(),invalidSkills=new Set(),skillIndex=new Map(),skillTotal=0,skillPages=[],skillQuery={q:'',offset:0,limit:200},skillSearchTimer,skillRequest=0;
 function el(tag,cls,text){const node=document.createElement(tag);if(cls)node.className=cls;if(text!==undefined)node.textContent=text;return node;}
 function toast(text){text=t(text);$('toast').textContent=text;$('toast').hidden=false;clearTimeout(toast.timer);toast.timer=setTimeout(()=>$('toast').hidden=true,4200);}
-async function api(path,body,signal){const options={signal,credentials:'same-origin',cache:'no-store',headers:{}};if(body!==undefined){options.method='POST';options.headers={'Content-Type':'application/json','X-CSRF-Token':csrf};options.body=JSON.stringify(body);}const response=await fetch(hostUrl(path),options);const data=await response.json();if(!response.ok){if(response.status===401)showLogin();throw Object.assign(Error(data.error||t('请求失败')),{loginStatus:data.loginStatus,status:response.status});}return data;}
-const workbench=window.BridgeWorkbench=new Workbench({chat:$('chat'),request:api,csrf:()=>csrf,notify:toast,onUnauthorized:()=>showLogin(),openChat});
-const desktopSessions=new DesktopSessionsView({root:$('app'),select:$('desktop-backend'),request:api,notify:toast,csrf:()=>csrf,onUnauthorized:()=>showLogin(),onSelect:provider=>{
+function authLost(){if(!$('app').hidden)document.dispatchEvent(new Event('bridge-auth-lost'));showLogin();}
+async function api(path,body,signal){const options={signal,credentials:'same-origin',cache:'no-store',headers:{}};if(body!==undefined){options.method='POST';options.headers={'Content-Type':'application/json','X-CSRF-Token':csrf};options.body=JSON.stringify(body);}const response=await fetch(hostUrl(path),options);const data=await response.json();if(!response.ok){if(response.status===401)authLost();throw Object.assign(Error(data.error||t('请求失败')),{loginStatus:data.loginStatus,status:response.status});}return data;}
+const workbench=window.BridgeWorkbench=new Workbench({chat:$('chat'),request:api,csrf:()=>csrf,notify:toast,onUnauthorized:authLost,openChat});
+const desktopSessions=new DesktopSessionsView({root:$('app'),select:$('desktop-backend'),request:api,notify:toast,csrf:()=>csrf,onUnauthorized:authLost,onSelect:provider=>{
   if(provider!=='codex'){saveDraft();chatTimeline?.dispose();chatTimeline=null;currentId=null;state=null;workbench.reset();$('chat').hidden=true;$('welcome').hidden=false;$('app').classList.remove('chat-open');history.replaceState(null,'',location.pathname);}
   else if(clientNavigation.provider==='codex'&&!$('app').hidden)loadList(true).catch(error=>toast(error.message));
 }});
 const clientNavigation=new ClientNavigation({view:desktopSessions,request:api,notify:toast});
 desktopSessions.onListEnter=()=>{clientNavigation.listReadDone=false;clientNavigation.listVisit=(clientNavigation.listVisit||0)+1;if(clientNavigation.provider!=='codex')desktopSessions.refresh();};
 desktopSessions.onListReady=(provider,value)=>clientNavigation.acknowledgeList(provider,value);
-async function uploadAttachment(key,id,file){const separator=key.indexOf('|'),host=key.slice(0,separator),thread=key.slice(separator+1);const response=await fetch(sessionUrl(thread,'uploads',host)+'&id='+encodeURIComponent(id)+'&name='+encodeURIComponent(file.name),{method:'POST',credentials:'same-origin',headers:{'Content-Type':'application/octet-stream','X-CSRF-Token':csrf},body:file});const result=await response.json();if(!response.ok){if(response.status===401)showLogin();const error=Error(result.error||t('附件上传失败，请重试'));error.retryable=response.status>=500||response.status===429;throw error;}return result;}
+async function uploadAttachment(key,id,file){const separator=key.indexOf('|'),host=key.slice(0,separator),thread=key.slice(separator+1);const response=await fetch(sessionUrl(thread,'uploads',host)+'&id='+encodeURIComponent(id)+'&name='+encodeURIComponent(file.name),{method:'POST',credentials:'same-origin',headers:{'Content-Type':'application/octet-stream','X-CSRF-Token':csrf},body:file});const result=await response.json();if(!response.ok){if(response.status===401)authLost();const error=Error(result.error||t('附件上传失败，请重试'));error.retryable=response.status>=500||response.status===429;throw error;}return result;}
 async function uploadAttachmentWithRetry(key,id,file){if(window.BridgeSharedRelay)return uploadAttachment(key,id,file);let last;for(let attempt=0;attempt<3;attempt++){try{return await uploadAttachment(key,id,file);}catch(error){last=error;if(error.name==='AbortError'||error.retryable===false||attempt===2)throw error;await new Promise(resolve=>setTimeout(resolve,400*(attempt+1)));}}if(last instanceof TypeError)last.message=t('附件上传中断，请重试');throw last;}
 const attachments=new ChatAttachments({root:$('attachment-list'),button:$('attach-button'),input:$('attachment-input'),paste:$('message'),drop:$('composer'),preview:(key,id)=>{const at=key.indexOf('|'),host=key.slice(0,at),thread=key.slice(at+1);return hostUrl(sessionUrl(thread,'uploads/'+encodeURIComponent(id)+'/preview',host));},onChange:()=>{if(currentId)$('send').disabled=sending||!attachments.ready()||!state||state.loadingHistory||state.activating;},thumbnail:async(key,id,file)=>{
   const separator=key.indexOf('|'),host=key.slice(0,separator),thread=key.slice(separator+1);
   const image=await attachments.thumbnailBlob(file);
   const response=await fetch(sessionUrl(thread,'uploads/'+encodeURIComponent(id)+'/thumb',host)+'&width='+image.width+'&height='+image.height,{method:'POST',credentials:'same-origin',headers:{'Content-Type':image.mime,'X-CSRF-Token':csrf},body:image.data});
-  const result=await response.json();if(!response.ok){if(response.status===401)showLogin();throw Error(result.error||t('缩略图生成失败'));}return result;
+  const result=await response.json();if(!response.ok){if(response.status===401)authLost();throw Error(result.error||t('缩略图生成失败'));}return result;
 },upload:uploadAttachmentWithRetry});
 function visibleChat(){return currentId&&!workbench.isFileVisible&&!document.hidden&&$('app').classList.contains('chat-open')?chatKey():null;}
 function renderActivity(){for(const button of $('sessions').querySelectorAll('.session')){
@@ -109,10 +110,11 @@ async function openHarness(){
 $('harness-open').onclick=openHarness;
 async function enter(){desktopSessions.onListEnter();const chatLink=location.hash;$('desktop-backend').hidden=false;if(/(?:^|[?&])open=harness(?:&|$)/.test(location.search||'')){history.replaceState(null,'','/');await openHarness();}refreshComputer();$('login').hidden=true;$('app').hidden=false;$('bootstrap-status').hidden=true;window.BridgeBootstrap?.ready();document.dispatchEvent(new Event('bridge-authenticated'));await clientNavigation.refresh();accountsPanel?.refresh();const list=clientNavigation.provider==='codex'?loadList(true).catch(e=>toast(e.message)):Promise.resolve();await clientNavigation.openChatLink(chatLink,openChat);await list;}
 $('login-form').addEventListener('submit',async event=>{event.preventDefault();if(loginStatus.blocked)return;$('login-button').disabled=true;$('login-error').textContent='';try{const result=await api('/api/login',{username:$('username').value,password:$('password').value,remember:$('remember-login').checked});renderLoginStatus({attemptsRemaining:5,attemptLimit:5,blocked:false});csrf=result.csrf;$('password').value='';await enter();}catch(error){$('login-error').textContent=t(error.message);renderLoginStatus(error.loginStatus);}finally{$('login-button').disabled=loginStatus.blocked;}});
-$('logout').onclick=async()=>{await api('/api/logout',{});csrf='';state=null;currentId=null;$('messages').replaceChildren();$('approvals').replaceChildren();$('queued').replaceChildren();$('sessions').replaceChildren();$('message').value='';sessionStorage.clear();attachments.reset();sessionActivity.clear();recentInteractions.clear();showLogin();};
+$('logout').onclick=async()=>{await api('/api/logout',{});document.dispatchEvent(new Event('bridge-logged-out'));csrf='';state=null;currentId=null;$('messages').replaceChildren();$('approvals').replaceChildren();$('queued').replaceChildren();$('sessions').replaceChildren();$('message').value='';sessionStorage.clear();attachments.reset();sessionActivity.clear();recentInteractions.clear();showLogin();};
 function dateText(value){if(!value)return '';return new Date(value*1000).toLocaleDateString(BridgeI18n.locale(),{month:'numeric',day:'numeric'});}
 $('list-mode').value=localStorage.getItem('list-mode')||'recent';
 $('list-mode').onchange=()=>{localStorage.setItem('list-mode',$('list-mode').value);renderList();};
+if(typeof bindChatListToolbar==='function')bindChatListToolbar(document.querySelector('#sidebar .chat-list-toolbar'));
 function renderList(){
   const stamp=JSON.stringify([$('list-mode').value,currentId,currentHost,BridgeI18n.locale(),listRows.map(row=>[row.id,row.host,row.title,row.projectKey,row.projectName,row.hostLabel,row.recency])]);
   if(stamp===listRenderStamp&&$('sessions').children.length){renderActivity();return;}
@@ -155,7 +157,7 @@ async function loadList(reset=false){
   listRows=[...rows.values()];listRows.sort((a,b)=>b.recency-a.recency);
   listOffset=offset+result.sessions.length;listHasMore=result.sessions.length===100;
   $('host-errors').textContent=(result.unavailableHosts||[]).map(h=>h.label+'：'+h.error).join('\n');
-  $('host-errors').hidden=!(result.unavailableHosts||[]).length;renderList();refreshActivity();clientNavigation.acknowledgeList('codex',result);
+  $('host-errors').hidden=!(result.unavailableHosts||[]).length;renderList();refreshActivity();clientNavigation.acknowledgeList('codex',result);listSync.acknowledgeSuccess();
 }
 function loadMoreSessions(){
   const root=$('sessions');
@@ -257,7 +259,7 @@ $('notify-button').onclick=async()=>{
   $('notify-enabled').value=notificationState.requests||'inherit';
   $('notify-completion').value=notificationState.completion||'inherit';
   for(const id of ['notify-enabled','notify-completion','notify-save'])$(id).disabled=false;
-  $('notify-channel-status').textContent=t(notificationState.available?'通知通道已开启':'尚未配置通知通道，可在设置中配置 PushPlus，或在电脑端配置 Bark、ntfy。');
+  $('notify-channel-status').textContent=t(notificationState.available?'通知通道已开启':'尚未配置通知通道，请在第三方通知中配置。');
 };
 $('notify-form').onsubmit=async event=>{
   event.preventDefault();
@@ -600,34 +602,127 @@ $('rename-form').onsubmit=async event=>{
   }catch(error){$('rename-error').textContent=t(error.message);}
   finally{renameBusy=false;$('rename-save').disabled=false;}
 };
-let pushplusBusy=false;
-function renderPushplus(config){
-  $('pushplus-enabled').checked=!!config.pushplusEnabled;
+let notificationChannelBusy=false,selectedNotificationChannel='',notificationListRequest=0,notificationCommonLoaded=false;
+const notificationChannelDetails={
+  bark:{name:'Bark',enabled:'barkEnabled',server:'barkServer',secret:'barkKey',hasSecret:'hasBarkKey',clear:'clearBarkKey',secretLabel:'Device Key',help:'在 iPhone 的 Bark 中获取 Device Key，并填写服务地址。'},
+  ntfy:{name:'ntfy',enabled:'enabled',server:'server',secret:'token',hasSecret:'hasToken',clear:'clearToken',secretLabel:'Token',help:'在 Android 的 ntfy 中订阅相同服务和主题。公共主题可以留空 Token。'},
+  pushplus:{name:'PushPlus',enabled:'pushplusEnabled',secret:'pushplusToken',hasSecret:'hasPushplusToken',clear:'clearPushplusToken',secretLabel:'Token',help:'通过微信获取 PushPlus Token，保存后可以发送测试通知。'}
+};
+function renderNotificationChannel(config){
+  const channel=notificationChannelDetails[selectedNotificationChannel];
+  $('pushplus-heading').textContent=channel.name;
+  $('notification-channel-help').textContent=t(channel.help);
+  $('pushplus-help').hidden=selectedNotificationChannel!=='pushplus';
+  $('notification-channel-enable-label').textContent=t('启用 '+channel.name);
+  $('pushplus-enabled').checked=!!config[channel.enabled];
+  $('notification-server-row').hidden=!channel.server;
+  $('notification-topic-row').hidden=selectedNotificationChannel!=='ntfy';
+  if(channel.server){
+    $('notification-server-label').textContent=t(channel.name+' 服务地址');
+    $('notification-server').value=config[channel.server]||'';
+  }
+  if(selectedNotificationChannel==='ntfy')$('notification-topic').value=config.topic||'';
+  $('notification-secret-label').textContent=channel.secretLabel;
+  $('notification-clear-label').textContent=t('清除已保存的 '+channel.secretLabel);
   $('pushplus-token').value='';$('pushplus-clear').checked=false;
-  $('pushplus-token').placeholder=t(config.hasPushplusToken?'已保存，留空保留':'填写 PushPlus Token');
+  $('pushplus-token').placeholder=t(config[channel.hasSecret]?'已保存，留空保留':'填写 '+channel.name+' '+channel.secretLabel);
+}
+function renderNotificationCommon(config){
+  for(const id of ['security-enabled','address-enabled','include-title'])$('notification-'+id).checked=!!config[{'security-enabled':'securityEnabled','address-enabled':'addressEnabled','include-title':'includeTitle'}[id]];
+  $('notification-address-name').value=config.addressName||'';
+  $('notification-click-base').value=config.clickBase||'';
+}
+function notificationCommonControls(enabled){
+  for(const id of ['security-enabled','address-enabled','address-name','include-title','click-base','common-save'])$('notification-'+id).disabled=!enabled;
+}
+async function loadNotificationCommon(request){
+  notificationCommonLoaded=false;notificationCommonControls(false);
+  $('notification-common-retry').hidden=true;$('notification-common-error').textContent='';
+  try{
+    const config=await api('/api/notifications/channels/common');
+    if(request!==notificationListRequest||!$('notification-channels-dialog').open)return;
+    renderNotificationCommon(config);notificationCommonLoaded=true;notificationCommonControls(true);
+  }catch(error){
+    if(request!==notificationListRequest||!$('notification-channels-dialog').open)return;
+    $('notification-common-error').textContent=t(error.message);$('notification-common-retry').hidden=false;
+  }
+}
+async function loadNotificationChannelStatuses(request){
+  for(const name of Object.keys(notificationChannelDetails))$('notification-status-'+name).textContent=t('读取中');
+  const responses=await Promise.allSettled(Object.keys(notificationChannelDetails).map(name=>api('/api/notifications/channels/'+name)));
+  if(request!==notificationListRequest||!$('notification-channels-dialog').open)return;
+  for(const [index,name] of Object.keys(notificationChannelDetails).entries()){
+    const result=responses[index],channel=notificationChannelDetails[name];
+    const status=result.status==='rejected'?'读取失败':(name==='ntfy'?!!result.value.topic:!!result.value[channel.hasSecret])?(result.value[channel.enabled]?'已开启':'已关闭'):'未配置';
+    $('notification-status-'+name).textContent=t(status);
+  }
 }
 $('pushplus-settings').onclick=async()=>{
-  if(pushplusBusy)return;pushplusBusy=true;$('pushplus-settings').disabled=true;
-  try{renderPushplus(await api('/api/notifications/pushplus'));$('pushplus-error').textContent='';$('pushplus-dialog').showModal();}
-  catch(error){toast(error.message);}
-  finally{pushplusBusy=false;$('pushplus-settings').disabled=false;}
+  if(notificationChannelBusy)return;
+  const request=++notificationListRequest;
+  $('notification-channels-dialog').showModal();
+  await Promise.all([loadNotificationCommon(request),loadNotificationChannelStatuses(request)]);
 };
-async function pushplusAction(test){
-  if(pushplusBusy)return;pushplusBusy=true;
-  for(const id of ['pushplus-save','pushplus-test','pushplus-enabled','pushplus-token','pushplus-clear'])$(id).disabled=true;
-  $('pushplus-error').textContent='';
+$('notification-channels-dialog').addEventListener('close',()=>{notificationListRequest++;notificationCommonLoaded=false;notificationCommonControls(false);});
+$('notification-common-retry').onclick=()=>loadNotificationCommon(notificationListRequest);
+for(const button of document.querySelectorAll('[data-notification-channel]'))button.onclick=async()=>{
+  if(notificationChannelBusy)return;
+  const channel=button.dataset.notificationChannel;
+  const request=notificationListRequest;
+  notificationChannelBusy=true;button.disabled=true;
   try{
+    const config=await api('/api/notifications/channels/'+channel);
+    if(request!==notificationListRequest||!$('notification-channels-dialog').open)return;
+    selectedNotificationChannel=channel;
+    renderNotificationChannel(config);
+    $('pushplus-error').textContent='';
+    $('notification-channels-dialog').close();
+    $('pushplus-dialog').showModal();
+  }catch(error){if(request===notificationListRequest&&$('notification-channels-dialog').open)$('notification-common-error').textContent=t(error.message);}
+  finally{notificationChannelBusy=false;button.disabled=false;}
+};
+$('notification-channel-back').onclick=()=>{$('pushplus-dialog').close();$('pushplus-settings').onclick();};
+$('notification-common-save').onclick=async()=>{
+  if(notificationChannelBusy||!notificationCommonLoaded||!$('notification-channels-dialog').open)return;
+  notificationChannelBusy=true;$('notification-common-save').disabled=true;$('notification-common-error').textContent='';
+  const request=notificationListRequest;
+  try{
+    const config=await api('/api/notifications/channels/common',{
+      securityEnabled:$('notification-security-enabled').checked,
+      addressEnabled:$('notification-address-enabled').checked,
+      addressName:$('notification-address-name').value.trim(),
+      includeTitle:$('notification-include-title').checked,
+      clickBase:$('notification-click-base').value.trim()
+    });
+    if(request===notificationListRequest&&$('notification-channels-dialog').open){renderNotificationCommon(config);toast('通用通知设置已保存');}
+  }catch(error){if(request===notificationListRequest&&$('notification-channels-dialog').open)$('notification-common-error').textContent=t(error.message);}
+  finally{notificationChannelBusy=false;if(request===notificationListRequest&&notificationCommonLoaded)notificationCommonControls(true);}
+};
+async function notificationChannelAction(test){
+  if(notificationChannelBusy||!selectedNotificationChannel)return;
+  notificationChannelBusy=true;
+  const ids=['pushplus-save','pushplus-test','pushplus-enabled','notification-server','notification-topic','pushplus-token','pushplus-clear'];
+  for(const id of ids)$(id).disabled=true;
+  $('pushplus-error').textContent='';
+  const channel=notificationChannelDetails[selectedNotificationChannel];
+  try{
+    const url='/api/notifications/channels/'+selectedNotificationChannel;
     if(test){
-      await api('/api/notifications/pushplus/test',{});toast('PushPlus 已接受测试通知，请在手机确认是否收到');
+      await api(url+'/test',{});
+      toast(channel.name+' 已接受测试通知，请在手机确认是否收到');
     }else{
-      renderPushplus(await api('/api/notifications/pushplus',{pushplusEnabled:$('pushplus-enabled').checked,pushplusToken:$('pushplus-token').value.trim(),clearPushplusToken:$('pushplus-clear').checked}));
-      toast('PushPlus 配置已保存');if(currentId)await loadNotificationState(currentId,currentHost);
+      const body={[channel.enabled]:$('pushplus-enabled').checked,[channel.secret]:$('pushplus-token').value.trim(),[channel.clear]:$('pushplus-clear').checked};
+      if(channel.server)body[channel.server]=$('notification-server').value.trim();
+      if(selectedNotificationChannel==='ntfy')body.topic=$('notification-topic').value.trim();
+      renderNotificationChannel(await api(url,body));
+      toast(channel.name+' 配置已保存');
+      if(currentId)await loadNotificationState(currentId,currentHost);
     }
   }catch(error){$('pushplus-error').textContent=t(error.message);}
-  finally{pushplusBusy=false;for(const id of ['pushplus-save','pushplus-test','pushplus-enabled','pushplus-token','pushplus-clear'])$(id).disabled=false;}
+  finally{notificationChannelBusy=false;for(const id of ids)$(id).disabled=false;}
 }
-$('pushplus-form').onsubmit=event=>{event.preventDefault();return pushplusAction(false);};
-$('pushplus-test').onclick=()=>pushplusAction(true);
+$('pushplus-form').onsubmit=event=>{event.preventDefault();return notificationChannelAction(false);};
+$('pushplus-test').onclick=()=>notificationChannelAction(true);
 
 const accountsPanel=window.BridgeSharedRelay||typeof AccountsPanel==='undefined'?null:new AccountsPanel({root:$('accounts-content'),toolbar:$('accounts-heading'),read:()=>api('/api/accounts'),request:({action,...value})=>action==='ignoreSubmission'?ignoreSubmission(value):api(action==='account'?'/api/accounts/account':action==='details'?'/api/accounts/details':action==='reminders'?'/api/accounts/reminders':action==='checkDesktopUpdate'||action==='requestDesktopUpdate'?'/api/accounts/desktop-update':'/api/accounts/switch',action==='checkDesktopUpdate'||action==='requestDesktopUpdate'?{action,...value}:value),onReset:async()=>{$('account-details').open=true;await accountPanel.refresh();$('account-content').querySelector('.account-cards')?.scrollIntoView({block:'nearest'});},onChanged:()=>{accountPanel.clear();resetModelCatalog();},onUpdate:value=>{accountPanel.schedule();const official=value.current?.kind==='chatgpt';$('account-button').hidden=!official;if(!official)$('account-details').open=false;const label='账号管理';$('accounts-button').setAttribute('data-i18n',label);$('accounts-button').textContent=t(label);}});
 function openCurrentAccounts(){

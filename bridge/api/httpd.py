@@ -19,7 +19,7 @@ from bridge.features.workspace.uploads import MAX_FILE
 from bridge.features.workspace.workspace import MAX_TRANSFER, Workspace
 from bridge.features.workspace.preferences import transfer_settings
 from bridge.features.workspace.files import workspace_relative_path
-from bridge.features.notifications.channels import settings as notification_settings, save_settings as save_notification_settings, publish_pushplus
+from bridge.features.notifications.channels import settings as notification_settings, save_settings as save_notification_settings, publish, publish_bark, publish_pushplus
 from socketserver import TCPServer
 from urllib.parse import parse_qs, urlsplit, quote
 
@@ -183,7 +183,7 @@ class Handler(BaseHTTPRequestHandler):
         secure = "; Secure" if self.headers.get("Host") in self.server.secure_hosts else ""
         age = 0 if clear else self.server.auth.cookie_age(token)
         lifetime = f"; Max-Age={age}" if age is not None else ""
-        return f"{Auth.COOKIE}={token}; Path=/; HttpOnly; SameSite=Strict{lifetime}{secure}"
+        return f"{self.server.auth.cookie_name}={token}; Path=/; HttpOnly; SameSite=Strict{lifetime}{secure}"
 
     def client(self):
         return self.server.auth.client(self.client_address[0], self.headers, self.headers.get('Host') in self.server.secure_hosts)
@@ -195,7 +195,13 @@ class Handler(BaseHTTPRequestHandler):
         cookie = SimpleCookie()
         try:
             cookie.load(self.headers.get("Cookie", ""))
-            return cookie[Auth.COOKIE].value if Auth.COOKIE in cookie else ""
+            name = self.server.auth.cookie_name
+            if name in cookie:
+                return cookie[name].value
+            # Legacy cookies are accepted only while their token belongs to
+            # this gateway. A successful response migrates to the new name.
+            legacy = cookie[Auth.COOKIE].value if Auth.COOKIE in cookie else ""
+            return legacy if legacy and self.server.auth.get(legacy) else ""
         except Exception:
             return ""
 
@@ -294,7 +300,7 @@ class Handler(BaseHTTPRequestHandler):
                 discovery = getattr(self.server, 'connection_discovery', None)
                 return self.output(200, {"uiLanguage": self.server.ui_language(), "authenticated": bool(session), "trustedDevice": bool(session and session.get("trustedDevice")), "csrf": session["csrf"] if session else None,
                                          "loginStatus": self.server.auth.login_status(self.client()["ip"]),
-                                         "instanceId": self.server.instance_id,
+                                         "instanceId": self.server.instance_id, "cookieName": self.server.auth.cookie_name,
                                          **({"computer": {"name": socket.gethostname(), "platform": platform.system()}} if session else {}),
                                          **({'connection': discovery.descriptor(self.token())} if session and discovery else {}),
                                          "notifications": self.server.notifications is not None,
@@ -554,10 +560,32 @@ class Handler(BaseHTTPRequestHandler):
                 if self.server.notifications is None:
                     raise ValueError('当前网关未启用通知服务')
                 return self.output(200, self.server.notifications.defaults(self.read_json() if write else None))
-            if path in ('/api/notifications/pushplus', '/api/notifications/pushplus/test'):
+            if path == '/api/notifications/channels/common':
                 manager = self.server.notifications
                 if manager is None:
                     raise ValueError('当前网关未启用通知服务')
+                fields = ('includeTitle', 'clickBase', 'securityEnabled', 'addressEnabled', 'addressName')
+                with manager.lock:
+                    if write:
+                        body = self.read_json()
+                        if not isinstance(body, dict) or set(body) - set(fields):
+                            raise ValueError('通知配置格式不正确')
+                        config = save_notification_settings(manager.data_dir, body)
+                    else:
+                        config = notification_settings(manager.data_dir)
+                    return self.output(200, {key: config[key] for key in fields})
+            channel_parts = path.removeprefix('/api/notifications/channels/').split('/') if path.startswith('/api/notifications/channels/') else []
+            channel = channel_parts[0] if channel_parts and channel_parts[0] in ('ntfy', 'bark', 'pushplus') and channel_parts[1:] in ([], ['test']) else None
+            if channel or path in ('/api/notifications/pushplus', '/api/notifications/pushplus/test'):
+                manager = self.server.notifications
+                if manager is None:
+                    raise ValueError('当前网关未启用通知服务')
+                selected = channel or 'pushplus'
+                fields = {'ntfy': ('enabled', 'server', 'topic', 'token', 'clearToken'),
+                          'bark': ('barkEnabled', 'barkServer', 'barkKey', 'clearBarkKey'),
+                          'pushplus': ('pushplusEnabled', 'pushplusToken', 'clearPushplusToken')}[selected]
+                secret, marker = {'ntfy': ('token', 'hasToken'), 'bark': ('barkKey', 'hasBarkKey'),
+                                  'pushplus': ('pushplusToken', 'hasPushplusToken')}[selected]
                 with manager.lock:
                     config = notification_settings(manager.data_dir)
                     if path.endswith('/test'):
@@ -565,17 +593,23 @@ class Handler(BaseHTTPRequestHandler):
                             return self.output(405, {'error': '需要 POST 请求'})
                         self.read_json()
                         try:
-                            publish_pushplus(config, 'Codex 手机通知测试', '收到这条消息表示 PushPlus 通道已连通。')
+                            sender = {'ntfy': publish, 'bark': publish_bark, 'pushplus': publish_pushplus}[selected]
+                            name = {'ntfy': 'ntfy', 'bark': 'Bark', 'pushplus': 'PushPlus'}[selected]
+                            sender(config, 'Codex 手机通知测试', f'收到这条消息表示 {name} 通道已连通。')
                         except Exception:
-                            raise ValueError('PushPlus 测试失败，请检查 Token 和网络') from None
+                            message = 'PushPlus 测试失败，请检查 Token 和网络' if not channel else f'{name} 测试失败，请检查服务地址、认证和网络'
+                            raise ValueError(message) from None
                         return self.output(200, {'ok': True})
                     if write:
                         body = self.read_json()
-                        if set(body) - {'pushplusEnabled', 'pushplusToken', 'clearPushplusToken'}:
-                            raise ValueError('PushPlus 配置格式不正确')
+                        allowed = set(fields)
+                        if not isinstance(body, dict) or set(body) - allowed or any(
+                                key in body and not isinstance(body[key], bool) for key in allowed if key.startswith('clear')):
+                            raise ValueError('通知配置格式不正确' if channel else 'PushPlus 配置格式不正确')
                         config = save_notification_settings(manager.data_dir, body)
-                    return self.output(200, {'pushplusEnabled': config['pushplusEnabled'],
-                                             'hasPushplusToken': bool(config['pushplusToken'])})
+                    visible = {key: config[key] for key in fields if key != secret and not key.startswith('clear')}
+                    visible[marker] = bool(config[secret])
+                    return self.output(200, visible)
             if desktop_workspace:
                 if self.server.desktop_sessions is None:
                     return self.output(503, {'error': '桌面会话接入不可用'})

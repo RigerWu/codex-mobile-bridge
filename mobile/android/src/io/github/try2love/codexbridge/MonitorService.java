@@ -29,11 +29,12 @@ public final class MonitorService extends Service {
   SharedPreferences p=getSharedPreferences("bridge",0);final long ticket;final EventClient.Read pending=new EventClient.Read();
   synchronized(foregroundLock){if(!visible||activeRead!=null)return;ticket=foregroundEpoch;activeRead=pending;if(epoch!=ticket){epoch=ticket;baselined.clear();}}
   try{for(String origin:new java.util.HashSet<>(p.getStringSet("origins",java.util.Collections.emptySet()))){
+   EventClient.setName(origin,p.getString("cookieName:"+origin,null));
    synchronized(foregroundLock){if(!current(pending,ticket))return;if(!p.getStringSet("origins",java.util.Collections.emptySet()).contains(origin))continue;}
-   String binding=EventClient.sessionCookie(android.webkit.CookieManager.getInstance().getCookie(origin+"/"));
+   String binding=EventClient.sessionCookie(android.webkit.CookieManager.getInstance().getCookie(origin+"/"),origin);
    try{JSONObject data=EventClient.read(origin,Math.max(0,p.getLong("cursor:"+origin,0)),pending);
     synchronized(foregroundLock){if(!current(pending,ticket))return;if(!p.getStringSet("origins",java.util.Collections.emptySet()).contains(origin))continue;
-    synchronized(EventClient.class){if(!binding.equals(EventClient.sessionCookie(android.webkit.CookieManager.getInstance().getCookie(origin+"/"))))continue;
+    synchronized(EventClient.class){if(!binding.equals(EventClient.sessionCookie(android.webkit.CookieManager.getInstance().getCookie(origin+"/"),origin)))continue;
     ComputerNotifications.update(origin,binding,data);if(!data.optBoolean("enabled"))continue;
     String key="cursor:"+origin,stream=data.getString("streamId");long previous=p.getLong(key,-1);
     boolean ready=baselined.contains(origin)&&stream.equals(p.getString("stream:"+origin,""));

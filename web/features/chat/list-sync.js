@@ -1,11 +1,11 @@
 'use strict';
 
 class ListSync {
-  constructor({root,status,refresh,visible,ready}) {
-    Object.assign(this,{root,status,refresh,visible,ready});this.busy=false;this.frame=0;
+  constructor({root,status,refresh,visible,ready,automatic=true}) {
+    Object.assign(this,{root,status,refresh,visible,ready});this.busy=false;this.frame=0;this.revision=0;this.automaticFailures=0;this.failureVisible=false;
     status.onclick=()=>this.update(true);
     const resume=()=>{if(!document.hidden)this.update();};
-    document.addEventListener('visibilitychange',resume);window.addEventListener('focus',resume);
+    if(automatic){document.addEventListener('visibilitychange',resume);window.addEventListener('focus',resume);}
     root.addEventListener('touchstart',event=>{
       if(this.start)this.endPull(true);
       this.start=!this.busy&&!document.hidden&&visible()&&ready()&&root.scrollTop<=0&&event.touches.length===1?{x:event.touches[0].clientX,y:event.touches[0].clientY}:null;this.distance=0;
@@ -26,7 +26,7 @@ class ListSync {
     },{passive:false});
     root.addEventListener('touchend',()=>this.endPull());
     root.addEventListener('touchcancel',()=>this.endPull(true));
-    this.schedule();
+    if(automatic)this.schedule();
   }
   setPull(distance,dragging=false){this.root.classList.toggle('list-pulling',dragging);this.root.style.setProperty('--list-pull',distance+'px');}
   show(text,pull=0){
@@ -44,16 +44,23 @@ class ListSync {
     if(this.frame)cancelAnimationFrame(this.frame);this.frame=0;
     if(refresh)this.update(true);else{this.setPull(0);this.hide();}
   }
+  reset(){this.revision++;this.busy=false;this.automaticFailures=0;this.failureVisible=false;this.recoveredWhileBusy=false;this.endPull(true);this.setPull(0);clearTimeout(this.hideTimer);clearTimeout(this.dismissTimer);this.status.classList.remove('list-sync-visible');this.status.hidden=true;}
+  acknowledgeSuccess(){this.automaticFailures=0;if(this.failureVisible){this.failureVisible=false;if(this.busy)this.recoveredWhileBusy=true;else this.hide();}}
+  reportFailure(error,explicit=false){
+    if(error?.status===401){this.failureVisible=false;this.hide();return;}
+    this.automaticFailures++;
+    if(explicit||this.automaticFailures>=3||!this.root.children?.length){this.failureVisible=true;this.show('列表暂未更新，点击重试');}
+  }
   schedule(){clearTimeout(this.timer);this.timer=setTimeout(async()=>{await this.update();this.schedule();},15000);}
   async update(explicit=false){
     if(this.start||this.busy)return;
     if(document.hidden||!this.visible()||!this.ready()||(!explicit&&this.root.scrollTop>24)){
       if(explicit){this.setPull(0);this.hide();}return;
     }
-    this.busy=true;
+    this.busy=true;this.recoveredWhileBusy=false;const revision=this.revision;
     if(explicit){this.setPull(32);this.show('正在刷新聊天列表…',32);}
-    try{await this.refresh();if(explicit){this.setPull(0);this.show('聊天列表已更新');this.hideTimer=setTimeout(()=>this.hide(),500);}}
-    catch(e){this.setPull(0);this.show('列表暂未更新，点击重试');}
-    finally{this.busy=false;}
+    try{const updated=await this.refresh();if(revision!==this.revision)return;if(updated===false){this.setPull(0);this.hide();return;}const hadFailure=this.failureVisible;this.acknowledgeSuccess();if(explicit){this.setPull(0);this.show('聊天列表已更新');this.hideTimer=setTimeout(()=>this.hide(),500);}else if(hadFailure||this.recoveredWhileBusy)this.hide();}
+    catch(e){if(revision===this.revision){this.setPull(0);this.reportFailure(e,explicit);}}
+    finally{if(revision===this.revision){this.busy=false;this.recoveredWhileBusy=false;}}
   }
 }

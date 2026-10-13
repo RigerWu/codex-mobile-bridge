@@ -126,8 +126,8 @@ values.put("请填写完整的 HTTPS 网关地址，或局域网 HTTP 地址，�
   values.put("返回电脑列表","Back to computers");
   values.put("账号与接入","Accounts and connections");
   values.put("外观与显示","Appearance");
-  values.put("隐藏APP","Hide apps");
-  values.put("显示APP","Show apps");
+  values.put("隐藏底部 APP 图标","Hide bottom app icons");
+  values.put("显示底部 APP 图标","Show bottom app icons");
   values.put("刷新页面","Reload page");
   values.put("好","OK");
   values.put("电脑上的工作，\n带在身边。","Your computer’s work,\nalways with you.");
@@ -183,7 +183,7 @@ values.put("请填写完整的 HTTPS 网关地址，或局域网 HTTP 地址，�
   values.put("当前电脑","Current computer");
   values.put("尚未选择电脑","No computer selected");
   values.put("返回首页扫码或输入网关地址。","Return home to scan or enter a gateway address.");
-  values.put("移除这台电脑","Remove this computer");
+  values.put("移除这台电脑","Remove");
   values.put("此预览尚未配置系统推送项目。当前仅同步收件箱；配置 Firebase 或厂商推送后才能启用后台任务提醒。","System push is not configured. Background task alerts require Firebase or a device vendor’s push service.");
   values.put("手机通知测试","Mobile notification test");
   values.put("本机通知已开启","Local notifications are enabled");

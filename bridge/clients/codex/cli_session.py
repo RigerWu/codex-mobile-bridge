@@ -415,7 +415,7 @@ class CliSessions:
             self.states.pop(thread_id, None)
             self.requests.pop(thread_id, None)
             self.consumed_requests.pop(thread_id, None)
-        self.on_disconnect()
+        self.on_disconnect(thread_id)
 
     def close(self):
         self.client.close()

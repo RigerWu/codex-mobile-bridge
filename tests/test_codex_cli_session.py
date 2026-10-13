@@ -54,7 +54,9 @@ class CliSessionTests(unittest.TestCase):
         (self.home / 'app-server-control').mkdir()
         (self.home / 'app-server-control/app-server-control.sock').touch()
         self.states = []
-        self.sessions = CliSessions(self.home, lambda tid, state: self.states.append((tid, state)), lambda: None)
+        self.disconnections = []
+        self.sessions = CliSessions(self.home, lambda tid, state: self.states.append((tid, state)),
+                                    lambda tid=None: self.disconnections.append(tid))
         self.fake = FakeClient(self.home)
         self.sessions.client = self.fake
 
@@ -127,9 +129,22 @@ class CliSessionTests(unittest.TestCase):
     def test_unload_revokes_write_access(self):
         self.sessions.attach('thread-a', explicit=True)
         self.sessions._event({'method': 'thread/closed', 'params': {'threadId': 'thread-a'}})
+        self.assertEqual(self.disconnections, ['thread-a'])
         with self.assertRaises(AppServerUnavailable):
             self.sessions.call('thread-a', 'thread-follower-interrupt-turn',
                                {'expectedTurnId': 'turn-1'})
+
+    def test_unloading_one_thread_keeps_another_joined(self):
+        self.sessions.attach('thread-a', explicit=True)
+        self.fake.thread['id'] = 'thread-b'
+        self.sessions.attach('thread-b', explicit=True)
+        self.sessions._event({'method': 'thread/closed', 'params': {'threadId': 'thread-a'}})
+        self.assertEqual(self.disconnections, ['thread-a'])
+        self.assertNotIn('thread-a', self.sessions.joined)
+        self.assertIn('thread-b', self.sessions.joined)
+        self.assertEqual(self.sessions.call('thread-b', 'thread-follower-interrupt-turn',
+                                            {'expectedTurnId': 'turn-2'}), {})
+        self.assertIn(('turn/interrupt', {'threadId': 'thread-b', 'turnId': 'turn-2'}), self.fake.sent)
 
     def test_provider_change_revokes_write_access(self):
         self.sessions.attach('thread-a', explicit=True)

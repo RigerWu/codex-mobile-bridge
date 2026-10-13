@@ -1,8 +1,8 @@
 # Agent Note: Codex CLI discovery and explicit native access
 
-The model, Skill, plan and local Goal restrictions are superseded by [CLI session controls](2026-10-14-cli-session-controls.md); unrelated permissions, editing/forking, rename and side-chat restrictions remain.
-
 Status: implemented
+
+The model, Skill, plan and local Goal restrictions are superseded by [CLI session controls](2026-10-14-cli-session-controls.md); permission restrictions are superseded by [CLI permission switching](2026-10-14-cli-permission-switching.md). Editing/forking, rename and side-chat restrictions remain.
 
 The source-based Desktop exclusion below is partially superseded by [existing-owner routing](../bug-fix/2026-10-14-cli-existing-owner.md): CLI origin is provenance, and an already active Desktop owner is reused without creating a replacement runtime.
 

@@ -2,6 +2,8 @@
 
 Status: implemented
 
+The permission restriction below is superseded by [CLI permission switching](2026-10-14-cli-permission-switching.md). Model, Skill, plan, Goal and owner boundaries remain.
+
 ## Problem
 
 The previous owner-routing fix makes CLI-origin chats writable but leaves all configuration behind an origin-based desktop-only guard. App-adopted chats lose controls already supported by their owner; native CLI exposes only basic conversation operations. A connected label is not sufficient acceptance for the requested CLI workflow.
@@ -24,6 +26,6 @@ Leaving all CLI controls disabled limits adapter work but does not meet the user
 
 Service tests cover App-owned CLI capability propagation and same-owner operations, native routing, passive non-activation, unrelated-control rejection and unknown-write handling. Real isolated CLI 0.162.1 and a local Responses fixture verify model/effort, Skill input, plan/default turns and Goal state changes. Browser actions verify model changes, Skill selection, plan send and Goal create/pause/edit/resume/clear; a 390 px English viewport has no horizontal overflow. Native checks confirm Goal activation switches out of plan mode and edited goals reach execution with provider/cwd/model/effort retained. Goal resume can already be executing natively while a supplementary activation is queued; verification checks actual state rather than requiring an active goal to become idle. Full source and packaged acceptance are recorded in [VERIFICATION.md](../../../../VERIFICATION.md).
 
-## Risks
+## Consequences
 
 Native methods and feature availability differ by runtime version and policy. Unsupported capability must remain unavailable with a useful explanation rather than bypassing checks. Local mock inference verifies transport and native state, not external-model quality; each platform and arbitrary SSH environment needs separate native acceptance.

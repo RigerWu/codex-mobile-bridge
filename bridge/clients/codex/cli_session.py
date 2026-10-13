@@ -437,6 +437,12 @@ class CliSessions:
         # gateway computer's desktop UI preferences.
         options = linux_permissions.permission_options(facts, {'fullAccess': True},
             linux_permissions.current_mode(state), native=False)
+        native_reasons = {
+            linux_permissions.UNKNOWN: '无法确认当前 CLI 的权限能力，请检查 CLI 运行时与策略后刷新。',
+            linux_permissions.PROFILE_UNAVAILABLE: '当前 CLI 运行时未提供此权限配置，请更新 Codex CLI 后刷新。',
+        }
+        for option in options['options']:
+            option['reason'] = native_reasons.get(option['reason'], option['reason'])
         return facts, options
 
     def get_kind(self, thread_id, kind, refresh=False, query='', offset=0, limit=200, ids=None):

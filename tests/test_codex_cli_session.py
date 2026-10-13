@@ -78,7 +78,7 @@ class CliSessionTests(unittest.TestCase):
                                               AppServerUnavailable('offline'), info])
         with patch.object(self.sessions, '_start_daemon') as start:
             self.assertEqual(self.sessions.attach('thread-a', explicit=True)['id'], 'thread-a')
-        start.assert_called_once_with(None)
+        start.assert_called_once_with()
         self.assertEqual(self.fake.connect.call_count, 3)
 
     def test_explicit_attach_resumes_saved_thread_and_preserves_identity(self):
@@ -298,7 +298,7 @@ class CliSessionTests(unittest.TestCase):
         report = {'status': 'started', 'socketPath': self.fake.socket_path}
         with patch('bridge.clients.codex.cli_session.subprocess.run',
                    return_value=subprocess.CompletedProcess([], 0, json.dumps(report))) as run:
-            self.sessions._start_daemon(str(managed))
+            self.sessions._start_daemon()
         self.assertEqual(run.call_args.args[0], [str(managed), 'app-server', 'daemon', 'start'])
         self.assertEqual(run.call_args.kwargs['env']['CODEX_HOME'], str(self.home))
 

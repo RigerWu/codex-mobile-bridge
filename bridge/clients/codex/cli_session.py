@@ -65,13 +65,10 @@ def _ssh_daemon_start_command(alias):
              'test -e "$state/app-server-updater.pid" || test -e "$state/app-server-updater.stderr.log"; '
              'then root="$home/packages/standalone"; '
              'else root="$home/packages/app-server-daemon"; fi; '
-             'test -x "$root/current/bin/codex" || test -x "$root/current/codex" || exit 73; '
-             'if command -v codex >/dev/null 2>&1; then exec codex app-server daemon start; '
-             'elif test -x "$HOME/.local/bin/codex"; then '
-             'exec "$HOME/.local/bin/codex" app-server daemon start; '
-             'elif test -x "$root/current/bin/codex"; then '
+             'if test -x "$root/current/bin/codex"; then '
              'exec "$root/current/bin/codex" app-server daemon start; '
-             'else exec "$root/current/codex" app-server daemon start; fi')
+             'elif test -x "$root/current/codex"; then '
+             'exec "$root/current/codex" app-server daemon start; else exit 73; fi')
     command[-1] = 'exec "$SHELL" -lc ' + shlex.quote(inner)
     return command
 
@@ -136,7 +133,6 @@ class CliSessions:
             return self._attach_explicit(thread_id)
 
     def _connect_explicit(self):
-        executable = None
         if self.alias is None and isinstance(self.client, CodexAppServer):
             executable = _local_cli(self.home, self.configured_cli)
             self.client.command[0] = executable
@@ -147,16 +143,17 @@ class CliSessions:
                 try:
                     return self.client.connect()
                 except AppServerUnavailable:
-                    self._start_daemon(executable if self.alias is None else None)
+                    self._start_daemon()
                     return self.client.connect()
 
-    def _start_daemon(self, executable):
+    def _start_daemon(self):
         if self.alias is None:
-            if _managed_cli(self.home) is None:
+            managed = _managed_cli(self.home)
+            if managed is None:
                 raise AppServerUnavailable('Installed Codex daemon package is required')
             environment = os.environ.copy()
             environment['CODEX_HOME'] = str(self.home)
-            command = [executable, 'app-server', 'daemon', 'start']
+            command = [str(managed), 'app-server', 'daemon', 'start']
         else:
             command = _ssh_daemon_start_command(self.alias)
             environment = None

@@ -1,5 +1,6 @@
 import tempfile
 import json
+import os
 import shlex
 import subprocess
 import threading
@@ -262,6 +263,19 @@ class CliSessionTests(unittest.TestCase):
         remote.client = FakeClient(self.home)
         self.assertTrue(remote.available())
         self.assertEqual(remote.attach('thread-a', explicit=True)['id'], 'thread-a')
+
+    def test_ssh_proxy_falls_back_to_selected_managed_package_without_path_cli(self):
+        managed = self.home / 'packages/app-server-daemon/current/bin/codex'
+        managed.parent.mkdir(parents=True)
+        managed.write_text('#!/bin/sh\nprintf "%s\\n" "$@"\n')
+        managed.chmod(0o700)
+        inner = shlex.split(_ssh_proxy_command('saved-host')[-1])[3]
+        environment = os.environ.copy()
+        environment.update(HOME=str(self.home), CODEX_HOME=str(self.home), PATH='')
+        result = subprocess.run(['/bin/sh', '-c', inner], env=environment,
+                                capture_output=True, text=True, timeout=2)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(result.stdout.splitlines(), ['app-server', 'proxy'])
 
     def test_packaged_app_finds_existing_daemon_cli_without_path(self):
         runtime = self.home / 'packages/app-server-daemon/current/bin/codex'

@@ -237,6 +237,13 @@ class CliSessionTests(unittest.TestCase):
         self.assertTrue(indexed['ask']['available'])
         self.assertTrue(indexed['auto-review']['available'])
         self.assertFalse(indexed['full-access']['available'])
+        self.fake.request = lambda method, params, **kwargs: (
+            original(method, params, **kwargs) if method == 'thread/read' else
+            (_ for _ in ()).throw(AppServerUnsupported('old runtime')))
+        _, unavailable = self.sessions.permission_options('thread-a')
+        self.assertFalse(unavailable['options'][0]['available'])
+        self.assertIn('CLI', unavailable['options'][0]['reason'])
+        self.assertNotIn('桌面', unavailable['options'][0]['reason'])
 
     def test_native_catalog_and_skill_input_use_joined_daemon(self):
         import hashlib
@@ -343,6 +350,32 @@ class CliSessionTests(unittest.TestCase):
         self.assertEqual(state['currentPermissions']['approvalPolicy'], 'never')
         self.assertEqual(state['currentPermissions']['activePermissionProfile']['id'], ':danger-full-access')
         self.assertEqual(self.sessions.refresh('thread-a')['currentPermissions']['sandboxPolicy']['type'], 'dangerFullAccess')
+
+    def test_reconnect_uses_new_effective_permissions_without_stale_settings(self):
+        original = self.fake.request
+        resume_count = 0
+        def request(method, params, **kwargs):
+            nonlocal resume_count
+            result = original(method, params, **kwargs)
+            if method == 'thread/resume':
+                resume_count += 1
+                full = resume_count == 1
+                result.update({'approvalPolicy': 'never' if full else 'on-request',
+                               'approvalsReviewer': 'user',
+                               'sandbox': {'type': 'dangerFullAccess' if full else 'workspaceWrite'},
+                               'activePermissionProfile': {'id': ':danger-full-access' if full else ':workspace'}})
+            return result
+        self.fake.request = request
+        self.sessions.attach('thread-a', explicit=True)
+        self.sessions._event({'method': 'thread/settings/updated', 'params': {
+            'threadId': 'thread-a', 'threadSettings': {
+                'approvalPolicy': 'never', 'approvalsReviewer': 'user',
+                'sandboxPolicy': {'type': 'dangerFullAccess'},
+                'activePermissionProfile': {'id': ':danger-full-access'}}}})
+        self.sessions._disconnect()
+        state = self.sessions.attach('thread-a', explicit=True)
+        self.assertEqual(state['currentPermissions']['activePermissionProfile']['id'], ':workspace')
+        self.assertNotIn('approvalPolicy', state.get('latestThreadSettings') or {})
 
     def test_goal_policy_error_does_not_block_baseline_attach(self):
         original = self.fake.request

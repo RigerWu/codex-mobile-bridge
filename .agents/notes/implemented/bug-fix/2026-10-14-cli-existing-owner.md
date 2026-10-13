@@ -1,8 +1,8 @@
 # Agent Note: Route CLI-origin chats to their existing execution owner
 
-The model, Skill, plan and local Goal restrictions are superseded by [CLI session controls](../feature/2026-10-14-cli-session-controls.md); unrelated permissions, editing/forking, rename and side-chat restrictions remain.
-
 Status: implemented
+
+The model, Skill, plan and local Goal restrictions are superseded by [CLI session controls](../feature/2026-10-14-cli-session-controls.md); permission restrictions are superseded by [CLI permission switching](../feature/2026-10-14-cli-permission-switching.md). Editing/forking, rename and side-chat restrictions remain.
 
 ## Problem
 

@@ -868,7 +868,7 @@ $('permissions-button').onclick=()=>{
   head.append(el('h2','',t('会话权限')));const close=el('button','icon-button','×');close.type='button';close.setAttribute('aria-label',t('关闭'));close.onclick=()=>dialog.close();head.append(close);dialog.append(head,el('p','muted',t('保存后从下一轮生效')));
   if(state.linuxPermissionChecks===true||state.access?.runtime==='cli'){
     document.body.append(dialog);dialog.addEventListener('close',()=>dialog.remove());dialog.showModal();
-    permissionPicker(dialog,{load:()=>api(sessionUrl(id,'permissions',host)),
+    permissionPicker(dialog,{nativeCli:state.access?.runtime==='cli',load:()=>api(sessionUrl(id,'permissions',host)),
       save:preset=>api(sessionUrl(id,'permissions',host),{preset,confirmed:preset==='full-access'}),
       isCurrent:()=>currentId===id&&currentHost===host&&state?.connected===true,onSaved:()=>toast('权限已更新')});
     return;

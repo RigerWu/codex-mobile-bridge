@@ -5,17 +5,24 @@
 
 # Codex Mobile Bridge · A remote workbench for desktop agents
 
-> **v2.0.2 stable**: [Release and downloads](https://github.com/try2love/codex-mobile-bridge/releases/tag/v2.0.2) · [Full release notes](RELEASE_NOTES.md) · [Mobile installation](mobile/README.md). This release improves file links, mobile file opening, login startup and chat-list scrolling and refresh for the shared Codex, Claude Desktop and DeepSeek Harness gateway.
+> **v2.0.3 (stable)**: [Release page](https://github.com/try2love/codex-mobile-bridge/releases/tag/v2.0.3) · [Full release notes](RELEASE_NOTES.md) · [Mobile installation](mobile/README.md). This release adds Android in-app updates with download choices and mobile/Web third-party notification settings, and improves search, landscape layouts and connection recovery.
 
 [简体中文](README.md) · [English](README_EN.md)
 
-**[Product guide and interactive demos ↗](https://try2love.github.io/codex-mobile-bridge/?lang=en)** · **[Download desktop and mobile apps](https://github.com/try2love/codex-mobile-bridge/releases/tag/v2.0.2)**
+**[Product guide and interactive demos ↗](https://try2love.github.io/codex-mobile-bridge/?lang=en)** · **[Download desktop and mobile apps](https://github.com/try2love/codex-mobile-bridge/releases/tag/v2.0.3)**
 
 [![Desktop gateway: clients and access, with demo data](site/assets/v2-clients.png)](https://try2love.github.io/codex-mobile-bridge/?lang=en)
 
 Continue **Codex, Claude Code / Cowork and DeepSeek Harness** sessions from a phone app or browser. Each client keeps its own chats, accounts and workspaces. Create chats within the selected client, read replies, send attachments, select available models/reasoning and respond to approval requests.
 
 Tasks run on the original computer, or the original SSH host for Codex remote sessions. Bridge reuses the desktop session, authentication and execution environment. Your phone does not need the same model-service account: use gateway login or revocable QR pairing.
+
+## What's new in v2.0.3
+
+- **Android updates:** download and install updates in the app, choose phone or computer downloads, and resume installation or export a completed APK. See [mobile installation and upgrades](mobile/README.md).
+- **Third-party notifications:** configure, save and test Bark for iPhone, ntfy for Android or PushPlus for WeChat on mobile or Web, using the same settings as the desktop gateway.
+- **Search and layout:** keep Search visible, size filters to their contents, improve English and landscape/tablet lists, add Claude/DSH pull-to-refresh and clear stale errors after recovery.
+- **Connections and workbench:** securely retain valid mobile bindings for sign-in recovery, improve Claude reconnection and setup, clarify settings and file-transfer actions, and preserve occupied split panes when closing tool tabs.
 
 ## The v2 workbench
 
@@ -47,18 +54,18 @@ Supports macOS, Windows and experimental Ubuntu x64/ARM64. See the [Linux guide]
 
 ## Download and quick start (recommended)
 
-Download the desktop App for everyday use. **No deployment Agent, Python, Node.js or terminal is required.** The current release is **v2.0.2 (stable)**.
+Download the desktop App for everyday use. **No deployment Agent, Python, Node.js or terminal is required.** The links below target **v2.0.3 (stable)**.
 
 | Platform | Download | Open |
 | --- | --- | --- |
-| Windows x64 (recommended installer) | [Download Setup.exe](https://github.com/try2love/codex-mobile-bridge/releases/download/v2.0.2/Codex-Mobile-Bridge-2.0.2-Windows-x64-Setup.exe) | Run the installer and launch from the shortcut |
-| Windows x64 (no installation) | [Download full ZIP](https://github.com/try2love/codex-mobile-bridge/releases/download/v2.0.2/Codex-Mobile-Bridge-2.0.2-Windows-x64.zip) | Extract the entire ZIP and run `Codex Mobile Bridge.exe`; do not move just the exe |
-| macOS Apple Silicon (M series) | [Download arm64 DMG](https://github.com/try2love/codex-mobile-bridge/releases/download/v2.0.2/Codex-Mobile-Bridge-2.0.2-macOS-arm64.dmg) | Open the DMG and drag the App to Applications |
-| macOS Intel | [Download x64 DMG](https://github.com/try2love/codex-mobile-bridge/releases/download/v2.0.2/Codex-Mobile-Bridge-2.0.2-macOS-x64.dmg) | Open the DMG and drag the App to Applications |
-| Ubuntu x64 (experimental) | [Download .deb](https://github.com/try2love/codex-mobile-bridge/releases/download/v2.0.2/Codex-Mobile-Bridge-2.0.2-Linux-amd64.deb) | Ubuntu 22.04; launch as a regular user |
-| Ubuntu ARM64 (experimental) | [Download .deb](https://github.com/try2love/codex-mobile-bridge/releases/download/v2.0.2/Codex-Mobile-Bridge-2.0.2-Linux-arm64.deb) | Ubuntu 22.04 ARM64; no 32-bit ARM build |
+| Windows x64 (recommended installer) | [Download Setup.exe](https://github.com/try2love/codex-mobile-bridge/releases/download/v2.0.3/Codex-Mobile-Bridge-2.0.3-Windows-x64-Setup.exe) | Run the installer and launch from the shortcut |
+| Windows x64 (no installation) | [Download full ZIP](https://github.com/try2love/codex-mobile-bridge/releases/download/v2.0.3/Codex-Mobile-Bridge-2.0.3-Windows-x64.zip) | Extract the entire ZIP and run `Codex Mobile Bridge.exe`; do not move just the exe |
+| macOS Apple Silicon (M series) | [Download arm64 DMG](https://github.com/try2love/codex-mobile-bridge/releases/download/v2.0.3/Codex-Mobile-Bridge-2.0.3-macOS-arm64.dmg) | Open the DMG and drag the App to Applications |
+| macOS Intel | [Download x64 DMG](https://github.com/try2love/codex-mobile-bridge/releases/download/v2.0.3/Codex-Mobile-Bridge-2.0.3-macOS-x64.dmg) | Open the DMG and drag the App to Applications |
+| Ubuntu x64 (experimental) | [Download .deb](https://github.com/try2love/codex-mobile-bridge/releases/download/v2.0.3/Codex-Mobile-Bridge-2.0.3-Linux-amd64.deb) | Ubuntu 22.04; launch as a regular user |
+| Ubuntu ARM64 (experimental) | [Download .deb](https://github.com/try2love/codex-mobile-bridge/releases/download/v2.0.3/Codex-Mobile-Bridge-2.0.3-Linux-arm64.deb) | Ubuntu 22.04 ARM64; no 32-bit ARM build |
 
-[All releases and release notes](https://github.com/try2love/codex-mobile-bridge/releases) · [Download SHA256 checksums](https://github.com/try2love/codex-mobile-bridge/releases/download/v2.0.2/SHA256SUMS.txt). Both Mac architectures also include ZIPs for in-app updates or manual replacement. Windows ARM packages are not available. The Mac build is ad-hoc signed but not notarized and may require manual approval; Windows builds have no certificate signature. See the macOS first-launch instructions below.
+[All releases and release notes](https://github.com/try2love/codex-mobile-bridge/releases) · [Download SHA256 checksums](https://github.com/try2love/codex-mobile-bridge/releases/download/v2.0.3/SHA256SUMS.txt). Both Mac architectures also include ZIPs for in-app updates or manual replacement. Windows ARM packages are not available. The Mac build is ad-hoc signed but not notarized and may require manual approval; Windows builds have no certificate signature. See the macOS first-launch instructions below.
 
 1. Install and sign in to the desktop clients you need. Open **Codex Mobile Bridge**, inspect **Clients and access**, complete required permissions and enable configured clients.
 2. Keep LAN access or add an HTTPS entry under **Network access**, save, and select **Start gateway** from Overview or Clients. Preserve your configured port.
@@ -67,7 +74,7 @@ Download the desktop App for everyday use. **No deployment Agent, Python, Node.j
 
 For remote access, choose [Tailscale HTTPS](docs/tailscale.md), bundled temporary Cloudflare HTTPS, a [fixed Cloudflare tunnel](docs/fixed-domain.md), [your own SSH server](docs/server-ssh.md) or a NAS proxy. See [Parallel connections](#parallel-connections). Fixed addresses do not guarantee mainland China performance; test the actual cellular network.
 
-Android APK, unsigned iOS IPA and Xcode source downloads are in the same [v2.0.2 Release](https://github.com/try2love/codex-mobile-bridge/releases/tag/v2.0.2). Install Android over the existing app; iOS requires your own signing, with no App Store/TestFlight distribution. Source/custom setups are covered by the [Deployment Agent instructions](#deployment-agent-instructions).
+Android APK, unsigned iOS IPA and Xcode source downloads are in the same [v2.0.3 Release](https://github.com/try2love/codex-mobile-bridge/releases/tag/v2.0.3). Install Android over the existing app; iOS requires your own signing, with no App Store/TestFlight distribution. Source/custom setups are covered by the [Deployment Agent instructions](#deployment-agent-instructions).
 
 ### In-app updates
 
@@ -75,10 +82,13 @@ Android APK, unsigned iOS IPA and Xcode source downloads are in the same [v2.0.2
 
 Starting with `v0.2.0-beta.5`, use **App updates** to check for a release, read its notes, and select **Update and restart**. The app verifies the signed manifest and package before replacing itself, preserves login, network, notification and watched-chat settings, and restores a previously running gateway. Installation failures attempt to restore the previous app. Older versions need one manual upgrade to a version with this feature. Temporary HTTPS addresses change when the gateway restarts.
 
-**Windows beta.7 / 1.0.0 users:** the old updater may roll back with `WinError 32` because its working directory is locked. Choose **Stop gateway and quit** in the tray, then install **2.0.2 Setup.exe** to the same location. Do not uninstall or delete your data. Version 1.1.0 fixes this working-directory issue for subsequent updates.
+**Windows beta.7 / 1.0.0 users:** the old updater may roll back with `WinError 32` because its working directory is locked. Choose **Stop gateway and quit** in the tray, then install **2.0.3 Setup.exe** to the same location. Do not uninstall or delete your data. Version 1.1.0 fixes this working-directory issue for subsequent updates.
+
+Android v2.0.3 adds in-app APK updates with a phone/computer download choice. Older apps can be upgraded manually once; computer-assisted downloads need a compatible gateway. Failed downloads allow another route, and completed APKs remain available for installation or export. iOS still uses the signing and installation flow described in the [mobile guide](mobile/README.md).
 
 ### Phone reading and display settings
 
+- Mobile appearance and Web settings group **Show/Hide icons**, **Apps** and **Push alerts** together. The file-transfer save action applies only to transfer-size settings.
 - Compact chat navigation leaves more room for replies. Tap the title for the full name, project, device and model details.
 - Use the arrow beside Model, Notifications and Skill to hide or show the composer and send/stop controls. Drafts are retained; a successful send does not collapse the composer automatically, and a failed send reopens it to show the error.
 - Open **“··· → Display settings”** to independently toggle **Reasoning summaries** and **Execution activity**. Activity includes commands, tools, file changes and intermediate progress updates. Turn both off to focus on replies; user messages, errors and pending requests remain visible. Older replies without phase metadata are also retained.
@@ -115,10 +125,10 @@ View remaining percentages, reset times and available usage resets. In v2.0.0, r
 
 The Mac build has an **ad-hoc integrity signature**, but **no Apple Developer ID signature or notarization**. macOS can still block the first launch. The older `v0.2.0-beta.1` also has a bundle-signing defect; use `v1.1.0` or later.
 
-1. Download the DMG or ZIP for your Mac's chip and `SHA256SUMS.txt` from this repository's Release. Calculate the downloaded file's hash and compare it with the matching filename in the checksum file. If they differ, download again instead of allowing the app. The example below uses the 2.0.2 Apple Silicon DMG; replace the filename for other downloads.
+1. Download the DMG or ZIP for your Mac's chip and `SHA256SUMS.txt` from this repository's Release. Calculate the downloaded file's hash and compare it with the matching filename in the checksum file. If they differ, download again instead of allowing the app. The example below uses the 2.0.3 Apple Silicon DMG; replace the filename for other downloads.
 
    ```sh
-   shasum -a 256 "$HOME/Downloads/Codex-Mobile-Bridge-2.0.2-macOS-arm64.dmg"
+   shasum -a 256 "$HOME/Downloads/Codex-Mobile-Bridge-2.0.3-macOS-arm64.dmg"
    ```
 
 2. Open the DMG, drag `Codex Mobile Bridge.app` to Applications, then eject the disk image. For a ZIP, extract it and move the App instead. Try opening it from Applications, then go to **System Settings → Privacy & Security → Open Anyway** and confirm.
@@ -233,19 +243,25 @@ Adding a URL does **not** create a tunnel, configure DNS or obtain a certificate
 
 The desktop App and phone website each have a **Language / 语言** selector and remember their own choice. Switching language does not restart the gateway or translate chat content, commands, model/Skill descriptions, user input or raw logs. Unsaved settings, message drafts and pending-confirmation form input are preserved. Language switching is disabled while a confirmation is being submitted.
 
-### Phone notifications: Bark and ntfy
+### Third-party notifications: Bark, ntfy and PushPlus
+
+With a direct gateway connection, open **Push alerts** from mobile appearance settings, Web settings or the chat-list footer. Choose **Bark for iPhone, ntfy for Android or PushPlus for WeChat**, then open that channel's configuration page. Shared-relay connections do not expose this configuration entry.
+
+Mobile, Web and desktop edit the same gateway settings. Enable a channel, edit its server/topic and credentials, save, then test the saved configuration. Common settings include notification links, title visibility, security events and gateway startup/address-change notifications. Saved secrets are not returned to the mobile page: leave them blank to keep them, and enter them again when changing the server. Confirm actual receipt on the target device.
+
+The steps below describe desktop Bark/ntfy setup; mobile and Web accept the same service details. See [PushPlus instructions](#pushplus-notifications-and-chat-names) for WeChat.
 
 1. **Bark for iPhone:** install Bark and allow notifications. In the desktop App, enter the server URL and Device Key from the phone app. For `https://api.day.app/YOUR_KEY`, use `https://api.day.app` as the server and only `YOUR_KEY` as the key. Self-hosted servers are supported; register your phone with that server first. Saved keys are hidden, blank keeps the key, and changing the server requires re-entering it. See the [Bark guide](https://bark.day.app/#/tutorial).
 2. **ntfy for Android:** install ntfy and allow notifications, lock-screen display and background activity. For an initial test, use `https://ntfy.sh`. Generate a random topic in the desktop App and subscribe to exactly that server and topic on the phone. Public anonymous topics need no token and are created automatically. Anyone who knows such a topic can read and publish; use a long random name and leave chat titles hidden. Consider a protected topic for regular use.
 3. Enable the channels you need, save, then click **Send Bark test notification** or **Send ntfy test notification**. Either channel or both can receive the same watched-chat notifications. Confirm actual receipt on the phone. This test does not require the gateway to run; server acceptance alone is not proof of phone delivery.
-4. Start the gateway, refresh the phone website, open **Reminders** in a chat, check **Enable chat reminders** and save. Local and SSH chats are watched separately.
+4. Start the gateway and refresh the phone website. In Web settings, choose the global defaults for requests and successful run completions. New configurations enable request reminders and disable completion reminders; at least one delivery channel must be configured and enabled.
 5. New command, file, permission or question requests trigger a notification. Clicking it opens that chat using the normal web login and confirmation flow.
-6. Each watched chat has an optional **Notify when a run completes** checkbox, off by default. Enable it for the current running turn and future successful runs. Failed, stopped and already completed historical runs do not trigger it. Turning only this option off keeps confirmation reminders enabled.
-7. In the desktop App, **Notifications → Watched chats** shows each chat's name, device, directory and ID. Toggle completion notifications or **Remove watch**; changes save immediately. Removing a watch stops that chat's reminders without deleting the chat. Add new watches from the phone. Saved watches remain manageable when the gateway is stopped or notification channels are disabled. Remote names use the last available title; the device and chat ID remain visible when the name is unavailable.
+6. In each chat's **Reminders**, requests and completions independently support **Follow global settings**, **On** or **Off**. Existing explicit choices survive upgrades. Completion reminders cover runs observed in progress on the first live connection and future successful runs, not failed, stopped or previously completed history.
+7. In the desktop App, **Notifications → Watched chats** shows each chat's name, device, directory and ID. Toggle completion notifications or **Remove watch**; changes save immediately. Removing a watch stops that chat's reminders without deleting the chat. Manage global defaults and per-chat overrides from Web settings or chat reminders. Saved watches remain manageable when the gateway is stopped or notification channels are disabled. Remote names use the last available title; the device and chat ID remain visible when the name is unavailable.
 
 Watched chats remain monitored after the phone page closes, provided the computer, gateway, original App and relevant SSH connections stay online. Delivery and retries are tracked separately per channel, destination, chat and event, including after restart. Failure in one channel does not affect the other. New channels or destinations do not replay completed history; runs observed in progress on their first live connection and future completions can notify. Existing ntfy configuration and delivery records are preserved. Failed delivery retries with backoff and rechecks whether the request is still pending. Completion retries continue while that chat has the option enabled and stop when it is disabled. Completed history from before the first live connection is not replayed. Strict exactly-once delivery is not guaranteed during network failures.
 
-An explicitly configured notification click URL takes priority over automatic selection. Old notifications retain their old URLs after a temporary domain changes. Self-hosted ntfy needs an APNs upstream for instant iPhone delivery; Android delivery also depends on background/battery permissions. See the official [phone subscription guide](https://docs.ntfy.sh/subscribe/phone/) and [iOS instant notification setup](https://docs.ntfy.sh/config/#ios-instant-notifications).
+An explicitly configured notification click URL takes priority over automatic selection. Old notifications retain their old URLs after a temporary domain changes. Android delivery depends on background and battery permissions. See the official [phone subscription guide](https://docs.ntfy.sh/subscribe/phone/).
 
 ### Gateway startup and entry notifications
 
@@ -253,7 +269,7 @@ In the desktop App, open **Notifications → Gateway startup and entry notificat
 
 New configurations enable address notifications by default; saved opt-outs survive upgrades. Configure at least one notification channel for delivery. Every gateway start sends the enabled addresses, even when unchanged: LAN, NAS / existing reverse-proxy domains, personal servers once SSH forwarding connects, and temporary HTTPS once ready. Later-ready entries and address changes trigger an update. Disabled interfaces, disabled entries and loopback addresses are excluded. LAN links require the same network; fixed domains require completed deployment.
 
-The switch is off by default and independent of chat notifications. Messages use current entries rather than the chat click URL, contain no passwords or login tokens, and retry per channel. Stopping the gateway or disabling the switch stops new sends. Configure and test after upgrading to v1.3.2 or later before relying on notifications for subsequent restarts; earlier versions do not support this feature.
+This switch is independent of chat notifications, defaults to on for new configurations and preserves saved choices on upgrade. Messages use current entries rather than the chat click URL, contain no passwords or login tokens, and retry per channel. Stopping the gateway or disabling the switch stops new sends. Configure and test after upgrading to v1.3.2 or later before relying on notifications for subsequent restarts; earlier versions do not support this feature.
 
 ## Codex session features
 
@@ -380,7 +396,7 @@ Gateway data stays in its configured directory, normally `.local`. It includes l
 
 Uploaded files are retained in `uploads/` or `hosts/<host hash>/uploads/` inside gateway data, separated by chat. Remote copies are stored under that host's `$CODEX_HOME/mobile-bridge/uploads/` (default `~/.codex/mobile-bridge/uploads/`). Removing a draft attachment does not delete uploaded files, and automatic cleanup is not provided. Manually deleting a file can break historical or queued references to it.
 
-The local desktop management interface uses guarded Electron IPC and a private stdio worker. Gateway start/stop, updates and network configuration are not exposed through the phone HTTP API. Signed-in web clients can change the global PushPlus settings. Public HTTP access remains constrained by authentication, allowed Host/Origin checks and CSRF validation.
+The local desktop management interface uses guarded Electron IPC and a private stdio worker. Gateway start/stop, updates and network configuration are not exposed through the phone HTTP API. Signed-in clients connected directly to the gateway can change Bark, ntfy, PushPlus and common notification settings; shared-relay connections do not expose these configuration routes. Public HTTP access remains constrained by authentication, allowed Host/Origin checks and CSRF validation.
 
 ## Known limits
 
@@ -493,6 +509,10 @@ Thanks to the [LINUX DO](https://linux.do/) community and its members for their 
 
 Thanks to [@qybgh (Luoran Yau)](https://github.com/qybgh) for contributing mobile Plan and Goal support, attachment previews and UI improvements in [PR #8](https://github.com/try2love/codex-mobile-bridge/pull/8). Version 1.3.1 builds on that contribution with Goal controls, notification preferences and interaction refinements.
 
+Thanks to [@heiqiu47](https://github.com/heiqiu47) for file compatibility, mobile file opening, system-bar and login-startup improvements in [PR #24](https://github.com/try2love/codex-mobile-bridge/pull/24), released in v2.0.2.
+
+Thanks to [@SevenPwZ (des1re)](https://github.com/SevenPwZ) for Android in-app updates in [PR #32](https://github.com/try2love/codex-mobile-bridge/pull/32). v2.0.3 builds on that work with gateway-assisted downloads, explicit download choices and installation recovery improvements.
+
 ## License and references
 
 [MIT License](LICENSE).
@@ -523,7 +543,7 @@ PushPlus delivers notifications through WeChat and **requires paid real-name ver
 
 **Limits:** the WeChat channel allows ordinary verified users 200 requests per day and 5 per minute; members receive 2,000 per day and 5 per 10 seconds. Both allow up to 3 identical messages per hour. Failed requests count toward the allowance, and exceeding limits may suspend delivery. All chats and other apps using the same account share this allowance. See the official [quota guide](https://www.pushplus.plus/doc/guide/use.html) and [delivery restrictions](https://www.pushplus.plus/doc/help/limit.html).
 
-- Click **PushPlus notifications** below the web chat list, enter the token from [PushPlus](https://www.pushplus.plus/), enable the channel, save, and test the saved settings. The desktop notification panel also supports PushPlus.
+- With a direct gateway connection, open **Push alerts → PushPlus** from settings or the chat-list footer. Enter the token from [PushPlus](https://www.pushplus.plus/), enable the channel, save, and test the saved settings. The desktop notification panel also supports PushPlus.
 - PushPlus settings are shared across the gateway. Changing the token changes the PushPlus recipient for all watched chats. Every signed-in device can edit these settings; passwordless access also grants this permission to devices that can reach the gateway.
 - Enable reminders in each chat you want to follow, optionally including successful run completion. Notifications continue after closing the page while the gateway remains running.
 - Saved tokens are never returned to the page. Leave the token blank to keep it, or disable the channel and select the clear option to remove it.

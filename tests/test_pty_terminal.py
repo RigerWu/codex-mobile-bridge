@@ -86,9 +86,11 @@ class PtyTests(unittest.TestCase):
         self.assertEqual((self.root/'exactly-once').read_text(),'x')
         with self.assertRaises(ValueError):self.send(s,'echo different\r',identifier)
     def test_close_kills_foreground_process(self):
-        s=self.session(); self.send(s,'sleep 90 & echo $! > child.pid; wait\r')
+        # The child reports readiness itself: a parent-written PID can race
+        # zsh's forked child before it has installed its signal disposition.
+        s=self.session(); self.send(s,"sh -c 'echo $$ > child.pid; exec sleep 90' & wait\r")
         deadline=time.monotonic()+5
-        while not (self.root/'child.pid').exists() and time.monotonic()<deadline:time.sleep(.02)
+        while (not (self.root/'child.pid').exists() or not (self.root/'child.pid').read_text().strip()) and time.monotonic()<deadline:time.sleep(.02)
         child=int((self.root/'child.pid').read_text());s.stop();self.assertTrue(s.done.wait(5))
         # The child may briefly be a zombie while reaped by the OS, but cannot run.
         result=subprocess.run(['ps','-p',str(child),'-o','stat='],capture_output=True,text=True)

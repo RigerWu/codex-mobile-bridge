@@ -4,28 +4,28 @@
 
 ## 继续 CLI 中的工作
 
-1. 在原电脑或原 SSH 主机的终端中打开所需会话，保留已有 CLI 运行环境。
-2. 在手机或 Web 中打开这条带 `CLI` 标记的聊天，点击“连接 CLI”。
-3. 连接成功后可发送、排队、补充任务、停止，以及处理支持的审批和问题卡片。任务继续使用该运行环境的提供商、认证与工作目录。
+1. 在手机或 Web 中打开带 `CLI` 标记的聊天，先阅读已保存历史。
+2. 需要继续时点击“继续会话”。原终端可以已经关闭；网关会连接原 CLI daemon，必要时显式启动该 `CODEX_HOME` 中已安装的原生托管 daemon，再恢复这条会话。
+3. 连接成功后可发送、排队、补充任务、停止，以及处理支持的审批和问题卡片。任务继续使用原会话的提供商、认证与工作目录。
 
-网关连接已有 Codex app-server daemon 的控制 socket，不替用户启动 daemon。CLI 版本过旧、没有控制 socket，或会话未在该运行环境中加载时，保留历史阅读并显示连接失败原因。请先在原终端恢复该会话，再点击连接；网关不会自动改用桌面会话执行。
+只有点击“继续会话”才会启动托管 daemon 或恢复会话；打开聊天、读取历史和列表刷新都不会触发。网关不会安装 CLI、接受新的 SSH 主机密钥、改用桌面会话执行，或覆盖原会话身份。原生 daemon 未安装、版本不兼容或身份核验失败时，历史仍可阅读，并显示连接失败原因。
 
-本轮原生联调使用 macOS 的 Codex CLI **0.162.1**。SSH 使用已有主机配置和密钥校验，不自动接受新主机密钥或安装远端程序。Windows、Linux 与不同远端配置的原生交互仍需各自验收，不能根据本机结果认定全部兼容。
+macOS 的 Codex CLI **0.162.1** 已分别验证 daemon 正在运行时接入，以及原终端关闭后的冷恢复；两种情况下发送与流式回复均通过。SSH 使用已有主机配置和密钥校验，不自动接受新主机密钥或安装远端程序。Windows、Linux 与不同远端配置的原生交互仍需各自验收，不能根据 macOS 结果认定全部兼容。
 
-CLI 中的模型/权限设置、Skill 选择、计划/目标切换、消息编辑/分支、重命名和临时侧边聊天暂不开放；需要时回原 CLI 操作。网关关闭或手机页面退出只断开网关连接，不停止 CLI 任务。连接中断或写入结果不确定时不自动重发；先查看原终端结果，再决定后续操作。
+CLI 中的模型/权限设置、Skill 选择、计划/目标切换、消息编辑/分支、重命名和临时侧边聊天暂不开放；需要时回原 CLI 操作。网关关闭或手机页面退出只断开网关连接，不停止 CLI 任务。连接中断或写入结果不确定时不自动重发；先查看原会话历史与运行状态，再决定后续操作。
 
 ## 会话缺失时
 
-在 Codex 聊天列表点击“诊断”，下载 `codex-session-diagnostics.json`。该导出需要登录，包含本机/远端的读取阶段、会话来源计数和数据库兼容信息，不包含聊天正文、标题、项目路径、SSH 别名或凭据。远端以 `remote-1` 等编号表示。
+从“设置”中的“连接诊断”查看本机和远端的读取阶段、状态与会话来源计数，可复制摘要或导出 `codex-session-diagnostics.json`。旧版手机 App 可查看和复制；文件导出需更新 App。登录后才能读取诊断。摘要和导出不包含聊天正文、标题、项目路径、SSH 别名或凭据；远端以 `remote-1` 等编号表示。顶部 SSH 错误可关闭：同一故障在自动刷新时不再出现，恢复或错误变化后可重新提示；页面重新加载会重置关闭状态。
 
 调查某一条会话时，可在已登录的网关地址后访问 `/api/sessions/diagnostics?thread=<会话 UUID>`。额外结果区分数据库中不存在、来源不支持、已归档、内部子任务以及历史文件缺失/不可读等情况；导出不回显该 UUID。其他用户电脑不可达时，需要对方提供此诊断，才能区分 SSH、数据目录和会话过滤问题。
 
 ## 原生协议边界
 
-当前官方 app-server 接口仍可能变化。显式接入前会核验运行环境、会话已加载状态和身份；操作前复核提供商与工作目录。0.162.1 的 `thread/resume` 没有原子化“仅接入已加载会话”选项：若会话恰在核验与接入之间卸载，原 daemon 仍可能从历史重新加载同一会话。被动阅读不会执行此操作，但不能宣称显式连接具有绝对无竞态的 owner 保证。
+当前官方 app-server 接口仍可能变化。显式接入前会核验运行环境与会话身份；冷恢复还会比较已保存的来源、提供商和工作目录。0.162.1 的 `thread/resume` 没有原子化“仅恢复经核验会话”选项：若会话恰在核验与恢复之间变化，不能宣称具有绝对无竞态的 owner 保证。被动阅读不会执行此操作。
 
 ## English
 
-CLI chats appear with a **CLI** badge. Opening them reads saved history only. To interact, open the same chat in its original terminal and select **Connect CLI** in Bridge. The gateway connects to the existing daemon, keeps its provider/authentication/cwd, and does not start a replacement daemon or fall back to Desktop execution. Supported actions include send, queue, steer, interrupt, approvals and input requests. Configuration, modes, goals, Skills, editing/forking, rename and side chats remain in the original CLI.
+CLI chats appear with a **CLI** badge. Opening one reads saved history only. Select **Continue chat** when ready: Bridge connects to the original CLI daemon or explicitly starts its already installed, managed daemon and resumes the chat, even if the terminal has closed. It does not install CLI, bypass SSH host-key checks, change the chat's identity, or fall back to Desktop execution. Supported actions include send, queue, steer, interrupt, approvals and input requests. Configuration, modes, goals, Skills, editing/forking, rename and side chats remain in the original CLI.
 
-The native test environment is macOS with CLI 0.162.1; this does not establish Windows, Linux or every SSH environment as verified. Diagnostics require login and omit chat text, titles, paths, aliases and credentials. Unknown writes are not automatically replayed. The upstream resume API has no atomic loaded-only guard, so an unload during an explicit join can still cause the existing daemon to reload the same chat.
+Warm join and cold resume, including send and streaming replies, passed on macOS with CLI 0.162.1; this does not establish Windows, Linux or every SSH environment as verified. Open **Connection diagnostics** in Settings to read local and remote status and counts, copy the summary, or export a file. Older native apps can read and copy but need an update to export. Diagnostics require login and omit chat text, titles, paths, aliases and credentials. Dismissing an SSH error suppresses the same fault across automatic refreshes until recovery or a changed fault; reloading the page resets that dismissal. Unknown writes are not automatically replayed. The upstream resume API has no atomic identity guard across preflight and resume.

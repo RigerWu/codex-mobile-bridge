@@ -79,7 +79,8 @@ const BridgePdfPreview = (() => {
       slot.token++;
       const task = slot.renderTask, proxy = slot.proxy;
       task?.cancel(); slot.textLayer?.cancel();
-      slot.renderTask = slot.textLayer = slot.proxy = null;
+      slot.textReader?.cancel().catch(() => {});
+      slot.renderTask = slot.textLayer = slot.textReader = slot.proxy = null;
       slot.loading = slot.ready = false;
       slot.budget = slot.textEnabled = null;
       if (slot.canvas) { slot.canvas.width = slot.canvas.height = 0; slot.canvas = null; }
@@ -139,15 +140,36 @@ const BridgePdfPreview = (() => {
         if (disposed || token !== slot.token) return;
         slot.renderTask = null;
         if (textEnabled) {
-          const text = await proxy.getTextContent();
-          if (disposed || token !== slot.token) return;
-          if (text.items.length) {
-            const overlay = document.createElement('div'); overlay.className = 'wb-pdf-text textLayer';
-            slot.element.append(overlay);
-            const pdfjs = await loadLibrary();
+          try {
+            const reader = slot.textReader = proxy.streamTextContent().getReader();
+            const text = {items:[], styles:Object.create(null), lang:null};
+            let complete = false;
+            try {
+              while (true) {
+                const {value, done} = await reader.read();
+                if (disposed || token !== slot.token) return;
+                if (done) { complete = true; break; }
+                text.lang ??= value.lang;
+                Object.assign(text.styles, value.styles);
+                text.items.push(...value.items);
+              }
+            } finally {
+              if (!complete) await reader.cancel().catch(() => {});
+              reader.releaseLock();
+              if (slot.textReader === reader) slot.textReader = null;
+            }
+            if (text.items.length) {
+              const overlay = document.createElement('div'); overlay.className = 'wb-pdf-text textLayer';
+              slot.element.append(overlay);
+              const pdfjs = await loadLibrary();
+              if (disposed || token !== slot.token) return;
+              slot.textLayer = new pdfjs.TextLayer({textContentSource:text, container:overlay, viewport});
+              await slot.textLayer.render();
+            }
+          } catch (error) {
             if (disposed || token !== slot.token) return;
-            slot.textLayer = new pdfjs.TextLayer({textContentSource:text, container:overlay, viewport});
-            await slot.textLayer.render();
+            slot.textLayer?.cancel(); slot.textLayer = null;
+            slot.element.replaceChildren(canvas);
           }
         }
         if (disposed || token !== slot.token) return;

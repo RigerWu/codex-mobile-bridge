@@ -41,7 +41,7 @@ const setup = (coarse=false) => {
 const cleanup = () => {
   delete global.document; delete global.BridgeI18n; delete global.window; delete global.ResizeObserver;
 };
-const fixture = (count=30, pending=false) => {
+const fixture = (count=30, pending=false, textChunks=[]) => {
   const events=[], loading={destroy(){events.push('destroy');}};
   const dimensions=number => number % 3 === 1 ? [612,792] : number % 3 === 2 ? [792,400] : [420,1000];
   const doc={numPages:count, async getPage(number) {
@@ -56,7 +56,20 @@ const fixture = (count=30, pending=false) => {
         const task={promise:new Promise((_,fail)=>{reject=fail;}),cancel(){events.push('cancel '+number);reject({name:'RenderingCancelledException'});}};
         events.push('render '+number); return task;
       },
-      async getTextContent(){return {items:[]};}
+      getTextContent(){throw Error('getTextContent must not be used');},
+      streamTextContent(){
+        events.push('stream '+number);
+        let index=0;
+        return {getReader(){return {
+          async read(){
+            const value=textChunks[index++];
+            if (value instanceof Error) throw value;
+            return value ? {value,done:false} : {done:true};
+          },
+          async cancel(){events.push('text cancel '+number);},
+          releaseLock(){events.push('text release '+number);}
+        };}};
+      }
     };
   }};
   loading.promise=Promise.resolve(doc);
@@ -159,6 +172,71 @@ test('closing cancels a deferred ResizeObserver layout', async () => {
   } finally {
     delete global.requestAnimationFrame; delete global.cancelAnimationFrame; cleanup();
   }
+});
+
+test('text layer reads chunks without ReadableStream async iteration', async () => {
+  setup();
+  try {
+    const chunks=[
+      {items:[{str:'one'}],styles:{first:{fontFamily:'sans-serif'}},lang:'zh'},
+      {items:[{str:'two'}],styles:{second:{fontFamily:'serif'}},lang:'en'}
+    ];
+    const fake=fixture(1,false,chunks);
+    let content, rendered=0;
+    const loadLibrary=async()=>({...await fake.loadLibrary(),TextLayer:class {
+      constructor({textContentSource}){content=textContentSource;}
+      async render(){rendered++;}
+      cancel(){}
+    }});
+    const reader=pdf.create({url:'/api/workspace/download?path=file.pdf',
+      info:{size:1000,clickDownloadMiB:1},loadLibrary});
+    await reader.load(); await tick();
+    assert.equal(rendered,1);
+    assert.deepEqual(content.items,chunks.flatMap(chunk=>chunk.items));
+    assert.deepEqual(Object.keys(content.styles),['first','second']);
+    assert.equal(content.lang,'zh');
+    assert.ok(fake.events.includes('stream 1'));
+    assert.ok(fake.events.includes('text release 1'));
+    reader.dispose();
+  } finally { cleanup(); }
+});
+
+test('text extraction failure retains the rendered PDF canvas', async () => {
+  setup();
+  try {
+    const fake=fixture(1,false,[Error('text stream failed')]);
+    const reader=pdf.create({url:'/api/workspace/download?path=file.pdf',
+      info:{size:1000,clickDownloadMiB:1},loadLibrary:fake.loadLibrary});
+    await reader.load(); await tick();
+    const sheet=reader.element.children[2].children[0].children[0];
+    assert.equal(sheet.children[0].tagName,'canvas');
+    assert.ok(sheet.children[0].width>0);
+    assert.ok(fake.events.includes('text cancel 1'));
+    assert.ok(fake.events.includes('text release 1'));
+    assert.doesNotMatch(reader.element.children[1].className,/error/);
+    reader.dispose();
+  } finally { cleanup(); }
+});
+
+test('text layer rendering failure also retains the canvas', async () => {
+  setup();
+  try {
+    const fake=fixture(1,false,[{items:[{str:'one'}],styles:{},lang:'en'}]);
+    let cancelled=0;
+    const loadLibrary=async()=>({...await fake.loadLibrary(),TextLayer:class {
+      async render(){throw Error('text layout failed');}
+      cancel(){cancelled++;}
+    }});
+    const reader=pdf.create({url:'/api/workspace/download?path=file.pdf',
+      info:{size:1000,clickDownloadMiB:1},loadLibrary});
+    await reader.load(); await tick();
+    const sheet=reader.element.children[2].children[0].children[0];
+    assert.equal(sheet.children.length,1);
+    assert.equal(sheet.children[0].tagName,'canvas');
+    assert.ok(sheet.children[0].width>0);
+    assert.equal(cancelled,1);
+    reader.dispose();
+  } finally { cleanup(); }
 });
 
 test('pending offscreen rendering is cancelled and closing destroys document', async () => {

@@ -2,6 +2,8 @@
 
 Status: implemented
 
+The loaded-only connection decision below is superseded by [explicit CLI resume](2026-10-14-codex-cli-resume.md). Discovery and write-isolation decisions remain in effect.
+
 ## Problem
 
 Session discovery accepted desktop originators only. A user-visible terminal chat with `originator=codex-tui` and `source=vscode` was excluded. SSH discovery also omitted saved managed hosts not referenced by specific project membership fields. Broadening discovery alone would send CLI-origin chats through Desktop activation and risk switching their execution owner.
@@ -16,11 +18,11 @@ The adapter projects native turns and requests into existing UI contracts. Suppo
 
 Write failures with unknown outcomes are not replayed. Approval IDs are claimed before writing and quarantined on unknown outcomes until disconnect; another click cannot resend the response. Closing a viewer or gateway only closes the proxy, not the daemon or native task. The authenticated diagnostics route exports aggregate source/read status, omitting content, titles, paths, host aliases, thread IDs and credentials.
 
-## Existing-note audit and alternatives
+## Alternatives considered
 
 The local approved roadmap also covers Claude Code and IDE-specific access. This implementation covers Codex CLI and SSH discovery only; the wider roadmap is not marked completed. Loading all CLI histories into a new app-server or using Desktop as a fallback was rejected because it changes execution ownership. Running only history discovery was insufficient for the accepted CLI interaction scope.
 
-## Constraints and evidence
+## Consequences
 
 Official reference: https://learn.chatgpt.com/docs/app-server. Context7 was unavailable due to quota, so current official documentation and installed 0.162.1 help/protocol were used. `proxy` is raw WebSocket transport, not newline JSON. `thread/read` is passive; joining uses `thread/resume` only after explicit connection and loaded checks.
 

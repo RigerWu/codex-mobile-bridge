@@ -1,6 +1,6 @@
 ## v2.0.3 正式版验证（2026-10-13）
 
-本节记录 v2.0.2 之后的本地验证与用户验收。源码版本已统一为 2.0.3，Android/iOS 构建号为 30；正式发布检查正在执行。下表保留优化期间的验收，最终构建结果将在完成后记录。
+本节记录 v2.0.3 的用户验收、源码回归和原生平台构建结果。桌面、Android、iOS 版本统一为 2.0.3，Android/iOS 构建号为 30。下表为优化期间的用户验收，正式构建检查列于其后。
 
 | 范围 | 已完成的验证 | 边界 |
 | --- | --- | --- |
@@ -13,14 +13,17 @@
 | Android 更新 | 应用内下载、大小/SHA-256 校验、安装权限交接、进程退出后的已下载包恢复、导出与失败重试经回归和 Android 模拟器验证；电脑协助下载及显式下载方式选择已完成隔离测试，用户确认 Android 测试版可用 | 安装演练使用受控局域网更新源；不能代替每个用户网络对 GitHub 正式资产的下载验证 |
 | iOS 测试 App | 完成 Swift 检查、签名及共享资源核对，并已安装到用户连接的 iPhone 供实测 | 设备安装不等于所有 iOS 功能完成验收；正式分发仍需用户自行签名 |
 
-### 发布构建检查
+### 正式构建验收
 
-- 源码和桌面、Android、iOS 版本均为 2.0.3；Android/iOS 构建号为 30。Android APK 已生成，签名证书与 v2.0.2 一致。
-- Desktop/Web 回归：560 项，559 通过、1 项平台条件跳过；更新器回归：32 项，31 通过、1 项平台条件跳过。
-- Android/iOS 版本解析、移动下载与安装恢复、原生绑定选择和 iOS 绑定恢复夹具通过。
-- 本地 macOS arm64 DMG/ZIP 的架构、签名完整性、内置运行时与 HTTPS 检查通过；隔离启动、登录、通知、扫码配对以及更新成功和回滚检查通过。
-- 完整后端回归发现 POSIX 终端关闭夹具的子进程启动竞态；改为子进程报告就绪后关闭，100 次定向对照与终端套件通过，完整回归由 CI 重新执行。本地 iOS 构建因 Xcode 缺少模拟器运行时未完成。
-- 项目 owner 已授权通过 GitHub Actions 完成各平台构建和验收。Windows、macOS arm64/x64、Linux x64/arm64 与 iOS 原生 CI，以及最终签名清单、SHA-256 和资产完整性检查尚未完成；完成后更新本节再发布。
+- [源码 CI](https://github.com/try2love/codex-mobile-bridge/actions/runs/38368945783) 全部通过。各环境均运行 1489 项后端测试：Windows Python 3.9/3.13 各跳过 37 项，Ubuntu Python 3.9/3.13 各跳过 35 项，macOS Python 3.13 跳过 33 项；均无失败。跳过项为平台条件或可选环境限制。
+- Desktop/Web 回归：560 项，559 通过、1 项平台条件跳过；更新器回归：32 项，31 通过、1 项平台条件跳过。Android/iOS 版本解析、移动下载与安装恢复、原生绑定选择和 iOS 绑定恢复夹具通过。
+- [桌面原生 CI](https://github.com/try2love/codex-mobile-bridge/actions/runs/38368989555) 的 Windows x64、macOS arm64/x64、Linux x64/arm64 五个任务全部通过。
+- Windows：生成 Setup EXE 与 ZIP，打包 App 启动、连续终端、HTTPS、通知、登录、扫码配对、更新成功/回滚及真实 UI 更新交接通过。原生 Claude 控件夹具通过，正常连接沿用 v2.0.2 路径；这不等于在用户的所有 Windows/Claude 版本上完成真实账号连接或安装器实测。
+- macOS：Apple Silicon 与 Intel 均由对应架构的原生 runner 构建；DMG/ZIP 解包、架构、签名完整性、内置运行时、HTTPS、启动、通知、登录、配对与更新链路检查通过。签名为 ad-hoc，未公证；Intel 结果不是由 Rosetta 代替。
+- Linux：x64/ARM64 的 Debian 包安装、架构/版本、打包运行时、HTTPS、通知、登录、配对及 AppImage 解包启动检查通过。Linux 仍为实验性支持，Claude 自动初始化仍不支持。
+- Android：2.0.3 / versionCode 30 的 APK 已构建，v2/v3 签名校验通过，签名证书与 v2.0.2 发布 APK 一致；保留覆盖安装所需的应用标识与签名。
+- [iOS 原生 CI](https://github.com/try2love/codex-mobile-bridge/actions/runs/38368994811) 通过。下载后核对 IPA 主 App、两个扩展均为 2.0.3 / build 30，标识和资源正确，未包含签名或描述文件；Xcode 源码 ZIP 与候选提交一致。安装仍需用户自行签名。
+- 正式分发由 v2.0.3 标签工作流生成 Release 草稿；公开发布前，统一核对全部 15 个文件、桌面更新清单签名、SHA-256 和下载后完整性。
 
 历史验证记录保留如下，不作为 v2.0.3 的新增验收结果。
 

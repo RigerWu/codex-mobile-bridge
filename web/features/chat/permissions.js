@@ -42,7 +42,7 @@ class ContextUsageControl {
   dispose(){this.dialog?.remove();this.button.remove();}
 }
 
-// Local Linux capability picker; other platforms keep their existing flow.
+// Linux Desktop and native CLI capability picker; other sessions keep their existing flow.
 async function permissionPicker(dialog,{load,save,isCurrent,onSaved,nativeCli=false}){
   const t=BridgeI18n.t,options=document.createElement('div'),status=document.createElement('p'),refresh=document.createElement('button');
   status.className='muted';status.setAttribute('role','status');refresh.type='button';refresh.textContent=t('刷新');

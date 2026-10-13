@@ -438,6 +438,7 @@ class CliBridgeTests(CliBridgeFixture):
         self.assertEqual(result['status'], 'unknown')
         self.cli.set_goal.assert_called_once_with(self.thread_id, 'Fixture objective')
 
+
     def test_unknown_native_send_is_not_replayed_after_disconnect(self):
         self.bridge.activate(self.thread_id)
         self.cli.call.side_effect = AppServerUnknownResult('write result unknown')
@@ -457,6 +458,100 @@ class CliBridgeTests(CliBridgeFixture):
         self.assertEqual(session.origin, 'cli')
         self.assertFalse(self.bridge.view(self.thread_id, attach=False)['access']['canConfigure'])
 
+
+
+class RemoteCliGoalTests(CliBridgeFixture):
+    def setUp(self):
+        super().setUp()
+        self.bridge.host = 'remote:test'
+        self.bridge.ipc.request = Mock(side_effect=AssertionError('desktop goal writer'))
+
+    def test_joined_remote_cli_goal_uses_native_daemon_and_existing_lifecycle(self):
+        session = self.bridge.activate(self.thread_id)
+        self.assertEqual((session.origin, session.runtime, session.connected), ('cli', 'cli', True))
+        self.cli.supports_goal.return_value = True
+        goal = {'value': None}
+        self.cli.get_goal.side_effect = lambda thread_id: goal['value']
+        def set_goal(thread_id, objective):
+            goal['value'] = {'objective': objective, 'status': 'active'}
+            return goal['value']
+        def set_status(thread_id, status):
+            goal['value'] = {**goal['value'], 'status': status}
+            return goal['value']
+        self.cli.set_goal.side_effect = set_goal
+        self.cli.set_goal_status.side_effect = set_status
+        self.cli.clear_goal.side_effect = lambda thread_id: goal.update(value=None) or {'cleared': True}
+        self.bridge.goal = Mock()
+        self.bridge.goal.get_goal.side_effect = AssertionError('local sidecar read')
+        self.bridge.goal.set_goal.side_effect = AssertionError('local sidecar write')
+
+        view = self.bridge.view(self.thread_id, attach=False)
+        self.assertTrue(view['access']['canUseGoal'])
+        self.assertTrue(view['goalRuntimeAvailable'])
+        created_id = str(uuid.uuid4())
+        created = self.bridge.send(self.thread_id, 'Remote objective', created_id, work_mode='goal')
+        self.assertEqual(created['activation']['status'], 'accepted')
+        self.assertEqual(self.bridge.goal_commands[self.thread_id + ':' + created_id]['state'], 'confirmed')
+        self.bridge.set_goal_status(self.thread_id, 'paused', str(uuid.uuid4()))
+        resumed = self.bridge.set_goal_status(self.thread_id, 'active', str(uuid.uuid4()))
+        self.assertEqual(resumed['activation']['status'], 'accepted')
+        self.bridge.set_goal_status(self.thread_id, 'paused', str(uuid.uuid4()))
+        self.cli.edit_goal.side_effect = lambda thread_id, objective, budget: goal.update(value={
+            'objective': objective, 'status': 'paused', 'tokenBudget': budget}) or goal['value']
+        self.bridge.edit_goal(self.thread_id, 'Revised remote objective', str(uuid.uuid4()))
+        self.assertEqual(goal['value']['objective'], 'Revised remote objective')
+        self.bridge.cancel_goal(self.thread_id, str(uuid.uuid4()))
+        self.assertIsNone(self.bridge.view(self.thread_id, attach=False)['goal'])
+        self.cli.set_goal.assert_called_once_with(self.thread_id, 'Remote objective')
+        self.cli.clear_goal.assert_called_once_with(self.thread_id)
+        self.cli.call.assert_called()
+
+    def test_remote_desktop_owner_and_passive_cli_read_cannot_write_goal(self):
+        passive = self.bridge.view(self.thread_id, attach=False)
+        self.assertFalse(passive['access']['canUseGoal'])
+        self.cli.attach.assert_not_called()
+        self.cli.supports_goal.assert_not_called()
+        session = self.bridge.session(self.thread_id, attach=False)
+        with session.condition:
+            session.connected = True
+            session.runtime = 'desktop'
+            session.owner = 'desktop-owner'
+        self.assertFalse(self.bridge.view(self.thread_id, attach=False)['access']['canUseGoal'])
+        with self.assertRaisesRegex(ValueError, 'SSH'):
+            self.bridge.send(self.thread_id, 'Remote objective', str(uuid.uuid4()), work_mode='goal')
+        with self.assertRaisesRegex(ValueError, 'SSH'):
+            self.bridge.cancel_goal(self.thread_id, str(uuid.uuid4()))
+        self.cli.set_goal.assert_not_called()
+        self.cli.clear_goal.assert_not_called()
+        self.cli.attach.assert_not_called()
+        with session.condition:
+            session.connected = False
+
+    def test_unsupported_remote_runtime_never_uses_local_sidecar(self):
+        self.bridge.activate(self.thread_id)
+        self.cli.supports_goal.return_value = False
+        self.bridge.goal = Mock()
+        view = self.bridge.view(self.thread_id, attach=False)
+        self.assertFalse(view['goalRuntimeAvailable'])
+        self.assertFalse(view['access']['canUseGoal'])
+        with self.assertRaisesRegex(ValueError, '目标模式'):
+            self.bridge.send(self.thread_id, 'Remote objective', str(uuid.uuid4()), work_mode='goal')
+        self.bridge.goal.set_goal.assert_not_called()
+        self.cli.set_goal.assert_not_called()
+
+    def test_uncertain_remote_goal_write_is_not_replayed(self):
+        self.bridge.activate(self.thread_id)
+        self.cli.supports_goal.return_value = True
+        self.cli.get_goal.return_value = None
+        self.cli.set_goal.side_effect = GoalUnavailable('remote response unknown')
+        request_id = str(uuid.uuid4())
+        with self.assertRaises(IPCError):
+            self.bridge.send(self.thread_id, 'Remote objective', request_id, work_mode='goal')
+        self.assertEqual(self.bridge.goal_commands[self.thread_id + ':' + request_id]['state'], 'unknown')
+        self.bridge.goal_commands = json.loads(self.bridge.goal_commands_path.read_text())
+        retry = self.bridge.send(self.thread_id, 'Remote objective', request_id, work_mode='goal')
+        self.assertEqual(retry['status'], 'unknown')
+        self.cli.set_goal.assert_called_once_with(self.thread_id, 'Remote objective')
 
 class CliDiagnosticsHttpTests(CliBridgeFixture):
     @classmethod

@@ -26,4 +26,4 @@ Service tests cover App-owned CLI capability propagation and same-owner operatio
 
 ## Risks
 
-Native methods and feature availability differ by runtime version and policy. Unsupported capability must remain unavailable with a useful explanation rather than bypassing checks. Local mock inference verifies transport and native state, not external-model quality; each platform and arbitrary SSH environment needs separate native acceptance.
+Native methods and feature availability differ by runtime version and policy. Unsupported capability must remain unavailable with a useful explanation rather than bypassing checks. Local mock inference verifies transport and native state, not external-model quality; each platform and arbitrary SSH environment needs separate native acceptance. [SSH native CLI Goal](2026-10-14-ssh-native-cli-goal.md) extends Goal controls to verified joined SSH runtimes without opening them for remote App owners.

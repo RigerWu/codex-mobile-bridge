@@ -114,6 +114,7 @@ final class GatewayReachability: NSObject, URLSessionDataDelegate {
 
 final class BridgeController: UIViewController, WKNavigationDelegate, WKUIDelegate, UIDocumentPickerDelegate, UIDocumentInteractionControllerDelegate {
     private var web: WKWebView?
+    private var nativeMainNavigation: (web: WKWebView, generation: Int, url: String)?
     private var origin = ""
     private var routeDiscovery: ConnectionDiscovery?
     private var routeAttempted = false
@@ -331,7 +332,7 @@ final class BridgeController: UIViewController, WKNavigationDelegate, WKUIDelega
         let inbox = UIBarButtonItem(image: UIImage(systemName: "bell"), style: .plain, target: self, action: #selector(self.inbox)); inbox.accessibilityLabel = MobileStrings.text("通知")
         navigationItem.rightBarButtonItems = [settings, inbox]
     }
-    private func clear() { updateSystemBars(reset: true); pendingStorage = nil; routeDiscovery?.cancel(); routeDiscovery = nil; cancelSync(); finishUpload(nil); stopComputerChecks(); computerStates.removeAll(); computerNotifications.removeAll(); gatewayMenuTop?.isActive = false; gatewayMenuTop = nil; generation += 1; web?.stopLoading(); web?.navigationDelegate = nil; web?.uiDelegate = nil; web = nil; for v in page.arrangedSubviews where v !== subtitle { page.removeArrangedSubview(v); v.removeFromSuperview() } }
+    private func clear() { updateSystemBars(reset: true); pendingStorage = nil; nativeMainNavigation = nil; routeDiscovery?.cancel(); routeDiscovery = nil; cancelSync(); finishUpload(nil); stopComputerChecks(); computerStates.removeAll(); computerNotifications.removeAll(); gatewayMenuTop?.isActive = false; gatewayMenuTop = nil; generation += 1; web?.stopLoading(); web?.navigationDelegate = nil; web?.uiDelegate = nil; web = nil; for v in page.arrangedSubviews where v !== subtitle { page.removeArrangedSubview(v); v.removeFromSuperview() } }
     @objc func home() {
         clear(); navigation(home: true); subtitle.isHidden = true
         let container = UIView(); page.addArrangedSubview(container); let content = scrollContent(in: container)
@@ -479,30 +480,30 @@ final class BridgeController: UIViewController, WKNavigationDelegate, WKUIDelega
     }
     private func loadWithRecovery(_ web: WKWebView, url: URL, address: String, ticket: Int) {
         Task { @MainActor in
-            guard let backup = DeviceBinding.load(address) else { if ticket == generation && self.web === web { web.load(URLRequest(url: url)) }; return }
+            guard let backup = DeviceBinding.load(address) else { if ticket == generation && self.web === web { loadNative(web, URLRequest(url: url)) }; return }
             let store = WKWebsiteDataStore.default().httpCookieStore
             let cookies = await withCheckedContinuation { continuation in store.getAllCookies { continuation.resume(returning: $0) } }
             let before = cookies.first { cookieMatches($0, address: address) }
             if before?.name == backup.name && before?.value == backup.token {
-                if ticket == generation && self.web === web { web.load(URLRequest(url: url)) }; return
+                if ticket == generation && self.web === web { loadNative(web, URLRequest(url: url)) }; return
             }
             if let before {
                 let current = await DeviceBinding.verify(address, .init(name: before.name, token: before.value))
-                if current == true || current == nil { if ticket == generation && self.web === web { web.load(URLRequest(url: url)) }; return }
+                if current == true || current == nil { if ticket == generation && self.web === web { loadNative(web, URLRequest(url: url)) }; return }
             }
             let valid = await DeviceBinding.verify(address, backup)
             if valid == false, DeviceBinding.load(address)?.cookie == backup.cookie { DeviceBinding.clear(address) }
             guard ticket == generation, self.web === web, saved.contains(address) else { return }
             guard valid == true, DeviceBinding.load(address)?.cookie == backup.cookie,
-                  let host = URL(string: address)?.host else { web.load(URLRequest(url: url)); return }
+                  let host = URL(string: address)?.host else { loadNative(web, URLRequest(url: url)); return }
             var properties: [HTTPCookiePropertyKey: Any] = [.name: backup.name, .value: backup.token, .domain: host,
                 .path: GatewayURL.cookiePath(address), .expires: Date().addingTimeInterval(400 * 86400),
                 HTTPCookiePropertyKey("HttpOnly"): "TRUE", HTTPCookiePropertyKey("SameSite"): "Strict"]
             if address.hasPrefix("https://") { properties[.secure] = "TRUE" }
-            guard let restored = HTTPCookie(properties: properties) else { web.load(URLRequest(url: url)); return }
+            guard let restored = HTTPCookie(properties: properties) else { loadNative(web, URLRequest(url: url)); return }
             let latest = await withCheckedContinuation { continuation in store.getAllCookies { continuation.resume(returning: $0) } }
             guard latest.first(where: { cookieMatches($0, address: address) })?.value == before?.value,
-                  DeviceBinding.load(address)?.cookie == backup.cookie else { web.load(URLRequest(url: url)); return }
+                  DeviceBinding.load(address)?.cookie == backup.cookie else { loadNative(web, URLRequest(url: url)); return }
             await withCheckedContinuation { continuation in store.setCookie(restored) { continuation.resume() } }
             guard ticket == generation, self.web === web, saved.contains(address),
                   DeviceBinding.load(address)?.cookie == backup.cookie else {
@@ -511,8 +512,12 @@ final class BridgeController: UIViewController, WKNavigationDelegate, WKUIDelega
                 return
             }
             defaults.set(backup.name, forKey: "cookieName:" + address)
-            web.load(URLRequest(url: url))
+            loadNative(web, URLRequest(url: url))
         }
+    }
+    private func loadNative(_ web: WKWebView, _ request: URLRequest) {
+        nativeMainNavigation = request.url.map { (web, generation, $0.absoluteString) }
+        web.load(request)
     }
     private func recoverConnection() {
         guard !routeAttempted, UIApplication.shared.applicationState == .active, let requested = requestedRoute,
@@ -587,7 +592,7 @@ final class BridgeController: UIViewController, WKNavigationDelegate, WKUIDelega
         let web = WKWebView(frame: .zero, configuration: configuration); self.web = web; web.scrollView.contentInsetAdjustmentBehavior = .never; web.navigationDelegate = self; web.uiDelegate = self; web.allowsBackForwardNavigationGestures = true; web.customUserAgent = nil; page.addArrangedSubview(web); gatewayMenuTop = gatewayMenu.topAnchor.constraint(equalTo: web.topAnchor, constant: 4); gatewayMenuTop?.isActive = true; loadWithRecovery(web, url: url, address: address, ticket: generation)
         web.scrollView.pinchGestureRecognizer?.isEnabled = false
     }
-    @objc private func refresh() { routeAttempted = false; web?.reload() }
+    @objc private func refresh() { routeAttempted = false; if let web { nativeMainNavigation = web.url.map { (web, generation, $0.absoluteString) }; web.reload() } }
     func webView(_ webView: WKWebView, decidePolicyFor response: WKNavigationResponse, decisionHandler: @escaping (WKNavigationResponsePolicy) -> Void) {
         let recover = webView === web && response.isForMainFrame && response.response.url.map { GatewayURL.same($0, origin) } == true && ConnectionDiscovery.retryableStatus((response.response as? HTTPURLResponse)?.statusCode ?? 0)
         decisionHandler(.allow)
@@ -598,7 +603,14 @@ final class BridgeController: UIViewController, WKNavigationDelegate, WKUIDelega
         if action.targetFrame?.isMainFrame == false {
             decisionHandler(isHtmlPreviewShell(url) ? .allow : .cancel); return
         }
-        guard action.sourceFrame.isMainFrame else { decisionHandler(.cancel); return }
+        if action.targetFrame?.isMainFrame == true, nativeMainNavigation?.web === webView {
+            let expected = nativeMainNavigation
+            nativeMainNavigation = nil
+            if !action.sourceFrame.isMainFrame {
+                guard action.navigationType == .other, expected?.generation == generation,
+                      expected?.url == url.absoluteString, GatewayURL.same(url, origin) else { decisionHandler(.cancel); return }
+            }
+        } else if !action.sourceFrame.isMainFrame { decisionHandler(.cancel); return }
         if isHtmlPreviewShell(url) { decisionHandler(.cancel); return }
         if url.absoluteString == "codexbridge://home", action.sourceFrame.isMainFrame, action.navigationType == .linkActivated, let source = webView.url, GatewayURL.same(source, origin) { decisionHandler(.cancel); home(); return }
         if action.navigationType == .linkActivated, action.sourceFrame.isMainFrame,
@@ -606,7 +618,7 @@ final class BridgeController: UIViewController, WKNavigationDelegate, WKUIDelega
             decisionHandler(.cancel); downloadArtifact(action.request); return
         }
         if GatewayURL.same(url, origin) {
-            if action.targetFrame == nil { decisionHandler(.cancel); webView.load(action.request) }
+            if action.targetFrame == nil { decisionHandler(.cancel); loadNative(webView, action.request) }
             else { decisionHandler(.allow) }
             return
         }
@@ -615,11 +627,11 @@ final class BridgeController: UIViewController, WKNavigationDelegate, WKUIDelega
             let a = UIAlertController(title: MobileStrings.text("在浏览器打开外部链接？"), message: url.host, preferredStyle: .alert); a.addAction(UIAlertAction(title: MobileStrings.text("取消"), style: .cancel)); a.addAction(UIAlertAction(title: MobileStrings.text("打开"), style: .default) { _ in UIApplication.shared.open(url) }); present(a, animated: true)
         }
     }
-    func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) { guard webView === web, let url = webView.url, GatewayURL.same(url, origin) else { return }; subtitle.isHidden = true; registerNativePush(); rememberConnection()
+    func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) { if nativeMainNavigation?.web === webView { nativeMainNavigation = nil }; guard webView === web, let url = webView.url, GatewayURL.same(url, origin) else { return }; subtitle.isHidden = true; registerNativePush(); rememberConnection()
         if let snapshot = pendingStorage { pendingStorage = nil; webView.evaluateJavaScript("(()=>{const data=" + snapshot + ";for(const [k,v] of Object.entries(data))if(typeof v==='string')localStorage.setItem(k,v);location.reload();})()", completionHandler: nil) }
     }
-    func webView(_ webView: WKWebView, didFailProvisionalNavigation navigation: WKNavigation!, withError error: Error) { guard webView === web else { return }; subtitle.isHidden = false; subtitle.text = MobileStrings.text("连接失败，请检查电脑和地址后刷新"); recoverConnection() }
-    func webView(_ webView: WKWebView, didFail navigation: WKNavigation!, withError error: Error) { guard webView === web else { return }; recoverConnection() }
+    func webView(_ webView: WKWebView, didFailProvisionalNavigation navigation: WKNavigation!, withError error: Error) { if nativeMainNavigation?.web === webView { nativeMainNavigation = nil }; guard webView === web else { return }; subtitle.isHidden = false; subtitle.text = MobileStrings.text("连接失败，请检查电脑和地址后刷新"); recoverConnection() }
+    func webView(_ webView: WKWebView, didFail navigation: WKNavigation!, withError error: Error) { if nativeMainNavigation?.web === webView { nativeMainNavigation = nil }; guard webView === web else { return }; recoverConnection() }
     func webView(_ webView: WKWebView, runJavaScriptAlertPanelWithMessage message: String, initiatedByFrame frame: WKFrameInfo, completionHandler: @escaping () -> Void) { guard frame.isMainFrame else { completionHandler(); return }; let a = UIAlertController(title: nil, message: message, preferredStyle: .alert); a.addAction(UIAlertAction(title: MobileStrings.text("好"), style: .default) { _ in completionHandler() }); present(a, animated: true) }
     func webView(_ webView: WKWebView, runJavaScriptConfirmPanelWithMessage message: String, initiatedByFrame frame: WKFrameInfo, completionHandler: @escaping (Bool) -> Void) { guard frame.isMainFrame else { completionHandler(false); return }; let a = UIAlertController(title: nil, message: message, preferredStyle: .alert); a.addAction(UIAlertAction(title: MobileStrings.text("取消"), style: .cancel) { _ in completionHandler(false) }); a.addAction(UIAlertAction(title: MobileStrings.text("确认"), style: .default) { _ in completionHandler(true) }); present(a, animated: true) }
     func webView(_ webView: WKWebView, runJavaScriptTextInputPanelWithPrompt prompt: String, defaultText: String?, initiatedByFrame frame: WKFrameInfo, completionHandler: @escaping (String?) -> Void) {

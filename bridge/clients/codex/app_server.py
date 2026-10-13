@@ -5,6 +5,10 @@ daemon, resumes a thread, or changes its model, provider, cwd, or approvals.
 """
 
 import json
+import base64
+import hashlib
+import os
+import struct
 import subprocess
 import threading
 from concurrent.futures import Future, TimeoutError
@@ -27,6 +31,86 @@ class AppServerUnsupported(AppServerError):
     pass
 
 
+class _WebSocket:
+    """Minimal client-side WebSocket over the proxy's byte streams."""
+
+    def __init__(self, reader, writer):
+        self.reader = reader
+        self.writer = writer
+        key = base64.b64encode(os.urandom(16)).decode('ascii')
+        request = ('GET / HTTP/1.1\r\nHost: localhost\r\nUpgrade: websocket\r\n'
+                   'Connection: Upgrade\r\nSec-WebSocket-Key: ' + key + '\r\n'
+                   'Sec-WebSocket-Version: 13\r\n\r\n').encode('ascii')
+        self.writer.write(request)
+        self.writer.flush()
+        header = bytearray()
+        while not header.endswith(b'\r\n\r\n'):
+            byte = self.reader.read(1)
+            if not byte or len(header) > 8192:
+                raise AppServerUnavailable('Codex control socket WebSocket handshake failed')
+            header.extend(byte)
+        lines = header.decode('ascii').split('\r\n')
+        expected = base64.b64encode(hashlib.sha1(
+            (key + '258EAFA5-E914-47DA-95CA-C5AB0DC85B11').encode('ascii')).digest()).decode('ascii')
+        fields = {name.lower(): value.strip() for line in lines[1:] if ':' in line
+                  for name, value in (line.split(':', 1),)}
+        if ' 101 ' not in lines[0] or fields.get('sec-websocket-accept') != expected:
+            raise AppServerUnavailable('Codex control socket rejected WebSocket handshake')
+
+    def send(self, value):
+        data = json.dumps(value, ensure_ascii=False, separators=(',', ':')).encode('utf-8')
+        if len(data) > 16 * 1024 * 1024:
+            raise AppServerError('App-server message is too large')
+        mask = os.urandom(4)
+        if len(data) < 126:
+            header = bytes((0x81, 0x80 | len(data)))
+        elif len(data) <= 65535:
+            header = bytes((0x81, 0xfe)) + struct.pack('!H', len(data))
+        else:
+            header = bytes((0x81, 0xff)) + struct.pack('!Q', len(data))
+        payload = bytes(byte ^ mask[i % 4] for i, byte in enumerate(data))
+        self.writer.write(header + mask + payload)
+        self.writer.flush()
+
+    def receive(self):
+        fragments = []
+        while True:
+            head = self.reader.read(2)
+            if len(head) != 2:
+                raise EOFError()
+            opcode = head[0] & 15
+            length = head[1] & 127
+            if length == 126:
+                length = struct.unpack('!H', self._exact(2))[0]
+            elif length == 127:
+                length = struct.unpack('!Q', self._exact(8))[0]
+            if length > 64 * 1024 * 1024 or head[1] & 128:
+                raise AppServerUnsupported('Invalid Codex WebSocket frame')
+            payload = self._exact(length)
+            if opcode == 8:
+                raise EOFError()
+            if opcode == 9:
+                self._control(10, payload)
+                continue
+            if opcode not in (0, 1):
+                continue
+            fragments.append(payload)
+            if head[0] & 128:
+                return json.loads(b''.join(fragments))
+
+    def _exact(self, length):
+        data = self.reader.read(length)
+        if len(data) != length:
+            raise EOFError()
+        return data
+
+    def _control(self, opcode, payload):
+        mask = os.urandom(4)
+        self.writer.write(bytes((0x80 | opcode, 0x80 | len(payload))) + mask +
+                          bytes(byte ^ mask[i % 4] for i, byte in enumerate(payload)))
+        self.writer.flush()
+
+
 class CodexAppServer:
     MAX_LINE = 64 * 1024 * 1024
 
@@ -41,6 +125,7 @@ class CodexAppServer:
         self.on_disconnect = on_disconnect or (lambda: None)
         self.process_factory = process_factory or subprocess.Popen
         self.process = None
+        self.transport = None
         self.server_info = None
         self.pending = {}
         self.next_id = 1
@@ -58,10 +143,15 @@ class CodexAppServer:
                 process = self.process_factory(
                     [self.cli, 'app-server', 'proxy', '--sock', self.socket_path],
                     stdin=subprocess.PIPE, stdout=subprocess.PIPE,
-                    stderr=subprocess.DEVNULL, bufsize=0)
+                    stderr=subprocess.DEVNULL)
             except OSError as exc:
                 raise AppServerUnavailable('Could not connect to the existing Codex runtime') from exc
             self.process = process
+            try:
+                self.transport = _WebSocket(process.stdout, process.stdin)
+            except Exception:
+                self.close()
+                raise
             threading.Thread(target=self._read_loop, args=(process,), daemon=True).start()
             try:
                 info = self.request('initialize', {
@@ -71,23 +161,19 @@ class CodexAppServer:
                 if not isinstance(info, dict) or not info.get('codexHome'):
                     raise AppServerUnsupported('Unexpected app-server initialize response')
                 self.server_info = info
-                self._send({'method': 'initialized'})
+                self._send({'method': 'initialized', 'params': {}})
                 return info
             except Exception:
                 self.close()
                 raise
 
     def _send(self, message):
-        data = json.dumps(message, ensure_ascii=False, separators=(',', ':')).encode('utf-8') + b'\n'
-        if len(data) > self.MAX_LINE:
-            raise AppServerError('App-server message is too large')
         with self.write_lock:
-            process = self.process
-            if process is None or process.stdin is None:
+            transport = self.transport
+            if transport is None:
                 raise AppServerUnavailable('Codex app-server connection is closed')
             try:
-                process.stdin.write(data)
-                process.stdin.flush()
+                transport.send(message)
             except (OSError, ValueError) as exc:
                 raise AppServerUnknownResult('Codex runtime connection failed; request result is unknown') from exc
 
@@ -150,12 +236,7 @@ class CodexAppServer:
     def _read_loop(self, process):
         try:
             while True:
-                line = process.stdout.readline(self.MAX_LINE + 1)
-                if not line:
-                    break
-                if len(line) > self.MAX_LINE or not line.endswith(b'\n'):
-                    break
-                message = json.loads(line)
+                message = self.transport.receive()
                 if not isinstance(message, dict):
                     continue
                 if 'id' in message and ('result' in message or 'error' in message):
@@ -167,13 +248,14 @@ class CodexAppServer:
                     self.on_server_request(message)
                 elif 'method' in message:
                     self.on_event(message)
-        except (OSError, ValueError, TypeError):
+        except (OSError, EOFError, ValueError, TypeError, AppServerError):
             pass
         finally:
             with self.lock:
                 current = self.process is process
                 if current:
                     self.process = None
+                    self.transport = None
                     self.server_info = None
                     for future in self.pending.values():
                         if not future.done():
@@ -187,18 +269,13 @@ class CodexAppServer:
         with self.lock:
             process = self.process
             self.process = None
+            self.transport = None
             self.server_info = None
             for future in self.pending.values():
                 if not future.done():
                     future.set_exception(AppServerUnknownResult(
                         'Codex runtime connection closed; request result is unknown'))
         if process is not None:
-            for stream in (process.stdin, process.stdout):
-                if stream is not None:
-                    try:
-                        stream.close()
-                    except OSError:
-                        pass
             if process.poll() is None:
                 process.terminate()
                 try:
@@ -206,3 +283,9 @@ class CodexAppServer:
                 except subprocess.TimeoutExpired:
                     process.kill()
                     process.wait(timeout=2)
+            for stream in (process.stdin, process.stdout):
+                if stream is not None:
+                    try:
+                        stream.close()
+                    except OSError:
+                        pass

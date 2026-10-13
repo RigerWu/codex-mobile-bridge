@@ -1,5 +1,8 @@
 import json
+import base64
+import hashlib
 import os
+import struct
 import tempfile
 import threading
 import unittest
@@ -14,22 +17,52 @@ class FixtureProcess:
         self.argv = argv
         request_read, request_write = os.pipe()
         response_read, response_write = os.pipe()
-        self.stdin = os.fdopen(request_write, 'wb', buffering=0)
-        self.stdout = os.fdopen(response_read, 'rb', buffering=0)
-        self.requests = os.fdopen(request_read, 'rb', buffering=0)
-        self.responses = os.fdopen(response_write, 'wb', buffering=0)
+        self.stdin = os.fdopen(request_write, 'wb')
+        self.stdout = os.fdopen(response_read, 'rb')
+        self.requests = os.fdopen(request_read, 'rb')
+        self.responses = os.fdopen(response_write, 'wb')
         self.seen = []
+        self.handshake = threading.Event()
         self.ended = False
         self.drop = set()
         self.worker = threading.Thread(target=self.serve, daemon=True)
         self.worker.start()
 
     def send(self, value):
-        self.responses.write(json.dumps(value).encode() + b'\n')
+        self.handshake.wait(2)
+        data = json.dumps(value).encode()
+        header = bytes((0x81, len(data))) if len(data) < 126 else b'\x81\x7e' + struct.pack('!H', len(data))
+        self.responses.write(header + data)
+        self.responses.flush()
 
     def serve(self):
-        for line in self.requests:
-            message = json.loads(line)
+        header = bytearray()
+        while not header.endswith(b'\r\n\r\n'):
+            byte = self.requests.read(1)
+            if not byte:
+                return
+            header.extend(byte)
+        key = next(line.split(':', 1)[1].strip() for line in header.decode().split('\r\n')
+                   if line.lower().startswith('sec-websocket-key:'))
+        accept = base64.b64encode(hashlib.sha1(
+            (key + '258EAFA5-E914-47DA-95CA-C5AB0DC85B11').encode()).digest()).decode()
+        self.responses.write(('HTTP/1.1 101 Switching Protocols\r\n'
+                              'connection: Upgrade\r\nupgrade: websocket\r\n'
+                              f'sec-websocket-accept: {accept}\r\n\r\n').encode())
+        self.responses.flush()
+        self.handshake.set()
+        while True:
+            head = self.requests.read(2)
+            if len(head) != 2:
+                break
+            length = head[1] & 127
+            if length == 126:
+                length = struct.unpack('!H', self.requests.read(2))[0]
+            elif length == 127:
+                length = struct.unpack('!Q', self.requests.read(8))[0]
+            mask = self.requests.read(4)
+            payload = self.requests.read(length)
+            message = json.loads(bytes(byte ^ mask[i % 4] for i, byte in enumerate(payload)))
             self.seen.append(message)
             if 'id' not in message or 'method' not in message:
                 continue
@@ -47,13 +80,12 @@ class FixtureProcess:
                 result = {'ok': True}
             self.send({'id': message['id'], 'result': result})
         self.ended = True
+        self.responses.close()
 
     def poll(self):
         return 0 if self.ended else None
 
     def terminate(self):
-        self.requests.close()
-        self.responses.close()
         self.ended = True
 
     def kill(self):

@@ -824,9 +824,10 @@ class Handler(BaseHTTPRequestHandler):
             elif action == "rename":
                 result = bridge.rename(thread_id, body.get("title"))
             elif action == "permissions":
-                if set(body) - {'preset', 'confirmed'}:
+                if set(body) - {'preset', 'confirmed', 'expectedRuntime'}:
                     raise ValueError('权限设置无效')
-                result = bridge.permissions(thread_id, body.get('preset'), body.get('confirmed', False))
+                result = bridge.permissions(thread_id, body.get('preset'), body.get('confirmed', False),
+                                            expected_runtime=body.get('expectedRuntime'))
             elif action == "settings":
                 if 'fastMode' in body and not isinstance(body['fastMode'], bool):
                     raise ValueError('Fast 模式开关无效')

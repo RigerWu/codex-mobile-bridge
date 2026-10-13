@@ -368,6 +368,26 @@ class CliBridgeTests(CliBridgeFixture):
         self.assertFalse(self.bridge.view(self.thread_id, attach=False)['access']['canConfigure'])
         self.assertEqual(session.runtime, 'cli')
 
+    def test_permission_runtime_mismatch_rejects_before_any_setting_write(self):
+        session = self.bridge.activate(self.thread_id)
+        with self.assertRaisesRegex(ValueError, '会话运行时已变化'):
+            self.bridge.permissions(self.thread_id, 'ask', expected_runtime='desktop')
+        self.cli.permission_options.assert_not_called()
+        self.cli.call.assert_not_called()
+        with self.assertRaisesRegex(ValueError, '会话运行时无效'):
+            self.bridge.permissions(self.thread_id, 'ask', expected_runtime='other')
+        with self.assertRaisesRegex(ValueError, '确认完全访问权限'):
+            self.bridge.permissions(self.thread_id, 'full-access', expected_runtime='cli')
+        with session.condition:
+            session.runtime = 'desktop'
+            session.owner = 'desktop-owner'
+        self.bridge.ipc.request = Mock(side_effect=AssertionError('desktop setting write'))
+        with self.assertRaisesRegex(ValueError, '会话运行时已变化'):
+            self.bridge.permissions(self.thread_id, 'ask', expected_runtime='cli')
+        self.bridge.ipc.request.assert_not_called()
+        with session.condition:
+            session.connected = False
+
     def test_native_goal_is_probed_and_routed_only_to_joined_daemon(self):
         session = self.bridge.activate(self.thread_id)
         self.cli.supports_goal.return_value = True

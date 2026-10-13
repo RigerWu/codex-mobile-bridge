@@ -7,6 +7,7 @@ const accessCode=extract('function sessionAccess(access){','function renderList(
 const listCode=extract('function renderList(){','async function loadList(');
 const stateCode=extract('function renderState(view){',"$('send-mode').onchange");
 const reconnectCode=extract("$('reconnect').onclick=", "document.querySelectorAll('[data-close]')");
+const permissionCode=extract("$('permissions-button').onclick=",'if(accountsPanel)');
 function node(){return {hidden:false,disabled:false,value:'',textContent:'',title:'',children:[],scrollTop:0,classList:{toggle(){}},append(...parts){this.children.push(...parts);},replaceChildren(...parts){this.children=parts;},querySelector(){return node();}};}
 function fixture(){
   const nodes=new Map();const $=id=>{if(!nodes.has(id))nodes.set(id,node());return nodes.get(id);};
@@ -47,6 +48,32 @@ test('joined CLI exposes model, Skill, modes and permissions without enabling re
   assert.equal(ctx.selectedSkills.size,1);assert.equal(ctx.modesView.goalRuntimeAvailable,true);
   ctx.renderState({host:'local',title:'CLI thread',cwd:'/work',access:{...cli,canReconnect:true},connected:false,status:'idle',requests:[],submissions:[],historyComplete:true});
   assert.equal(ctx.selectedSkills.size,1);assert.equal(ctx.catalogLoads,1);
+});
+test('permission dialog binds its save to the runtime that opened it',async()=>{
+  const {ctx,$}=fixture();let picker,request;
+  ctx.state={connected:true,access:{source:'cli',runtime:'cli'}};
+  ctx.currentId='a';ctx.currentHost='local';
+  ctx.document={body:{append(){} },querySelectorAll:()=>[picker?.dialog].filter(Boolean)};
+  ctx.el=(tag,cls='',value='')=>Object.assign(node(),{tag,cls,textContent:value,open:false,dataset:{},
+    showModal(){this.open=true;},close(){this.open=false;},addEventListener(){},setAttribute(){}});
+  ctx.permissionPicker=(dialog,options)=>{picker={dialog,options};};
+  ctx.sessionUrl=(id,action,host)=>`${host}/${id}/${action}`;
+  ctx.api=async(url,body)=>{request={url,body};return {confirmed:true};};
+  ctx.toast=()=>{};
+  vm.runInContext(permissionCode,ctx);
+  $('permissions-button').onclick();
+  assert.equal(picker.options.isCurrent(),true);
+  await picker.options.save('full-access');
+  assert.equal(request.body.expectedRuntime,'cli');
+  assert.equal(request.body.confirmed,true);
+  ctx.state={connected:true,access:{source:'cli',runtime:'desktop'}};
+  assert.equal(picker.options.isCurrent(),false);
+  assert.equal(picker.dialog.open,false);
+  ctx.state={connected:true,access:{source:'cli',runtime:'cli'}};
+  assert.equal(picker.options.isCurrent(),false,'closed stale dialog cannot revive after a reconnect');
+  $('permissions-button').onclick();
+  ctx.renderState({host:'local',connected:false,access:{source:'cli',runtime:'cli'},requests:[],submissions:[],historyComplete:true});
+  assert.equal(picker.dialog.open,false,'disconnect closes the dialog before a same-runtime reconnect');
 });
 test('a failed CLI join remains visible through later history renders and clears on connection',async()=>{
   const {ctx,$}=fixture(),access={...cli,canReconnect:true},view={host:'local',title:'CLI thread',cwd:'/work',access,connected:false,status:'idle',requests:[],submissions:[],historyComplete:true};

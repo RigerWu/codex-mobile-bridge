@@ -1986,6 +1986,7 @@ class Bridge:
             active = (session.state or {}).get("threadRuntimeStatus", {}).get("type") == "active"
         try:
             activation = self.send(session.id, text, activation_id, "queue" if active else "send",
+                                   work_mode="default",
                                    activation={"action": action, "objective": goal["objective"],
                                                "uiLocale": ui_locale, "goal": goal_identity(goal)})
         except Exception as exc:

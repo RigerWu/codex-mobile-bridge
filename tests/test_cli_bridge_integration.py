@@ -370,7 +370,10 @@ class CliBridgeTests(CliBridgeFixture):
         self.cli.set_goal.assert_not_called()
 
     def test_native_goal_create_pause_resume_cancel_is_durable_and_uses_one_daemon(self):
-        self.bridge.activate(self.thread_id)
+        session = self.bridge.activate(self.thread_id)
+        self.bridge.send(self.thread_id, 'Plan first', str(uuid.uuid4()), work_mode='plan')
+        with session.condition:
+            session.state['latestCollaborationMode'] = {'mode': 'plan'}
         self.cli.supports_goal.return_value = True
         goal = {'value': None}
         self.cli.get_goal.side_effect = lambda thread_id: goal['value']
@@ -392,6 +395,9 @@ class CliBridgeTests(CliBridgeFixture):
         result = self.bridge.send(self.thread_id, 'Finish fixture', created, work_mode='goal')
         self.assertEqual(result['status'], 'accepted')
         self.assertEqual(result['activation']['status'], 'accepted')
+        created_mode = self.cli.call.call_args.args[2]['turnStart']['request']['collaborationMode']
+        self.assertEqual(created_mode['mode'], 'default')
+        self.assertEqual(created_mode['settings']['model'], 'test-model')
         self.assertEqual(self.bridge.goal_commands[self.thread_id + ':' + created]['state'], 'confirmed')
         self.bridge.send(self.thread_id, 'Finish fixture', created, work_mode='goal')
         self.cli.set_goal.assert_called_once_with(self.thread_id, 'Finish fixture')
@@ -400,6 +406,9 @@ class CliBridgeTests(CliBridgeFixture):
         resumed = self.bridge.set_goal_status(self.thread_id, 'active', str(uuid.uuid4()))
         self.assertTrue(resumed['confirmed'])
         self.assertEqual(resumed['activation']['status'], 'accepted')
+        resumed_mode = self.cli.call.call_args.args[2]['turnStart']['request']['collaborationMode']
+        self.assertEqual(resumed_mode['mode'], 'default')
+        self.assertEqual(resumed_mode['settings']['model'], 'test-model')
         cancelled = self.bridge.cancel_goal(self.thread_id, str(uuid.uuid4()))
         self.assertTrue(cancelled['confirmed'])
         self.cli.clear_goal.assert_called_once_with(self.thread_id)

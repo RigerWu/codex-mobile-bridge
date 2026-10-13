@@ -11,5 +11,8 @@
   "bridge/platforms/windows/codex-quit-helper.cs",
   "bridge/clients/claude/connector.js",
   "bridge/clients/deepseek/host.mjs",
-  "bridge/clients/LICENSE.coding-mobile"
+  "bridge/clients/LICENSE.coding-mobile",
+  "web/features/workspace/source-view.js",
+  "web/vendor/prism/source-view.min.js",
+  "web/vendor/prism/LICENSE"
 ]

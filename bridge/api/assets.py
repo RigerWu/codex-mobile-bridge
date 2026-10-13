@@ -33,6 +33,8 @@ STATIC = {"/file-actions.js": ("file-actions.js", "text/javascript; charset=utf-
           "/floating-panel.js": ("floating-panel.js", "text/javascript; charset=utf-8"),
           "/git-panel.js": ("git-panel.js", "text/javascript; charset=utf-8"),
           "/workbench.js": ("workbench.js", "text/javascript; charset=utf-8"),
+          "/source-view.js": ("source-view.js", "text/javascript; charset=utf-8"),
+          "/vendor/prism/source-view.min.js": ("vendor/prism/source-view.min.js", "text/javascript; charset=utf-8"),
           "/image-viewer.js": ("image-viewer.js", "text/javascript; charset=utf-8"),
           "/workbench.css": ("workbench.css", "text/css; charset=utf-8"),
           "/": ("index.html", "text/html; charset=utf-8"),

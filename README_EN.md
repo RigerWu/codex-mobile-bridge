@@ -7,6 +7,8 @@
 
 > **v2.0.3 (stable)**: [Release page](https://github.com/try2love/codex-mobile-bridge/releases/tag/v2.0.3) · [Full release notes](RELEASE_NOTES.md) · [Mobile installation](mobile/README.md). This release adds Android in-app updates with download choices and mobile/Web third-party notification settings, and improves search, landscape layouts and connection recovery.
 
+> **v2.0.4 (unreleased):** locally tested source highlighting and wrapping, PDF/HTML previews, fullscreen reading, directory-aware Back and manual Claude quota queries. Download links below still point to v2.0.3; see the [upcoming release notes](RELEASE_NOTES.md).
+
 [简体中文](README.md) · [English](README_EN.md)
 
 **[Product guide and interactive demos ↗](https://try2love.github.io/codex-mobile-bridge/?lang=en)** · **[Download desktop and mobile apps](https://github.com/try2love/codex-mobile-bridge/releases/tag/v2.0.3)**
@@ -23,6 +25,18 @@ Tasks run on the original computer, or the original SSH host for Codex remote se
 - **Third-party notifications:** configure, save and test Bark for iPhone, ntfy for Android or PushPlus for WeChat on mobile or Web, using the same settings as the desktop gateway.
 - **Search and layout:** keep Search visible, size filters to their contents, improve English and landscape/tablet lists, add Claude/DSH pull-to-refresh and clear stale errors after recovery.
 - **Connections and workbench:** securely retain valid mobile bindings for sign-in recovery, improve Claude reconnection and setup, clarify settings and file-transfer actions, and preserve occupied split panes when closing tool tabs.
+
+<a id="workspace-reading"></a>
+
+## File reading and previews (v2.0.4, unreleased)
+
+- **Directory-aware Back:** return to the parent folder first, then to chat from the project root. Back exits fullscreen first.
+- **Source reading:** view common languages with syntax highlighting and line numbers. Select **Wrap lines** to fit long lines to the screen, or restore **Original line width**. Copy preserves the source without line numbers; previews never edit the file. Unknown languages and larger text use plain text.
+- **PDF reading:** scroll and pinch on touch devices; use page and zoom buttons on desktop browsers. Select text when available; scanned pages do not gain OCR. Fit each page to the available width, including mixed page sizes. During rapid zoom, keep the completed image visible until its replacement is ready to reduce flashes.
+- **HTML reading:** switch between **Preview** and **Source code**. Self-contained inline interactions and animations work; external resources, CDN/API requests, popups and form submission are unsupported. Preview content is isolated from gateway sign-in data, the parent page and native mobile interfaces.
+- **Compact actions and fullscreen:** actions sit beside file details, with fullscreen next to Download. Entering or leaving fullscreen preserves PDF position and HTML state. Switching file tabs preserves PDF position but reloads HTML on return.
+
+PDF previews are capped at **20 MiB** and the configured ordinary-download limit, whichever is lower. HTML and source previews accept **UTF-8 text up to 512 KiB**. Download larger or unsupported files to open elsewhere. Update both the gateway and mobile app for the complete feature set; browser users reload after updating the gateway. See [verification](VERIFICATION.md) for release status and platform coverage.
 
 ## The v2 workbench
 
@@ -104,7 +118,9 @@ The desktop app can scan the current or a specified Codex data directory and imp
 
 The accounts panel follows the selected client. Codex official accounts show remaining usage, reset times and credits; API connections show access and model information. The active connection stays first. Claude and DSH use their own supported account/provider information, rather than displaying Codex accounts.
 
-Opening the panel queries usage automatically; visible panels update every five minutes. Manual refresh runs immediately and restarts the timer. Failed queries preserve the last successful values and timestamp; unavailable upstream data remains unknown.
+Opening the Codex panel queries usage automatically; visible panels update every five minutes. Manual refresh runs immediately and restarts the timer. Failed queries preserve the last successful values and timestamp; unavailable upstream data remains unknown.
+
+In the upcoming v2.0.4 changes, Claude queries usage only when you select **View remaining quota**. Opening, revisiting and periodically refreshing its panel show saved usage with the original successful date and time. Failures preserve that snapshot and indicate it was not updated. This reduces unrequested quota credential reads without claiming to eliminate every Keychain prompt. DSH keeps its existing query behavior.
 
 View remaining percentages, reset times and available usage resets. In v2.0.0, reset credits can be used for the current or another saved official account without switching sign-in or enabling Codex's agent usage-reset setting. Confirm the account and credit expiry, then wait five seconds before using a credit. Interrupted requests retain their original redemption ID for retry. Subscription dates are queried online; blocked or missing results remain unconfirmed rather than being inferred from token expiry or old login records. Account credentials are never sent to the phone.
 

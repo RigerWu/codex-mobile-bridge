@@ -19,6 +19,8 @@ from bridge.features.terminals.manager import TerminalManager
 from bridge.features.sessions.side_chat import SideChats
 from bridge.features.sessions import linux_permissions
 from bridge.clients.codex.ipc import DesktopIPC, IPCError
+from bridge.clients.codex.app_server import AppServerError
+from bridge.clients.codex.cli_session import CliSessions
 from bridge.clients.codex.transport import ipc_endpoint
 from bridge.features.sessions.model import apply_patches, computer_use_approval, items_array, normalize_state, normalize_request, ordered_turns, pending_requests, async_requests, request_id, user_display_text
 from bridge.features.sessions.store import SessionStore, StoreUnavailable
@@ -39,6 +41,10 @@ class LiveSession:
     def __init__(self, thread_id):
         self.id = thread_id
         self.owner = None
+        self.origin = "desktop"
+        self.origin_verified = False
+        self.runtime = "desktop"
+        self.access = None
         self.discovering = False
         self.state = None
         self.saved_view = None
@@ -102,11 +108,13 @@ class LiveSession:
             result["connecting"] = self.connecting
             result["activating"] = self.activating
             result["loadingHistory"] = self.state is None
+            if self.access is not None:
+                result["access"] = dict(self.access)
             return result
 
 
 class Bridge:
-    def __init__(self, codex_home, data_dir, host="local", alias=None, ipc_path=None, codex_bin=None, goal_rpc=None, owner_goal=None):
+    def __init__(self, codex_home, data_dir, host="local", alias=None, ipc_path=None, codex_bin=None, goal_rpc=None, owner_goal=None, cli_sessions=None):
         self.host = host
         self.codex_home = Path(codex_home)
         self.data_dir = Path(data_dir)
@@ -132,6 +140,8 @@ class Bridge:
         self.goal_transport = 'owner' if owner_goal else 'sidecar'
         self._open_desktop = open_in_desktop
         self.live = {}
+        self.origins = {}
+        self.cli_sessions = cli_sessions or CliSessions(self.codex_home, self._cli_state, self._cli_disconnected, alias=alias)
         self.lock = threading.RLock()
         self.ipc = DesktopIPC(ipc_path or ipc_endpoint(codex_home), self._event, self._disconnected)
         self.side_chats = SideChats(codex_bin, self.codex_home, self.data_dir, host,
@@ -472,6 +482,7 @@ class Bridge:
 
     @operation
     def message_action(self, thread_id, body):
+        self._require_desktop_feature(thread_id)
         action, identifier = body.get('action'), body.get('id')
         if action not in ('edit', 'fork', 'edit-fork') or not isinstance(identifier, str):
             raise ValueError('消息操作无效')
@@ -610,8 +621,8 @@ class Bridge:
             metadata = self.codex_home / '.codex-global-state.json'
             if metadata.exists() and not isinstance(json.loads(metadata.read_text(encoding='utf-8')), dict):
                 raise ValueError('Invalid desktop metadata')
-            hosts = self.hosts.hosts()
-            sources = {self.host: self, **self.remote_bridges}
+            hosts = self.hosts.lifecycle_hosts()
+            sources = {self.host: self, **{key: value for key, value in self.remote_bridges.items() if key in hosts}}
             for host in hosts:
                 remaining()
                 if host not in sources:
@@ -629,7 +640,9 @@ class Bridge:
                 rows = reads[host].result(timeout=remaining())
                 identifiers = {row['id'] for row in rows}
                 with source.lock:
-                    identifiers.update(source.live)
+                    identifiers.update(sid for sid, live in source.live.items()
+                                       if getattr(live, "origin", "desktop") == "desktop" or
+                                       (getattr(live, "runtime", "desktop") == "desktop" and getattr(live, "connected", False)))
                 if any(not isinstance(sid, str) or not sid for sid in identifiers):
                     raise ValueError('Invalid desktop session metadata')
                 threads.extend((host, sid) for sid in sorted(identifiers))
@@ -738,6 +751,68 @@ class Bridge:
         finally:
             ipc.close()
 
+    def _access(self, origin, session=None):
+        desktop = origin != 'cli'
+        connected = bool(session and session.connected)
+        writable = desktop or connected
+        return {'source': origin, 'runtime': (session.runtime if connected else None),
+                'readOnly': not writable, 'canSend': writable, 'canInterrupt': writable,
+                'canApprove': writable, 'canReconnect': desktop or self.cli_sessions.available(),
+                'canConfigure': desktop, 'canUseModes': desktop, 'canUseGoal': desktop,
+                'canUseSideChat': desktop, 'canEditMessages': desktop,
+                'reason': None}
+
+    def _require_desktop_feature(self, thread_id):
+        metadata = self.store.get(thread_id)
+        if metadata.get('origin') == 'cli':
+            raise ValueError('此功能请在原 CLI 中操作。')
+
+    def _cli_state(self, thread_id, state):
+        if not isinstance(state, dict) or state.get('id') != thread_id:
+            return
+        with self.lock:
+            session = self.live.get(thread_id)
+        if session is None or session.origin != 'cli' or self.closed.is_set():
+            return
+        with session.condition:
+            session.state = state
+            session.runtime = 'cli'
+            session.owner = 'cli:' + thread_id
+            session.connected = True
+            session.discovering = False
+            session.error = None
+            session.access = self._access(session.origin, session)
+            session.changed()
+        self.notification_event.set()
+
+    def _cli_disconnected(self, thread_id=None):
+        with self.lock:
+            sessions = list(self.live.values())
+        for session in sessions:
+            if session.runtime == 'cli' and (thread_id is None or session.id == thread_id):
+                self._invalidate(session, 'CLI 连接已断开，请重新连接；未自动重发任何操作。')
+
+    def discovery_diagnostics(self, thread_id=None):
+        if thread_id is not None:
+            uuid.UUID(thread_id)
+        sources = [(self, 'local')]
+        if self.host == 'local':
+            sources.extend((self.for_host(host), 'remote-' + str(index))
+                           for index, host in enumerate(self.hosts.hosts(), 1))
+        def inspect(source):
+            bridge, label = source
+            try:
+                result = bridge.store.discovery_diagnostics(thread_id)
+            except RemoteUnavailable:
+                result = {'status': 'unavailable', 'phase': 'ssh', 'reason': 'remote_read_failed'}
+            except (StoreUnavailable, OSError, ValueError):
+                result = {'status': 'unavailable', 'phase': 'store', 'reason': 'store_read_failed'}
+            return {'host': label, **result}
+        with ThreadPoolExecutor(max_workers=min(4, len(sources))) as pool:
+            reports = list(pool.map(inspect, sources))
+        return {'schemaVersion': 1, 'generatedAt': int(time.time()),
+                'remoteHostCount': len(sources) - 1, 'hosts': reports}
+
     def list(self, query="", limit=100, offset=0, archived=False):
         sources = [(self, "此电脑")]
         if self.host == 'local':
@@ -751,7 +826,9 @@ class Bridge:
                     bridge.listed.update(row['id'] for row in rows)
                     for row in rows:
                         session = bridge.live.get(row['id'])
+                        bridge.origins[row['id']] = row.get('origin', 'desktop')
                         row['connected'] = bool(session and session.connected)
+                        row['access'] = bridge._access(row.get('origin', 'desktop'), session)
                         row['title'] = row.get('name') or row.get('title') or '未命名聊天'
                 return rows, None
             except (RemoteUnavailable, StoreUnavailable) as exc:
@@ -775,6 +852,8 @@ class Bridge:
                 if session is None:
                     session = self.live[identifier] = LiveSession(identifier)
                     session.activity_only = True
+                    session.origin = self.origins.get(identifier, "desktop")
+                    session.access = self._access(session.origin, session)
                 session.touched = time.monotonic()
                 sessions.append(session)
             pending = [s for s in sessions if not s.connected and time.monotonic() >= s.retry_at]
@@ -858,7 +937,7 @@ class Bridge:
             with session.condition:
                 if session.viewers or queued or not session.activity_only:
                     return True
-                if session.connected or session.discovering:
+                if (session.connected or session.discovering) and session.runtime != "cli":
                     try:
                         self.ipc.follow(session.id, session.owner, False, host=self.host)
                     except IPCError:
@@ -891,6 +970,7 @@ class Bridge:
 
     @operation
     def side_chat(self, thread_id, owner, action, body):
+        self._require_desktop_feature(thread_id)
         self.store.get(thread_id)
         snapshot = settings = None
         if action == 'create':
@@ -929,10 +1009,9 @@ class Bridge:
         with self.lock:
             session = self.live.get(thread_id)
         if session is None:
-            # SSH/SQLite reads must not block IPC events for other chats.
-            self.store.get(thread_id)
             with self.lock:
                 session = self.live.setdefault(thread_id, LiveSession(thread_id))
+        self._load_session_origin(session)
         session.touched = time.monotonic()
         if background:
             if attach:
@@ -947,6 +1026,17 @@ class Bridge:
                     session.set_history(fallback)
                     session.activity_only = False
         return session
+
+    def _load_session_origin(self, session):
+        if session.origin_verified:
+            return
+        # Restored queued entries have no verified source until this read.
+        # Keep SSH/SQLite IO outside the shared live-session lock.
+        metadata = self.store.get(session.id)
+        with session.condition:
+            session.origin = metadata.get("origin", "desktop")
+            session.origin_verified = True
+            session.access = self._access(session.origin, session)
 
     def _saved_history(self, session):
         return self.store.history(session.id, turn_limit=session.history_limit)
@@ -991,6 +1081,10 @@ class Bridge:
         with session.attach_lock:
             if session.connected or self.closed.is_set():
                 return
+            self._load_session_origin(session)
+            if session.origin == "cli":
+                # A desktop copy of the same ID must never take over CLI writes.
+                return
             try:
                 # Owners answer a follow with a fresh snapshot. This also works
                 # for remote/background owners absent from owner-discovery.
@@ -1008,7 +1102,8 @@ class Bridge:
                 with session.condition:
                     session.discovering = False
                     session.connected = False
-                    session.error = str(exc)
+                    session.error = None if session.origin == "cli" else str(exc)
+                    session.access = self._access(session.origin, session)
                     session.changed()
 
     @operation
@@ -1028,6 +1123,15 @@ class Bridge:
                     return session
                 if self.closed.is_set():
                     raise IPCError('网关正在停止；操作未发送，请稍后重试。')
+                if session.origin == 'cli':
+                    try:
+                        state = self.cli_sessions.attach(session.id, explicit=True)
+                    except AppServerError as exc:
+                        raise IPCError(str(exc)) from exc
+                    self._cli_state(session.id, state)
+                    if not session.connected:
+                        raise IPCError('CLI 尚未连接；操作未发送，请在原终端打开此会话后重试。')
+                    return session
                 if session.last_activation is not None and time.monotonic() - session.last_activation < 20:
                     raise IPCError(session.error or '桌面仍在加载此聊天；操作未发送，请稍后重试。')
                 session.last_activation = time.monotonic()
@@ -1080,6 +1184,8 @@ class Bridge:
             return
         change = params.get("change", {})
         with session.condition:
+            if session.origin == "cli":
+                return
             if session.discovering and change.get("type") == "snapshot" and (change.get("conversationState") or {}).get("id") == session.id:
                 session.owner = message.get("sourceClientId")
                 session.discovering = False
@@ -1100,6 +1206,7 @@ class Bridge:
                 session.revision = change["revision"]
                 session.connected = True
                 session.error = None
+                session.access = self._access(session.origin, session)
                 session.changed()
                 with self.lock:
                     self.notification_dirty.add(session.id)
@@ -1115,6 +1222,7 @@ class Bridge:
             session.connected = False
             session.revision = None
             session.error = message
+            session.access = self._access(session.origin, session)
             session.changed()
 
     def _disconnected(self):
@@ -1124,7 +1232,8 @@ class Bridge:
         with self.lock:
             sessions = list(self.live.values())
         for session in sessions:
-            self._invalidate(session, "桌面 App 连接已断开，正在等待重连")
+            if session.origin != "cli":
+                self._invalidate(session, "桌面 App 连接已断开，正在等待重连")
 
     def _maintain(self):
         delay = 3
@@ -1157,7 +1266,7 @@ class Bridge:
                         if session.viewers != 0 or session.watched:
                             continue
                         self.live.pop(session.id, None)
-                    if session.connected or session.discovering:
+                    if (session.connected or session.discovering) and session.runtime != "cli":
                         try:
                             self.ipc.follow(session.id, session.owner, False, host=self.host)
                         except IPCError:
@@ -1175,6 +1284,11 @@ class Bridge:
     def _call(self, session, method, params, timeout=30):
         # The existing desktop owner retains this thread's provider and credentials.
         # A newly selected default account must not gate unrelated existing providers.
+        if session.runtime == "cli":
+            try:
+                return self.cli_sessions.call(session.id, method, params, timeout=timeout)
+            except AppServerError as exc:
+                raise IPCError(str(exc)) from exc
         return self.ipc.request(method, {"conversationId": session.id, **params}, target=session.owner, host=self.host, timeout=timeout)["result"]
 
     def _save_ledger(self):
@@ -1186,6 +1300,8 @@ class Bridge:
 
     def view(self, thread_id, attach=True, background=False, force=False):
         session = self.session(thread_id, attach=attach, background=background, force=force)
+        with session.condition:
+            session.access = self._access(session.origin, session)
         view = session.view()
         if linux_permissions.enabled(self.host):
             view["linuxPermissionChecks"] = True
@@ -1457,7 +1573,7 @@ class Bridge:
                     attachments.append({'type': 'file', 'name': name})
 
     def _overlay_native_goal(self, session, thread_id, view):
-        if self.host != "local":
+        if self.host != "local" or session.origin == "cli":
             return view
         native_goal = normalize_goal(read_native_goal(self.codex_home, thread_id))
         if native_goal:
@@ -1482,6 +1598,7 @@ class Bridge:
                 with session.condition:
                     session.set_history(saved)
         with session.condition:
+            session.access = self._access(session.origin, session)
             projection = session.timeline
             authoritative_view = self._overlay_native_goal(session, thread_id, session.view())
             if projection.sequence != session.sequence or projection.meta.get("goal") != authoritative_view.get("goal"):
@@ -1518,6 +1635,7 @@ class Bridge:
         return result
 
     def catalog(self, thread_id, refresh=False, kind=None, query='', offset=0, limit=200, ids=None):
+        self._require_desktop_feature(thread_id)
         session = self.session(thread_id)
         with session.condition:
             cwd = session.state.get("cwd")
@@ -1571,7 +1689,7 @@ class Bridge:
         if not isinstance(title, str) or not title.strip() or len(title) > 120 or any(unicodedata.category(c) in ('Cc', 'Zl', 'Zp') for c in title):
             raise ValueError('聊天名称需为 1–120 个字符，不能包含换行或控制字符')
         title = title.strip()
-        self.store.get(thread_id)  # Only existing desktop chats may be renamed.
+        self._require_desktop_feature(thread_id)
         session = self.session(thread_id, attach=False, background=True)
         with session.action_lock:
             if isinstance(self.store, RemoteStore):
@@ -1613,6 +1731,7 @@ class Bridge:
 
     @operation
     def permissions(self, thread_id, preset, confirmed=False):
+        self._require_desktop_feature(thread_id)
         if preset not in ('ask', 'auto-review', 'full-access'):
             raise ValueError('权限设置无效')
         if preset == 'full-access' and confirmed is not True:
@@ -1639,6 +1758,7 @@ class Bridge:
 
     @operation
     def settings(self, thread_id, model, effort, *, fast_mode=None):
+        self._require_desktop_feature(thread_id)
         if not isinstance(model, str) or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_./:@+-]{0,199}", model):
             raise ValueError("模型 ID 格式不正确")
         if effort not in ("none", "minimal", "low", "medium", "high", "xhigh", "max", "ultra"):
@@ -1751,6 +1871,7 @@ class Bridge:
 
     @operation
     def _goal_control(self, thread_id, request_id, action, *, status=None, objective=None, ui_locale=None, expected=None):
+        self._require_desktop_feature(thread_id)
         uuid.UUID(request_id)
         if self.host != 'local' or self.goal is None:
             raise ValueError('目标模式暂不支持 SSH 主机')
@@ -1834,6 +1955,8 @@ class Bridge:
             raise ValueError("补充当前任务时不能切换工作模式")
         if work_mode == "goal" and (mode != "send" or not text.strip() or len(text) > 4000):
             raise ValueError("目标需在当前任务结束后直接发送，且不超过 4000 字")
+        if work_mode not in (None, "default") or skills:
+            self._require_desktop_feature(thread_id)
         if work_mode == "goal":
             if self.host != "local" or self.goal is None:
                 raise ValueError("目标模式暂不支持 SSH 主机")
@@ -1869,7 +1992,7 @@ class Bridge:
                     raise ValueError("Codex 正在执行。请选择「排队发送」或「补充当前任务」。")
                 if not active and mode == "steer":
                     raise ValueError("当前任务已经结束，请使用普通发送")
-                if work_mode is not None and not (session.state.get("latestModel") or
+                if work_mode is not None and session.runtime != "cli" and not (session.state.get("latestModel") or
                         (session.state.get("latestCollaborationMode") or {}).get("settings", {}).get("model")):
                     raise ValueError("尚未取得桌面模型设置，请重新连接后再切换模式")
                 if plan_response is not None:
@@ -1939,7 +2062,7 @@ class Bridge:
         context = {'attachments': [], 'commentAttachments': []}
         if files:
             context['fileAttachments'] = [{'path': f['path'], 'label': f['name']} for f in files]
-        if entry.get("workMode") is not None:
+        if entry.get("workMode") is not None and session.runtime != "cli":
             with session.condition:
                 current = session.state
                 model = current.get("latestModel") or (current.get("latestCollaborationMode") or {}).get("settings", {}).get("model")
@@ -1974,6 +2097,12 @@ class Bridge:
         return self._call(session, "thread-follower-interrupt-turn", {"mode": "user-stop", "expectedTurnId": turn_id})
 
     def full_history(self, thread_id):
+        session = self.session(thread_id, attach=False)
+        if session.origin == "cli":
+            fallback = self.store.history(thread_id, turn_limit=None)
+            with session.condition:
+                session.set_history(fallback)
+            return {"loaded": True}
         session = self._target(thread_id)
         return self._call(session, "thread-follower-load-complete-history", {}, timeout=180)
 
@@ -2085,11 +2214,12 @@ class Bridge:
             sessions = list(self.live.values())
         for session in sessions:
             try:
-                if session.connected or session.discovering:
+                if (session.connected or session.discovering) and session.runtime != "cli":
                     self.ipc.follow(session.id, session.owner, False, host=self.host)
             except IPCError:
                 pass
         self.ipc.close()
+        self.cli_sessions.close()
         if self.goal:
             self.goal.close()
 

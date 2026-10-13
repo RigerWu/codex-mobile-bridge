@@ -558,6 +558,11 @@ class Handler(BaseHTTPRequestHandler):
                 return self.output(200, self.server.bridge.account.read(refresh=query.get('cached', [''])[0] != '1'))
             if write and path == '/api/account/reset':
                 return self.output(200, self.server.bridge.account.consume(self.read_json()))
+            if not write and path == '/api/sessions/diagnostics':
+                if set(query) - {'thread'}:
+                    raise ValueError('诊断请求包含不支持的字段')
+                report = self.server.bridge.discovery_diagnostics(query.get('thread', [None])[0])
+                return self.output(200, report, content_disposition='attachment; filename="codex-session-diagnostics.json"')
             if not write and path == "/api/sessions":
                 feed = self.server.notifications.mobile.checkpoint() if self.server.notifications else None
                 rows = self.server.bridge.list(query=query.get("q", [""])[0][:200], offset=max(0, int(query.get("offset", [0])[0])), archived=query.get("archived", ["false"])[0] == "true")

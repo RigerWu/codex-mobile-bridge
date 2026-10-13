@@ -178,7 +178,7 @@ class IntegrationTests(unittest.TestCase):
         def unavailable(**kwargs):
             raise StoreUnavailable('Database temporarily unavailable')
         self.bridge.store.list = unavailable
-        remote = SimpleNamespace(host='remote:test', lock=threading.RLock(), live={}, listed=set(),
+        remote = SimpleNamespace(host='remote:test', lock=threading.RLock(), live={}, listed=set(), origins={}, _access=self.bridge._access,
                                  store=SimpleNamespace(list=lambda **kw: [{'id': THREAD, 'title': 'Remote chat', 'cwd': '/remote', 'updated_at': 1}]))
         self.bridge.hosts.hosts = lambda: {'remote:test': {'alias': 'test'}}
         self.bridge.for_host = lambda host: remote
@@ -215,11 +215,12 @@ class IntegrationTests(unittest.TestCase):
                 db.execute('INSERT INTO threads VALUES(?,?,?,?,?,?,?,?)',
                            (tid, 'Saved chat', '/workspace', 2, 0, origin, source, 'unused'))
         store = SessionStore(self.root)
-        self.assertEqual({r['id'] for r in store.list()}, {THREAD, legacy, untagged, mobile})
+        self.assertEqual({r['id'] for r in store.list()}, {THREAD, legacy, untagged, cli, mobile})
         self.assertEqual(store.get(legacy)['id'], legacy)
         self.assertEqual(store.get(untagged)['id'], untagged)
         self.assertEqual(store.get(mobile)['id'], mobile)
-        for tid in (child, cli):
+        self.assertEqual(store.get(cli)['origin'], 'cli')
+        for tid in (child,):
             with self.assertRaises(KeyError):
                 store.get(tid)
 
@@ -559,6 +560,8 @@ class IntegrationTests(unittest.TestCase):
         remote.host = 'remote'
         remote.lock = threading.RLock()
         remote.live = {}
+        remote.origins = {}
+        remote._access = self.bridge._access
         remote.store.list.return_value = [{'id': 'remote-thread', 'cwd': '/work', 'updated_at': 50}]
         self.bridge.hosts.hosts = lambda: {'remote': {'alias': 'server'}}
         self.bridge.for_host = lambda host: remote

@@ -1,3 +1,41 @@
+## v2.0.4（待发布）· CLI 会话接入与文件阅读优化
+
+- **Codex CLI 会话接入**：聊天列表纳入现有 CLI 会话，先读历史，点击“连接 CLI”后接入原有运行环境。支持发送、排队、补充任务、停止及可识别的审批/问题；暂不开放 CLI 的模型/权限设置、模式、编辑/分支等桌面专属操作。
+- **SSH 发现与诊断**：纳入已配置的有效 SSH 主机，通过用户登录 shell 读取远端数据目录；新增需要登录的脱敏诊断下载，帮助区分来源过滤、远端读取和历史文件问题。原生版本条件及协议限制见 [CLI 接入说明](docs/codex-cli.md)。
+- **目录返回符合浏览习惯**：在“文件”标签的子目录中，返回先进入上一级，回到项目根目录后再返回聊天；Codex 顶部返回按钮和手机工作台共用这一规则。全屏预览中先退出全屏，保留原有浮层关闭优先级。
+- **Claude 额度按需查询**：打开、返回或定时刷新账号面板时只显示已保存的额度，点击“查看剩余额度”才发起查询。显示上次成功查询的日期与时间；失败时保留旧结果和原查询时间，并提示未更新，减少非主动查询触发的凭据读取。Codex 与 DeepSeek Harness 的查询方式保持不变。
+- **源码更适合阅读**：常见代码文件增加语法高亮、独立行号和“复制代码”；可切换“自动换行 / 原始行宽”，让长代码适合手机屏幕。软换行不改变原始行号，复制保留原文、不带行号；未知语言及较大文本保留纯文本阅读。
+- **PDF 内置连续阅读**：在工作台直接查看 PDF，手机通过滑动翻阅、双指缩放，电脑浏览器保留翻页与缩放按钮。有文本层的 PDF 支持文字选择，横竖混排页面逐页适配宽度；切换标签、全屏及返回时保留阅读位置。优化快速缩放和邻页回看，保留已显示画面，待新画面完成后替换，减少黑屏和闪烁。
+- **HTML 预览与源码切换**：直接查看自包含 HTML 的内联交互和动画，也可切换到带高亮的只读源码。预览在隔离区域运行，不开放网关登录信息、父页面或手机原生接口，不支持外部联网、表单提交、弹窗及页面跳转。
+- **更多空间留给文件**：文件名与描述在左，下载、复制或预览操作在右；PDF、HTML 和源码可从下载旁的“全屏预览”入口展开。窄屏使用紧凑按钮，全屏进出保持当前 PDF 位置和 HTML 交互状态。
+
+### 使用与升级说明
+
+PDF 在线预览上限为 **20 MiB**，同时受当前普通点击下载限额约束；超限文件请下载后打开。HTML 和源码沿用 **512 KiB 的 UTF-8 文本预览范围**。HTML 预览面向自包含文件，多文件站点、外部 CDN 与后端 API 暂不支持；扫描 PDF 不提供 OCR。
+
+正式发布后，建议网关与 Android/iOS App 一起更新，以获得完整的文件阅读和原生 HTML 隔离支持；Web 用户更新网关后重新加载页面即可。共享中继部署也需同步更新中继服务。Android 覆盖安装以保留数据；iOS 仍需自行签名。
+
+本节为待发布说明，文件阅读的本地测试已获用户确认；新增 CLI 接入仍待用户实测。各平台正式构建与发布验收尚未执行，范围见 [验证记录](VERIFICATION.md)。当前公开下载仍为 v2.0.3。手动额度查询不代表所有 macOS 钥匙串授权场景均已消除。
+
+### English
+
+- **Codex CLI access:** discover saved CLI chats, read history without activation, and explicitly join the original running CLI for send, queue, steer, interrupt and supported approval/input requests. Desktop-only configuration and editing actions remain unavailable.
+- **SSH discovery diagnostics:** include configured managed SSH hosts, read the remote data home through the user login shell, and export authenticated, sanitized diagnostics. See [CLI support and protocol limits](docs/codex-cli.md).
+- **Directory-aware Back:** move to the parent folder before returning to chat at the project root. The Codex header and mobile workbench use the same rule. Back exits fullscreen previews first and preserves existing overlay handling.
+- **Manual Claude quota queries:** opening, revisiting or periodically refreshing the accounts panel displays saved usage only. Select **View remaining quota** to query. Keep the last successful date, time and values on failure, with a clear stale-data message. Codex and DeepSeek Harness retain their existing query behavior.
+- **Readable source files:** add syntax highlighting, separate line numbers and **Copy code**. Switch between **Wrap lines** and **Original line width**; wrapping keeps source line numbers aligned, and copying preserves the original text without line numbers. Unknown languages and larger text fall back to plain text.
+- **Continuous PDF reading:** scroll and pinch on touch devices; use page and zoom buttons on desktop browsers. Select text when the PDF provides it, fit mixed page sizes individually, and retain the reading position across tabs and fullscreen. Keep completed pages visible until replacements are rendered, reducing flashes during rapid zoom and nearby page navigation.
+- **HTML preview and source:** run inline interactions and animations in self-contained HTML, or inspect highlighted read-only source. The isolated preview cannot access gateway sign-in data, the parent page or native mobile interfaces. External network access, form submission, popups and navigation are blocked.
+- **Compact headers and fullscreen:** place file details on the left and actions on the right. Open PDF, HTML and source in fullscreen beside Download, preserving PDF position and HTML interaction state when entering or leaving fullscreen.
+
+PDF previews are limited to **20 MiB** and the configured ordinary-download limit, whichever is lower. HTML and source previews retain the **512 KiB UTF-8 text limit**. Download larger files to open them elsewhere. Multi-file HTML sites, external CDN/API dependencies and OCR are outside this release's scope.
+
+When released, update both the gateway and Android/iOS apps for the complete feature set and native HTML isolation. Browser users only need to reload after updating the gateway. Shared-relay deployments also require a relay update. Install Android over the existing app; iOS still requires your own signing.
+
+**Unreleased:** file-reading testing has been accepted by the user; CLI access awaits user testing, and native release builds and release validation remain pending. See [verification](VERIFICATION.md). Public downloads remain v2.0.3. Manual Claude quota queries do not eliminate every macOS Keychain authorization scenario.
+
+---
+
 ## v2.0.3 · 手机更新、第三方通知与界面优化
 
 - **Android 应用内更新**：检查新版、查看更新说明，在 App 内下载 APK 并交给系统安装器。安装前校验大小和 SHA-256；完成下载后，即使离开 App 授予安装权限或重新打开 App，也可继续安装或保存 APK。

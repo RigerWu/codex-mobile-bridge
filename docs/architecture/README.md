@@ -13,8 +13,11 @@
 | 某个客户端的消息、权限、模型、账号 | `bridge/clients/codex/`、`claude/`、`deepseek/` | `bridge/clients/manager.py`，对应 Web 功能模块 |
 | 登录、配对、可信手机 | `bridge/features/auth/` | `bridge/api/httpd.py`，`mobile/` 的原生持久化 |
 | Codex 账号切换、API、额度、模型列表 | `bridge/features/accounts/` | `bridge/clients/desktop_app.py`，`web/features/accounts/` |
+| CLI 原生接入与 SSH 发现 | `bridge/clients/codex/app_server.py`、`cli_session.py`、`remote.py` | `features/sessions/store.py`、`app/service.py`；[接入边界](../codex-cli.md) |
 | 会话历史、审批、计划/目标、侧边聊天 | `bridge/features/sessions/` | `bridge/app/service.py`，`web/features/chat/` |
 | 文件、图片、上传下载、Git | `bridge/features/workspace/` | `web/features/workspace/`、`web/shared/image-viewer.js` |
+| 源码高亮、PDF/HTML 预览与全屏、目录返回 | `web/features/workspace/` | `bridge/api/html_preview.py`、`httpd.py`、原生手机导航；[模块约定](../../web/README.md#文件阅读模块) |
+| Claude 手动额度与成功查询快照 | `bridge/clients/claude/accounts.py` | `web/features/accounts/client-accounts.js`；[决定与边界](../../.agents/notes/implemented/bug-fix/2026-10-12-keychain-access-and-manual-quota.md) |
 | 终端会话与命令 | `bridge/features/terminals/manager.py` | `bridge/platforms/windows/terminal.py`、`posix/terminal.py` |
 | 通知、后台巡检、事件游标 | `bridge/features/notifications/` | `desktop/features/notifications/`，`mobile/android/`、`mobile/ios/` |
 | 局域网、域名、SSH、Tailscale、中继连接 | `bridge/features/network/` | `desktop/features/connections/`，独立服务 `relay/` |

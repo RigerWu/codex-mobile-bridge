@@ -83,6 +83,59 @@ class StoreTests(unittest.TestCase):
                 self.store.list()
             copy.assert_not_called()
 
+    def test_cli_discovery_read_and_sanitized_diagnostics(self):
+        with sqlite3.connect(self.path) as db:
+            db.executemany('INSERT INTO threads VALUES (?,?,?,?,?,?,?)', [
+                ('tui', 'CLI private title', '/private/user', 3, 0, 'codex-tui', 'vscode'),
+                ('cli', 'CLI private title', '/private/user', 4, 0, 'codex_cli_rs', 'cli'),
+                ('other', 'Other', '/private/user', 5, 0, 'unknown', 'cli'),
+                ('child', 'Child', '/private/user', 6, 0, 'codex_cli_rs', '{"subagent":{}}'),
+                ('archived', 'Archive', '/private/user', 7, 1, 'codex_cli_rs', 'cli'),
+                ('tui-cli', 'CLI', '/private/user', 8, 0, 'codex-tui', 'cli'),
+                ('rs-vscode', 'CLI', '/private/user', 9, 0, 'codex_cli_rs', 'vscode'),
+                ('legacy-cli', 'CLI', '/private/user', 10, 0, None, 'cli'),
+            ])
+        rows = self.store.list()
+        self.assertEqual({r['id']: r['origin'] for r in rows},
+                         {'test': 'desktop', 'tui': 'cli', 'cli': 'cli', 'tui-cli': 'cli',
+                          'rs-vscode': 'cli', 'legacy-cli': 'cli'})
+        self.assertEqual(self.store.get('tui')['origin'], 'cli')
+        self.assertEqual(self.store.get('cli')['origin'], 'cli')
+        self.assertEqual(self.store.get('legacy-cli')['origin'], 'cli')
+        self.assertEqual({r['id'] for r in self.store.notification_changes()},
+                         {'test', 'tui', 'cli', 'archived', 'tui-cli', 'rs-vscode', 'legacy-cli'})
+        self.assertEqual([r['id'] for r in self.store.list(archived=True)], ['archived'])
+        for thread_id in ('other', 'child'):
+            with self.assertRaises(KeyError):
+                self.store.get(thread_id)
+        self.assertEqual({r['id'] for r in self.store.lifecycle_threads()}, {'test'})
+        report = self.store.discovery_diagnostics('cli')
+        self.assertEqual(report['counts'], {'desktop': 1, 'cli': 6, 'other': 1, 'subagent': 1,
+                                            'visible': 6, 'archived': 1})
+        self.assertEqual(report['target'], {'found': True, 'origin': 'cli', 'archived': False,
+                                            'reason': 'rollout_missing', 'read': 'unavailable'})
+        self.assertTrue(self.store.discovery_diagnostics('archived')['target']['archived'])
+        self.assertNotIn('/private/user', str(report))
+        self.assertNotIn('CLI private title', str(report))
+        self.assertEqual(self.store.discovery_diagnostics('absent')['target']['reason'], 'missing')
+
+    def test_source_only_schema_has_same_list_and_get_eligibility(self):
+        self.path.unlink()
+        with sqlite3.connect(self.path) as db:
+            db.execute('CREATE TABLE threads(id TEXT, title TEXT, cwd TEXT, updated_at INT, archived INT, source TEXT)')
+            db.executemany('INSERT INTO threads VALUES (?,?,?,?,?,?)', [
+                ('desktop', 'Desktop', '/fixture', 1, 0, 'vscode'),
+                ('cli', 'CLI', '/fixture', 2, 0, 'cli'),
+                ('agent', 'Agent', '/fixture', 3, 0, '{"subagent":{}}'),
+                ('unknown', 'Unknown', '/fixture', 4, 0, 'other'),
+            ])
+        rows = self.store.list()
+        self.assertEqual({r['id']: r['origin'] for r in rows}, {'desktop': 'desktop', 'cli': 'cli'})
+        for row in rows:
+            self.assertEqual(self.store.get(row['id'])['origin'], row['origin'])
+        self.assertEqual({r['id'] for r in self.store.notification_changes()}, {'desktop', 'cli'})
+        self.assertEqual(self.store.discovery_diagnostics('cli')['target']['origin'], 'cli')
+
 
 class RecentHistoryTests(unittest.TestCase):
     def setUp(self):

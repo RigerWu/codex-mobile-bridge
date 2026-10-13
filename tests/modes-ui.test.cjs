@@ -98,6 +98,29 @@ test('Goal mode is disabled when the desktop runtime is unavailable',()=>{
  assert.match(ui.goalOption.title,/desktop Codex runtime was not found/);
 });
 
+test('remote Goal requires explicit native CLI capability while local legacy views remain supported',()=>{
+ const ui=fixture(),remote={...idle,host:'remote:test',goalRuntimeAvailable:true,
+   access:{source:'cli',runtime:'cli',canUseGoal:true}};
+ ui.panel.open('remote:test|a');ui.panel.render(remote,'send',false);
+ assert.equal(ui.goalOption.disabled,false);
+ ui.panel.render({...remote,goal:{objective:'Remote work',status:'paused'}},'send',false);
+ assert.ok(ui.find(n=>(n.className||'').includes('goal-status')));
+ for(const view of [{...remote,access:{source:'cli',canUseGoal:false}},
+                    {...remote,goalRuntimeAvailable:false},
+                    {...remote,goalRuntimeAvailable:undefined,access:undefined},
+                    {...remote,access:{source:'desktop',canUseGoal:false}}]){
+   ui.panel.render(view,'send',false);
+   assert.equal(ui.goalOption.disabled,true);
+   assert.equal(ui.find(n=>(n.className||'').includes('goal-status')),undefined);
+ }
+ ui.panel.render({...remote,access:{source:'cli',runtime:'cli',canUseGoal:false}},'send',false);
+ assert.match(ui.goalOption.title,/当前 Codex 会话暂不支持目标模式/);
+ ui.panel.render({...remote,access:{source:'cli',runtime:'desktop',canUseGoal:false}},'send',false);
+ assert.match(ui.goalOption.title,/SSH 主机/);
+ ui.panel.render(idle,'send',false);
+ assert.equal(ui.goalOption.disabled,false);
+});
+
 test('a disconnected CLI cannot regain Goal actions on a later direct render',()=>{
  const ui=fixture(),goal={objective:'Work',status:'active'};
  ui.panel.open('local|a');ui.panel.render({...idle,goal,access:{source:'cli',canUseGoal:true}},'send',false);

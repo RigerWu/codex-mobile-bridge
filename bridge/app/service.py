@@ -187,13 +187,11 @@ class Bridge:
         return bool(executable and Path(executable).is_file())
 
     def _session_goal_available(self, session):
-        if self.host != 'local':
-            return False
         with session.condition:
             native = session.connected and session.runtime == 'cli'
             known = session.native_goal_supported
         if not native:
-            return self._goal_runtime_available()
+            return self.host == 'local' and self._goal_runtime_available()
         if known is None:
             try:
                 known = self.cli_sessions.supports_goal(session.id)
@@ -233,6 +231,8 @@ class Bridge:
 
     def _native_goal_state(self, thread_id, *, strict=False):
         session = self.live.get(thread_id)
+        if self.host != 'local' and not (session and session.origin == 'cli' and session.connected and session.runtime == 'cli'):
+            raise GoalUnsupported('目标模式暂不支持 SSH 桌面会话')
         if self.goal or session and session.origin == 'cli' and session.runtime == 'cli':
             try:
                 native = self._goal_call('get_goal', thread_id)
@@ -812,9 +812,8 @@ class Bridge:
         writable = desktop or connected
         reconnect = desktop or bool(session and session.desktop_owner_probe == 'found') or self.cli_sessions.available()
         cli_controls = connected and origin == 'cli'
-        goal = (self._goal_runtime_available() if not session or session.runtime != 'cli'
-                else session.native_goal_supported is True)
-        goal = goal and self.host == 'local'
+        goal = ((self.host == 'local' and self._goal_runtime_available())
+                if not session or session.runtime != 'cli' else session.native_goal_supported is True)
         return {'source': origin, 'runtime': (session.runtime if connected else None),
                 'readOnly': not writable, 'canSend': writable, 'canInterrupt': writable,
                 'canApprove': writable, 'canReconnect': reconnect,
@@ -822,7 +821,7 @@ class Bridge:
                 'canChangeModel': desktop or cli_controls,
                 'canSelectSkills': desktop or cli_controls,
                 'canUseModes': desktop or cli_controls,
-                'canUseGoal': desktop or cli_controls and goal,
+                'canUseGoal': (desktop and self.host == 'local') or cli_controls and goal,
                 'canUseSideChat': desktop, 'canEditMessages': desktop,
                 'reason': None if reconnect else '未找到可用的 Codex CLI 后台服务或已安装的服务包；请先在电脑上安装或更新 Codex CLI，并运行一次。'}
 
@@ -1509,7 +1508,7 @@ class Bridge:
         if (latest_goal_command and latest_goal_command[1].get('action') == 'create' and
                 (latest_goal_command[1].get('response') or {}).get('confirmed') and
                 time.time() - latest_goal_command[1].get('confirmedAt', latest_goal_command[1].get('at', 0)) > 1 and
-                native_goal_absent(self.codex_home, session.id)):
+                self.host == 'local' and native_goal_absent(self.codex_home, session.id)):
             view['goal'] = None
             return
         goals = [(k, v) for k, v in merged.items() if v.get("workMode") == "goal"]
@@ -2041,9 +2040,9 @@ class Bridge:
     @operation
     def _goal_control(self, thread_id, request_id, action, *, status=None, objective=None, ui_locale=None, expected=None):
         uuid.UUID(request_id)
-        if self.host != 'local':
-            raise ValueError('目标模式暂不支持 SSH 主机')
         session = self.session(thread_id, attach=False, background=True)
+        if self.host != 'local' and not (session.origin == 'cli' and session.connected and session.runtime == 'cli'):
+            raise ValueError('目标模式暂不支持 SSH 主机')
         if session.origin != 'cli' and self.goal is None:
             raise ValueError('目标模式暂不支持 SSH 主机')
         if session.origin == 'cli' and not session.connected:
@@ -2130,13 +2129,17 @@ class Bridge:
         if work_mode == "goal" and (mode != "send" or not text.strip() or len(text) > 4000):
             raise ValueError("目标需在当前任务结束后直接发送，且不超过 4000 字")
         if work_mode == "goal":
-            if self.host != "local":
-                raise ValueError("目标模式暂不支持 SSH 主机")
             if identifiers:
                 raise ValueError("目标模式暂不支持附件")
             if skills:
                 raise ValueError("目标模式只接受纯文本目标")
+            if self.host != 'local':
+                session = self.session(thread_id, attach=False, background=True)
+                if not (session.origin == 'cli' and session.connected and session.runtime == 'cli'):
+                    raise ValueError('目标模式暂不支持 SSH 主机')
             session = self._target(thread_id)
+            if self.host != 'local' and not (session.origin == 'cli' and session.connected and session.runtime == 'cli'):
+                raise ValueError('目标模式暂不支持 SSH 主机')
             if session.origin != 'cli' and self.goal is None:
                 raise ValueError('目标模式暂不支持 SSH 主机')
             if session.origin == 'cli' and not self._session_goal_available(session):

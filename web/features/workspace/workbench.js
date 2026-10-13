@@ -188,7 +188,15 @@ class Workbench {
     if(restoreMain)this.chat.querySelector('.timeline').scrollTop=session.scroll;
     this.refreshThumbnails();
   }
-  back() { const floating=this.panel.querySelector('.wb-float'); if(floating){floating.querySelector('.wb-float-close').click();return true;} if (!this.isFileVisible) return false; this.select('chat'); return true; }
+  back() {
+    const floating=this.panel.querySelector('.wb-float'); if(floating){floating.querySelector('.wb-float-close').click();return true;}
+    const session=this.current,files=session?.files.find(tab=>tab.id==='files');
+    const viewingFiles=files&&(this.splitMode?session.splitTab==='files':session.active==='files');
+    if(viewingFiles&&session.directory){this.directory(session,files,session.directory.split('/').slice(0,-1).join('/'));return true;}
+    if(this.splitMode){if(!viewingFiles)return false;session.splitTab=null;this.select('chat');return true;}
+    if(!this.isFileVisible)return false;
+    this.select('chat');return true;
+  }
   async close(id) {
     const session = this.current, index = session.files.findIndex(t => t.id === id);
     if (index < 0) return;
@@ -302,7 +310,7 @@ class Workbench {
       tab.next = result.nextOffset;
       if (tab.next !== null) { const more = this.button(BridgeI18n.t('加载更多'), () => this.directory(session, tab, path, true)); more.className = 'wb-load-more'; tab.body.append(more); }
       if (session === this.current) this.refreshThumbnails();
-    } catch (error) { if (error.name !== 'AbortError') { tab.status.textContent=BridgeI18n.t(error.message); tab.status.classList.add('error'); } }
+    } catch (error) { if (!controller.signal.aborted && this.sessions.has(session.key) && error.name !== 'AbortError') { tab.status.textContent=BridgeI18n.t(error.message); tab.status.classList.add('error'); } }
   }
   async preview(session, entry) {
     if (session !== this.current) return;

@@ -1,9 +1,12 @@
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 from bridge.clients.codex.app_server import AppServerUnavailable, AppServerUnsupported
-from bridge.clients.codex.cli_session import CliSessions, _ssh_proxy_command
+from bridge.clients.codex.cli_session import CliSessions, _local_cli, _ssh_proxy_command
+
+ROOT = Path(__file__).resolve().parents[1]
 
 
 class FakeClient:
@@ -28,7 +31,8 @@ class FakeClient:
         if method == 'thread/read':
             return {'thread': self.thread.copy()}
         if method == 'thread/resume':
-            return {'thread': self.thread.copy(), 'modelProvider': 'original-provider'}
+            return {'thread': self.thread.copy(), 'modelProvider': 'original-provider',
+                    'cwd': '/original/project', 'model': 'original-model'}
         if method == 'turn/start':
             return {'turn': {'id': 'turn-1'}}
         return {}
@@ -42,7 +46,8 @@ class FakeClient:
 
 class CliSessionTests(unittest.TestCase):
     def setUp(self):
-        self.temp = tempfile.TemporaryDirectory()
+        (ROOT / '.tmp').mkdir(exist_ok=True)
+        self.temp = tempfile.TemporaryDirectory(dir=ROOT / '.tmp')
         self.home = Path(self.temp.name)
         (self.home / 'app-server-control').mkdir()
         (self.home / 'app-server-control/app-server-control.sock').touch()
@@ -124,6 +129,14 @@ class CliSessionTests(unittest.TestCase):
             self.sessions.call('thread-a', 'thread-follower-interrupt-turn',
                                {'expectedTurnId': 'turn-1'})
 
+    def test_provider_change_revokes_write_access(self):
+        self.sessions.attach('thread-a', explicit=True)
+        self.fake.thread['modelProvider'] = 'another-provider'
+        with self.assertRaises(AppServerUnavailable):
+            self.sessions.call('thread-a', 'thread-follower-interrupt-turn',
+                               {'expectedTurnId': 'turn-1'})
+        self.assertFalse(any(method == 'turn/interrupt' for method, _ in self.fake.sent))
+
     def test_ssh_proxy_uses_strict_existing_runtime_connection(self):
         command = _ssh_proxy_command('saved-host')
         self.assertIn('BatchMode=yes', command)
@@ -131,6 +144,7 @@ class CliSessionTests(unittest.TestCase):
         self.assertIn('StrictHostKeyChecking=yes', command)
         self.assertEqual(command[-2], 'saved-host')
         self.assertIn('codex app-server proxy', command[-1])
+        self.assertNotIn('sh -lc', command[-1])
         with self.assertRaises(ValueError):
             _ssh_proxy_command('-unsafe')
         remote = CliSessions(self.home / 'local-only-path', lambda *_: None,
@@ -138,6 +152,15 @@ class CliSessionTests(unittest.TestCase):
         remote.client = FakeClient(self.home)
         self.assertTrue(remote.available())
         self.assertEqual(remote.attach('thread-a', explicit=True)['id'], 'thread-a')
+
+    def test_packaged_app_finds_existing_daemon_cli_without_path(self):
+        runtime = self.home / 'packages/app-server-daemon/current/bin/codex'
+        runtime.parent.mkdir(parents=True)
+        runtime.write_text('#!/bin/sh\n')
+        runtime.chmod(0o700)
+        with patch('bridge.clients.codex.cli_session.shutil.which', return_value=None), \
+                patch('bridge.clients.codex.cli_session.Path.home', return_value=self.home):
+            self.assertEqual(_local_cli(self.home, 'codex'), str(runtime))
 
 
 if __name__ == '__main__':

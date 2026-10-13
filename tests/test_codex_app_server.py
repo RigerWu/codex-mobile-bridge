@@ -11,6 +11,8 @@ from pathlib import Path
 from bridge.clients.codex.app_server import (
     AppServerUnknownResult, AppServerUnsupported, CodexAppServer)
 
+ROOT = Path(__file__).resolve().parents[1]
+
 
 class FixtureProcess:
     def __init__(self, argv, **kwargs):
@@ -97,7 +99,8 @@ class FixtureProcess:
 
 class AppServerTests(unittest.TestCase):
     def setUp(self):
-        self.temp = tempfile.TemporaryDirectory()
+        (ROOT / '.tmp').mkdir(exist_ok=True)
+        self.temp = tempfile.TemporaryDirectory(dir=ROOT / '.tmp')
         self.socket = Path(self.temp.name) / 'existing.sock'
         self.socket.touch()
         self.processes = []

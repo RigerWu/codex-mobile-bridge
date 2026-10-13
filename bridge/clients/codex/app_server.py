@@ -289,6 +289,7 @@ class CodexAppServer:
                             future.set_exception(AppServerUnknownResult(
                                 'Codex runtime connection closed; request result is unknown'))
             if current:
+                self._stop_process(process)
                 self.on_disconnect()
 
     def close(self):
@@ -303,16 +304,21 @@ class CodexAppServer:
                     future.set_exception(AppServerUnknownResult(
                         'Codex runtime connection closed; request result is unknown'))
         if process is not None:
-            if process.poll() is None:
-                process.terminate()
+            self._stop_process(process)
+
+    @staticmethod
+    def _stop_process(process):
+        # The child is a byte proxy only. Stopping it never stops app-server.
+        if process.poll() is None:
+            process.terminate()
+            try:
+                process.wait(timeout=2)
+            except subprocess.TimeoutExpired:
+                process.kill()
+                process.wait(timeout=2)
+        for stream in (process.stdin, process.stdout):
+            if stream is not None:
                 try:
-                    process.wait(timeout=2)
-                except subprocess.TimeoutExpired:
-                    process.kill()
-                    process.wait(timeout=2)
-            for stream in (process.stdin, process.stdout):
-                if stream is not None:
-                    try:
-                        stream.close()
-                    except OSError:
-                        pass
+                    stream.close()
+                except OSError:
+                    pass

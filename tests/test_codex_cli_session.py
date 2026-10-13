@@ -86,6 +86,11 @@ class CliSessionTests(unittest.TestCase):
         self.sessions.call('thread-a', 'thread-follower-command-approval-decision',
                            {'requestId': 9, 'decision': 'decline'})
         self.assertEqual(self.fake.replies, [(9, {'decision': 'decline'})])
+        self.sessions._server_request({'id': 10, 'method': 'item/tool/requestUserInput',
+                                       'params': {'threadId': 'thread-a', 'questions': []}})
+        self.sessions.call('thread-a', 'thread-follower-submit-user-input',
+                           {'requestId': 10, 'response': {'answers': {'q': {'answers': ['yes']}}}})
+        self.assertEqual(self.fake.replies[-1][0], 10)
 
     def test_unsupported_operation_fails_closed(self):
         self.sessions.attach('thread-a', explicit=True)

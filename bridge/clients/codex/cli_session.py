@@ -114,7 +114,8 @@ class CliSessions:
             'thread-follower-command-approval-decision': 'item/commandExecution/requestApproval',
             'thread-follower-file-approval-decision': 'item/fileChange/requestApproval',
             'thread-follower-permissions-request-approval-response': 'item/permissions/requestApproval',
-            'thread-follower-submit-user-input': 'tool/requestUserInput',
+            'thread-follower-submit-user-input': 'item/tool/requestUserInput',
+            'thread-follower-submit-mcp-server-elicitation-response': 'mcpServer/elicitation/request',
         }
         if desktop_method in approval_methods:
             request_id = params.get('requestId')

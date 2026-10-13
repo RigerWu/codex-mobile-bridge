@@ -16,21 +16,6 @@ from bridge.clients.codex.remote import RemoteStore, RemoteUnavailable
 from bridge.features.sessions.store import SessionStore, StoreUnavailable
 
 
-def _ssh_proxy_command(alias):
-    if not alias or alias.startswith('-') or any(c.isspace() for c in alias):
-        raise ValueError('Invalid SSH host alias')
-    # Match RemoteStore's explicit user login shell, so it resolves the same
-    # CODEX_HOME and PATH. Quote the inner program as one -lc argument.
-    inner = ('if command -v codex >/dev/null 2>&1; then '
-             'exec codex app-server proxy; '
-             'elif test -x "$HOME/.local/bin/codex"; then '
-             'exec "$HOME/.local/bin/codex" app-server proxy; else exit 127; fi')
-    remote = 'exec "$SHELL" -lc ' + shlex.quote(inner)
-    return ['ssh', '-T', '-o', 'BatchMode=yes', '-o', 'ClearAllForwardings=yes',
-            '-o', 'ConnectTimeout=8', '-o', 'StrictHostKeyChecking=yes',
-            '-o', 'UpdateHostKeys=no', alias, remote]
-
-
 def _managed_cli(home):
     """Mirror the 0.162 daemon's selected package without installing one."""
     home = Path(home)
@@ -52,9 +37,9 @@ def _managed_cli(home):
     return selected if selected.is_file() and os.access(selected, os.X_OK) else None
 
 
-def _ssh_daemon_start_command(alias):
-    command = _ssh_proxy_command(alias)
-    inner = ('home=${CODEX_HOME:-$HOME/.codex}; '
+def _ssh_managed_exec(*args):
+    arguments = ' '.join(shlex.quote(arg) for arg in args)
+    return ('home=${CODEX_HOME:-$HOME/.codex}; '
              'state="$home/app-server-daemon"; '
              'if test -e "$home/packages/app-server-daemon/current" || '
              'test -L "$home/packages/app-server-daemon/current" || '
@@ -66,9 +51,29 @@ def _ssh_daemon_start_command(alias):
              'then root="$home/packages/standalone"; '
              'else root="$home/packages/app-server-daemon"; fi; '
              'if test -x "$root/current/bin/codex"; then '
-             'exec "$root/current/bin/codex" app-server daemon start; '
+             'exec "$root/current/bin/codex" app-server ' + arguments + '; '
              'elif test -x "$root/current/codex"; then '
-             'exec "$root/current/codex" app-server daemon start; else exit 73; fi')
+             'exec "$root/current/codex" app-server ' + arguments + '; else exit 73; fi')
+
+
+def _ssh_proxy_command(alias):
+    if not alias or alias.startswith('-') or any(c.isspace() for c in alias):
+        raise ValueError('Invalid SSH host alias')
+    # Match RemoteStore's explicit user login shell and CODEX_HOME selection.
+    inner = ('if command -v codex >/dev/null 2>&1; then '
+             'exec codex app-server proxy; '
+             'elif test -x "$HOME/.local/bin/codex"; then '
+             'exec "$HOME/.local/bin/codex" app-server proxy; else '
+             + _ssh_managed_exec('proxy') + '; fi')
+    remote = 'exec "$SHELL" -lc ' + shlex.quote(inner)
+    return ['ssh', '-T', '-o', 'BatchMode=yes', '-o', 'ClearAllForwardings=yes',
+            '-o', 'ConnectTimeout=8', '-o', 'StrictHostKeyChecking=yes',
+            '-o', 'UpdateHostKeys=no', alias, remote]
+
+
+def _ssh_daemon_start_command(alias):
+    command = _ssh_proxy_command(alias)
+    inner = _ssh_managed_exec('daemon', 'start')
     command[-1] = 'exec "$SHELL" -lc ' + shlex.quote(inner)
     return command
 

@@ -7,7 +7,7 @@
 
 > **v2.0.3 (stable)**: [Release page](https://github.com/try2love/codex-mobile-bridge/releases/tag/v2.0.3) · [Full release notes](RELEASE_NOTES.md) · [Mobile installation](mobile/README.md). This release adds Android in-app updates with download choices and mobile/Web third-party notification settings, and improves search, landscape layouts and connection recovery.
 
-> **v2.0.4 (unreleased):** locally tested source highlighting and wrapping, PDF/HTML previews, fullscreen reading, directory-aware Back and manual Claude quota queries. Download links below still point to v2.0.3; see the [upcoming release notes](RELEASE_NOTES.md).
+> **v2.0.4 (unreleased):** adds Codex CLI chat access and SSH diagnostics alongside locally tested source highlighting and wrapping, PDF/HTML previews, fullscreen reading, directory-aware Back and manual Claude quota queries. Download links below still point to v2.0.3; see the [upcoming release notes](RELEASE_NOTES.md).
 
 [简体中文](README.md) · [English](README_EN.md)
 
@@ -37,6 +37,12 @@ Tasks run on the original computer, or the original SSH host for Codex remote se
 - **Compact actions and fullscreen:** actions sit beside file details, with fullscreen next to Download. Entering or leaving fullscreen preserves PDF position and HTML state. Switching file tabs preserves PDF position but reloads HTML on return.
 
 PDF previews are capped at **20 MiB** and the configured ordinary-download limit, whichever is lower. HTML and source previews accept **UTF-8 text up to 512 KiB**. Download larger or unsupported files to open elsewhere. Update both the gateway and mobile app for the complete feature set; browser users reload after updating the gateway. See [verification](VERIFICATION.md) for release status and platform coverage.
+
+## Codex CLI chats (v2.0.4, unreleased)
+
+Saved local and configured SSH CLI chats appear with a **CLI** badge. Opening one reads its history without starting a runtime. Select **Continue chat** to connect to or resume the original CLI chat; its terminal does not need to remain open. This explicit action may start the already installed native managed daemon. Bridge does not install CLI, accept new SSH host keys or switch the chat to Desktop execution.
+
+Open **Connection diagnostics** in Settings to inspect local and remote status and counts, copy a sanitized summary, or export a file. Older mobile apps can read and copy but need an update to export. Warm connection and cold resume, including send and streaming replies, passed on macOS CLI 0.162.1; Windows, Linux and other SSH environments need separate validation. See the [CLI guide](docs/codex-cli.md) for supported controls and protocol limits.
 
 ## The v2 workbench
 

@@ -1,7 +1,7 @@
 ## v2.0.4（待发布）· CLI 会话接入与文件阅读优化
 
-- **Codex CLI 会话接入**：聊天列表纳入现有 CLI 会话，先读历史，点击“连接 CLI”后接入原有运行环境。支持发送、排队、补充任务、停止及可识别的审批/问题；暂不开放 CLI 的模型/权限设置、模式、编辑/分支等桌面专属操作。
-- **SSH 发现与诊断**：纳入已配置的有效 SSH 主机，通过用户登录 shell 读取远端数据目录；新增需要登录的脱敏诊断下载，帮助区分来源过滤、远端读取和历史文件问题。原生版本条件及协议限制见 [CLI 接入说明](docs/codex-cli.md)。
+- **Codex CLI 会话接入**：聊天列表纳入现有 CLI 会话，先读历史，点击“继续会话”后接入或恢复原会话；原终端无需保持打开。仅显式继续时才可能启动该环境中已安装的原生托管 daemon，不安装 CLI 或改用桌面会话。支持发送、排队、补充任务、停止及可识别的审批/问题；暂不开放 CLI 的模型/权限设置、模式、编辑/分支等桌面专属操作。
+- **SSH 发现与诊断**：纳入已配置的有效 SSH 主机，通过用户登录 shell 读取远端数据目录；设置中的“连接诊断”显示本机/远端状态和计数，支持复制摘要及登录后的脱敏文件导出。旧版手机 App 可查看、复制，需更新后才能导出。顶部 SSH 错误可关闭，同一故障在自动刷新时不重现，恢复或故障变化后重新提示。原生版本条件及协议限制见 [CLI 接入说明](docs/codex-cli.md)。
 - **目录返回符合浏览习惯**：在“文件”标签的子目录中，返回先进入上一级，回到项目根目录后再返回聊天；Codex 顶部返回按钮和手机工作台共用这一规则。全屏预览中先退出全屏，保留原有浮层关闭优先级。
 - **Claude 额度按需查询**：打开、返回或定时刷新账号面板时只显示已保存的额度，点击“查看剩余额度”才发起查询。显示上次成功查询的日期与时间；失败时保留旧结果和原查询时间，并提示未更新，减少非主动查询触发的凭据读取。Codex 与 DeepSeek Harness 的查询方式保持不变。
 - **源码更适合阅读**：常见代码文件增加语法高亮、独立行号和“复制代码”；可切换“自动换行 / 原始行宽”，让长代码适合手机屏幕。软换行不改变原始行号，复制保留原文、不带行号；未知语言及较大文本保留纯文本阅读。
@@ -15,12 +15,12 @@ PDF 在线预览上限为 **20 MiB**，同时受当前普通点击下载限额�
 
 正式发布后，建议网关与 Android/iOS App 一起更新，以获得完整的文件阅读和原生 HTML 隔离支持；Web 用户更新网关后重新加载页面即可。共享中继部署也需同步更新中继服务。Android 覆盖安装以保留数据；iOS 仍需自行签名。
 
-本节为待发布说明，文件阅读的本地测试已获用户确认；新增 CLI 接入仍待用户实测。各平台正式构建与发布验收尚未执行，范围见 [验证记录](VERIFICATION.md)。当前公开下载仍为 v2.0.3。手动额度查询不代表所有 macOS 钥匙串授权场景均已消除。
+本节为待发布说明，文件阅读的本地测试已获用户确认；macOS CLI 0.162.1 的运行中接入与冷恢复、发送及流式回复已通过本机联调。Windows、Linux 和不同 SSH 环境仍需各自验收；各平台正式构建与发布验收尚未执行，范围见 [验证记录](VERIFICATION.md)。当前公开下载仍为 v2.0.3。手动额度查询不代表所有 macOS 钥匙串授权场景均已消除。
 
 ### English
 
-- **Codex CLI access:** discover saved CLI chats, read history without activation, and explicitly join the original running CLI for send, queue, steer, interrupt and supported approval/input requests. Desktop-only configuration and editing actions remain unavailable.
-- **SSH discovery diagnostics:** include configured managed SSH hosts, read the remote data home through the user login shell, and export authenticated, sanitized diagnostics. See [CLI support and protocol limits](docs/codex-cli.md).
+- **Codex CLI access:** discover saved CLI chats and read history without activation. **Continue chat** explicitly connects to or resumes the original chat, even after its terminal closes; it may start the already installed, managed daemon but never installs CLI or falls back to Desktop. Send, queue, steer, interrupt and supported approval/input requests are available after connection. Desktop-only configuration and editing actions remain unavailable.
+- **SSH discovery diagnostics:** include configured managed SSH hosts and read the remote data home through the user login shell. Open **Connection diagnostics** in Settings for readable status and counts, copy the summary, or export authenticated, sanitized data. Older native apps need an update to export. A dismissed SSH error stays hidden across automatic refreshes until recovery or a changed fault. See [CLI support and protocol limits](docs/codex-cli.md).
 - **Directory-aware Back:** move to the parent folder before returning to chat at the project root. The Codex header and mobile workbench use the same rule. Back exits fullscreen previews first and preserves existing overlay handling.
 - **Manual Claude quota queries:** opening, revisiting or periodically refreshing the accounts panel displays saved usage only. Select **View remaining quota** to query. Keep the last successful date, time and values on failure, with a clear stale-data message. Codex and DeepSeek Harness retain their existing query behavior.
 - **Readable source files:** add syntax highlighting, separate line numbers and **Copy code**. Switch between **Wrap lines** and **Original line width**; wrapping keeps source line numbers aligned, and copying preserves the original text without line numbers. Unknown languages and larger text fall back to plain text.
@@ -32,7 +32,7 @@ PDF previews are limited to **20 MiB** and the configured ordinary-download limi
 
 When released, update both the gateway and Android/iOS apps for the complete feature set and native HTML isolation. Browser users only need to reload after updating the gateway. Shared-relay deployments also require a relay update. Install Android over the existing app; iOS still requires your own signing.
 
-**Unreleased:** file-reading testing has been accepted by the user; CLI access awaits user testing, and native release builds and release validation remain pending. See [verification](VERIFICATION.md). Public downloads remain v2.0.3. Manual Claude quota queries do not eliminate every macOS Keychain authorization scenario.
+**Unreleased:** file-reading testing has been accepted by the user. Warm join and cold resume, including send and streaming replies, passed locally on macOS CLI 0.162.1; Windows, Linux and different SSH environments remain to be validated. Native release builds and release validation remain pending. See [verification](VERIFICATION.md). Public downloads remain v2.0.3. Manual Claude quota queries do not eliminate every macOS Keychain authorization scenario.
 
 ---
 

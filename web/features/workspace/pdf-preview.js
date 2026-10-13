@@ -33,7 +33,7 @@ const BridgePdfPreview = (() => {
     if (touch) element.classList.add('wb-pdf-touch');
     let documentProxy, loadingTask, resizeObserver, started = false, disposed = false;
     let slots = [], fit = 1, zoom = 1, firstWidth = 0, firstHeight = 0, current = 1, measuredWidth = 0;
-    let scheduled = null, gesture = null;
+    let scheduled = null, resizeScheduled = null, gesture = null;
     const availableWidth = () => Math.max(1, stage.clientWidth - 32);
     const wrapperWidth = () => slots.reduce((max, slot) => Math.max(max, slot.width), availableWidth());
     const topOf = index => slots.slice(0, index).reduce((sum, slot) => sum + slot.height + GAP, 0);
@@ -237,6 +237,12 @@ const BridgePdfPreview = (() => {
         status.textContent = BridgeI18n.t(errorMessage(error));
       }
     };
+    const scheduleResize = () => {
+      if (resizeScheduled !== null || disposed) return;
+      const flush = () => { resizeScheduled = null; onResize(); };
+      resizeScheduled = typeof requestAnimationFrame === 'function'
+        ? requestAnimationFrame(flush) : setTimeout(flush, 0);
+    };
     const distance = touches => Math.hypot(touches[0].clientX - touches[1].clientX, touches[0].clientY - touches[1].clientY);
     const onTouchStart = event => {
       if (!touch || !documentProxy || event.touches.length !== 2) return;
@@ -276,7 +282,7 @@ const BridgePdfPreview = (() => {
       stage.addEventListener('touchcancel', onTouchEnd);
     }
     if (typeof ResizeObserver !== 'undefined') {
-      resizeObserver = new ResizeObserver(onResize); resizeObserver.observe(stage);
+      resizeObserver = new ResizeObserver(scheduleResize); resizeObserver.observe(stage);
     }
     const load = async () => {
       if (started || disposed) return;
@@ -312,6 +318,10 @@ const BridgePdfPreview = (() => {
       if (disposed) return;
       disposed = true; gesture = null;
       resizeObserver?.disconnect();
+      if (resizeScheduled !== null) {
+        if (typeof cancelAnimationFrame === 'function') cancelAnimationFrame(resizeScheduled);
+        else clearTimeout(resizeScheduled);
+      }
       stage.removeEventListener('scroll', schedule);
       stage.removeEventListener('keydown', onKeyDown);
       if (touch) {

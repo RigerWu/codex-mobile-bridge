@@ -25,7 +25,7 @@ class Element {
 }
 const element = tag => new Element(tag);
 const childWithClass = (node, name) => node.children.find(child => child.className.split(' ').includes(name));
-const tick = async () => { await new Promise(setImmediate); await new Promise(setImmediate); };
+const tick = async () => { await new Promise(resolve=>setTimeout(resolve,0)); await new Promise(setImmediate); await new Promise(setImmediate); };
 const setup = (coarse=false) => {
   global.document={createElement:element};
   global.BridgeI18n={t:text=>text};
@@ -120,7 +120,9 @@ test('resize preserves current reading position and pinch rerenders only after g
     stage.scrollTop=5*parseFloat(pages.children[0].style.height);
     stage.dispatch('scroll'); await tick();
     const before=toolbar.children[1].textContent, beforeTop=stage.scrollTop;
-    stage.clientWidth=900; observer.resize(); await tick();
+    stage.clientWidth=900; observer.resize();
+    assert.equal(parseFloat(pages.children[0].style.width),568, 'observer callback defers layout writes');
+    await tick();
     assert.equal(toolbar.children[1].textContent,before);
     assert.ok(stage.scrollTop>beforeTop);
     let prevented=false;
@@ -136,6 +138,27 @@ test('resize preserves current reading position and pinch rerenders only after g
     assert.ok(pages.children.filter(sheet=>sheet.children.length).length<=3);
     reader.dispose();
   } finally { cleanup(); }
+});
+
+test('closing cancels a deferred ResizeObserver layout', async () => {
+  const observer=setup();
+  const frames=new Map(); let frame=0;
+  global.requestAnimationFrame=callback=>{frames.set(++frame,callback);return frame;};
+  global.cancelAnimationFrame=id=>frames.delete(id);
+  try {
+    const fake=fixture(), reader=pdf.create({url:'/api/workspace/download?path=file.pdf',
+      info:{size:1000,clickDownloadMiB:1},loadLibrary:fake.loadLibrary});
+    await reader.load();
+    const stage=reader.element.children[2], first=stage.children[0].children[0];
+    const width=first.style.width;
+    stage.clientWidth=900; observer.resize();
+    assert.equal(first.style.width,width);
+    assert.equal(frames.size,2, 'paint and resize are separately deferred');
+    reader.dispose();
+    assert.equal(frames.size,0);
+  } finally {
+    delete global.requestAnimationFrame; delete global.cancelAnimationFrame; cleanup();
+  }
 });
 
 test('pending offscreen rendering is cancelled and closing destroys document', async () => {

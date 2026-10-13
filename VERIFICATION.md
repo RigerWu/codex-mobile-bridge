@@ -9,6 +9,7 @@
 | CLI-only | 在真实 Desktop IPC 可用但无该测试会话 owner 的情况下，查询超时后显式原生冷恢复通过 | 使用项目 .tmp 测试历史；没有模型调用；测试 daemon 已关闭 |
 | 路由与回归 | 既有 App owner 发送目标、cwd/provider/host 核验、双向迟到事件、并发连接、断线及分页历史回归通过；后端 source-only 1549 项：1487 通过、62 跳过；前端 611 项最终 610 通过、1 跳过 | 前端首次有两项受 loopback 沙箱限制，单独放行重跑通过；不把跳过计为通过 |
 | 本地构建 | macOS arm64 Test App 冻结构建、打包、深层严格签名校验、隔离真实启动及内置 worker 加载通过 | 手机原生壳无需因本次后端修复重编；Windows/Linux/SSH 原生平台未新增实机验收 |
+| 8788 打包验收 | 新测试包实际 LAN 登录、用户原 CLI 聊天历史与 Desktop owner 连接、连接诊断和 5 项共享资源摘要通过；8787 PID 与实例保持不变 | 保留测试绑定数据；旧测试包退出并清理，没有向用户原会话发送测试消息 |
 
 仅本地修改与合并，不推送 GitHub。CLI 来源的模型/权限、目标与编辑等操作仍维持此前限制。协议 writer 锁由原生运行时管理；本轮不清锁、不关闭现有持有者。详见 [CLI 接入说明](docs/codex-cli.md) 和 [路由决定](.agents/notes/implemented/bug-fix/2026-10-14-cli-existing-owner.md)。
 

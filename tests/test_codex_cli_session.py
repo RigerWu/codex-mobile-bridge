@@ -1,10 +1,11 @@
 import tempfile
 import shlex
+import threading
 import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from bridge.clients.codex.app_server import AppServerUnavailable, AppServerUnsupported
+from bridge.clients.codex.app_server import AppServerUnavailable, AppServerUnsupported, AppServerUnknownResult
 from bridge.clients.codex.cli_session import CliSessions, _local_cli, _ssh_proxy_command
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -137,6 +138,50 @@ class CliSessionTests(unittest.TestCase):
             self.sessions.call('thread-a', 'thread-follower-interrupt-turn',
                                {'expectedTurnId': 'turn-1'})
         self.assertFalse(any(method == 'turn/interrupt' for method, _ in self.fake.sent))
+
+    def test_unknown_approval_result_quarantines_numeric_request_id(self):
+        self.sessions.attach('thread-a', explicit=True)
+        request = {'id': 73, 'method': 'item/commandExecution/requestApproval',
+                   'params': {'threadId': 'thread-a', 'turnId': 'turn-1'}}
+        self.sessions._server_request(request)
+        sends = []
+        def uncertain(request_id, result):
+            sends.append((request_id, result))
+            raise AppServerUnknownResult('response may have arrived')
+        self.fake.respond = uncertain
+        with self.assertRaises(AppServerUnknownResult):
+            self.sessions.call('thread-a', 'thread-follower-command-approval-decision',
+                               {'requestId': 73, 'decision': 'decline'})
+        self.assertEqual(self.states[-1][1]['requests'], [])
+        self.sessions._server_request(request)
+        with self.assertRaises(AppServerUnavailable):
+            self.sessions.call('thread-a', 'thread-follower-command-approval-decision',
+                               {'requestId': 73, 'decision': 'decline'})
+        self.assertEqual(sends, [(73, {'decision': 'decline'})])
+
+    def test_concurrent_approval_claim_allows_only_one_send(self):
+        self.sessions.attach('thread-a', explicit=True)
+        self.sessions._server_request({'id': 74, 'method': 'item/fileChange/requestApproval',
+                                       'params': {'threadId': 'thread-a', 'turnId': 'turn-1'}})
+        entered = threading.Event()
+        release = threading.Event()
+        sends = []
+        def wait_for_result(request_id, result):
+            sends.append(request_id)
+            entered.set()
+            release.wait(2)
+        self.fake.respond = wait_for_result
+        worker = threading.Thread(target=lambda: self.sessions.call(
+            'thread-a', 'thread-follower-file-approval-decision',
+            {'requestId': 74, 'decision': 'accept'}))
+        worker.start()
+        self.assertTrue(entered.wait(2))
+        with self.assertRaises(AppServerUnavailable):
+            self.sessions.call('thread-a', 'thread-follower-file-approval-decision',
+                               {'requestId': 74, 'decision': 'accept'})
+        release.set()
+        worker.join(2)
+        self.assertEqual(sends, [74])
 
     def test_ssh_proxy_uses_strict_existing_runtime_connection(self):
         command = _ssh_proxy_command('saved-host')

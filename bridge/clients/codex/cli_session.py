@@ -59,6 +59,7 @@ class CliSessions:
         self.metadata = {}
         self.states = {}
         self.requests = {}
+        self.consumed_requests = {}
         self.refreshing = set()
         self.refresh_pending = set()
         self.client = CodexAppServer(
@@ -197,20 +198,34 @@ class CliSessions:
         }
         if desktop_method in approval_methods:
             request_id = params.get('requestId')
-            with self.lock:
-                pending = self.requests.get(thread_id, {}).get(request_id)
             expected = approval_methods[desktop_method]
-            if not pending or (pending['method'] != expected and not (
-                    expected == 'item/tool/requestUserInput' and pending['method'] == 'tool/requestUserInput')):
-                raise AppServerUnavailable('CLI approval is no longer pending')
             if desktop_method in ('thread-follower-command-approval-decision',
                                   'thread-follower-file-approval-decision'):
+                if 'decision' not in params:
+                    raise AppServerUnsupported('Missing CLI approval decision')
                 result = {'decision': params['decision']}
             else:
+                if 'response' not in params:
+                    raise AppServerUnsupported('Missing CLI approval response')
                 result = params['response']
-            self.client.respond(request_id, result)
             with self.lock:
-                self.requests[thread_id].pop(request_id, None)
+                pending = self.requests.get(thread_id, {}).get(request_id)
+                if not pending or (pending['method'] != expected and not (
+                        expected == 'item/tool/requestUserInput' and pending['method'] == 'tool/requestUserInput')):
+                    raise AppServerUnavailable('CLI approval is no longer pending')
+                # Claim the native request id before writing. A send timeout or
+                # disconnect has an unknown result and must not permit replay.
+                self.requests[thread_id].pop(request_id)
+                self.consumed_requests.setdefault(thread_id, set()).add(request_id)
+                state = self.states.get(thread_id)
+                if state is not None:
+                    state['requests'] = list(self.requests[thread_id].values())
+                    snapshot = copy.deepcopy(state)
+                else:
+                    snapshot = None
+            if snapshot is not None:
+                self.on_state(thread_id, snapshot)
+            self.client.respond(request_id, result)
             self._queue_refresh(thread_id)
             return {'submitted': True}
         raise AppServerUnsupported('CLI operation is not supported by this adapter')
@@ -347,6 +362,8 @@ class CliSessions:
         with self.lock:
             if thread_id not in self.joined and thread_id not in self.attaching:
                 return
+            if request['id'] in self.consumed_requests.get(thread_id, set()):
+                return
             self.requests.setdefault(thread_id, {})[request['id']] = request
             state = self.states.get(thread_id)
             if state is not None:
@@ -386,6 +403,7 @@ class CliSessions:
             self.metadata.clear()
             self.states.clear()
             self.requests.clear()
+            self.consumed_requests.clear()
             self.refresh_pending.clear()
         self.on_disconnect()
 
@@ -396,6 +414,7 @@ class CliSessions:
             self.metadata.pop(thread_id, None)
             self.states.pop(thread_id, None)
             self.requests.pop(thread_id, None)
+            self.consumed_requests.pop(thread_id, None)
         self.on_disconnect()
 
     def close(self):

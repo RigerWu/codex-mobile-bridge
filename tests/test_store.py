@@ -83,6 +83,33 @@ class StoreTests(unittest.TestCase):
                 self.store.list()
             copy.assert_not_called()
 
+    def test_cli_discovery_read_and_sanitized_diagnostics(self):
+        with sqlite3.connect(self.path) as db:
+            db.executemany('INSERT INTO threads VALUES (?,?,?,?,?,?,?)', [
+                ('tui', 'CLI private title', '/private/user', 3, 0, 'codex-tui', 'vscode'),
+                ('cli', 'CLI private title', '/private/user', 4, 0, 'codex_cli_rs', 'cli'),
+                ('other', 'Other', '/private/user', 5, 0, 'unknown', 'cli'),
+                ('child', 'Child', '/private/user', 6, 0, 'codex_cli_rs', '{"subagent":{}}'),
+                ('archived', 'Archive', '/private/user', 7, 1, 'codex_cli_rs', 'cli'),
+            ])
+        rows = self.store.list()
+        self.assertEqual({r['id']: r['origin'] for r in rows}, {'test': 'desktop', 'tui': 'cli', 'cli': 'cli'})
+        self.assertEqual(self.store.get('tui')['origin'], 'cli')
+        self.assertEqual(self.store.get('cli')['origin'], 'cli')
+        self.assertEqual({r['id'] for r in self.store.notification_changes()}, {'test', 'tui', 'cli', 'archived'})
+        self.assertEqual([r['id'] for r in self.store.list(archived=True)], ['archived'])
+        for thread_id in ('other', 'child'):
+            with self.assertRaises(KeyError):
+                self.store.get(thread_id)
+        self.assertEqual({r['id'] for r in self.store.lifecycle_threads()}, {'test'})
+        report = self.store.discovery_diagnostics('cli')
+        self.assertEqual(report['counts'], {'desktop': 1, 'cli': 3, 'other': 1, 'subagent': 1,
+                                            'visible': 3, 'archived': 1})
+        self.assertEqual(report['target'], {'found': True, 'origin': 'cli', 'reason': 'rollout_missing', 'read': 'unavailable'})
+        self.assertNotIn('/private/user', str(report))
+        self.assertNotIn('CLI private title', str(report))
+        self.assertEqual(self.store.discovery_diagnostics('absent')['target']['reason'], 'missing')
+
 
 class RecentHistoryTests(unittest.TestCase):
     def setUp(self):

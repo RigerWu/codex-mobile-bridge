@@ -46,3 +46,8 @@
 .timeline .attachment-image{min-height:80px;background:#dfe5d9}
 
 .remember-login{display:flex;align-items:center;gap:8px}.remember-login input{width:auto;flex:none}
+.host-error-row{display:flex;align-items:flex-start;justify-content:space-between;gap:8px;padding:7px 0}
+.host-error-row>span{min-width:0;overflow-wrap:anywhere}
+.host-error-row button{flex:none;min-width:32px;min-height:32px;margin:-6px -8px -6px 0;font-size:18px}
+.session-diagnostics-summary{white-space:pre-wrap;overflow-wrap:anywhere;font-size:13px;line-height:1.6}
+#session-diagnostics-export[hidden]{display:none}

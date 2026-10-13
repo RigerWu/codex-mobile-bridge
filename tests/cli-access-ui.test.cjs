@@ -10,7 +10,7 @@ const reconnectCode=extract("$('reconnect').onclick=", "document.querySelectorAl
 function node(){return {hidden:false,disabled:false,value:'',textContent:'',title:'',children:[],scrollTop:0,classList:{toggle(){}},append(...parts){this.children.push(...parts);},replaceChildren(...parts){this.children=parts;},querySelector(){return node();}};}
 function fixture(){
   const nodes=new Map();const $=id=>{if(!nodes.has(id))nodes.set(id,node());return nodes.get(id);};
-  const ctx={$ ,state:null,reconnectFailure:null,listRows:[],listRenderStamp:'',currentId:'a',currentHost:'local',sending:false,selectedSkills:new Set(),invalidSkills:new Set(),renderSkillPills(){},BridgeI18n:{locale:()=> 'en-US'},t:key=>({'此电脑':'This computer','其他来源':'Other source','历史记录':'History','重新连接':'Reconnect','连接 CLI':'Connect CLI'}[key]||key),localStorage:{getItem:()=>null,setItem(){}},dateText:()=> 'today',el:(tag,cls='',value='')=>Object.assign(node(),{tag,cls,textContent:value,dataset:{}}),renderActivity(){},contextUsageControl:{update(){}},fastModeControl:{sync(){}},visibleChat:()=>false,sessionActivity:{read(){}},attachments:{ready:()=>true},workModes:{render(view){ctx.modesView=view;}},workbench:{current:{}},chatTimeline:{refreshActions(){}},renderApprovals(rows){ctx.approvals=rows;},renderQueue(){},approvalStamp:'',chatKey:()=> 'local|a'};
+  const ctx={$ ,state:null,reconnectFailure:null,listRows:[],listRenderStamp:'',currentId:'a',currentHost:'local',sending:false,selectedSkills:new Set(),invalidSkills:new Set(),renderSkillPills(){},BridgeI18n:{locale:()=> 'en-US'},t:key=>({'此电脑':'This computer','其他来源':'Other source','历史记录':'History','重新连接':'Reconnect','继续会话':'Continue chat'}[key]||key),localStorage:{getItem:()=>null,setItem(){}},dateText:()=> 'today',el:(tag,cls='',value='')=>Object.assign(node(),{tag,cls,textContent:value,dataset:{}}),renderActivity(){},contextUsageControl:{update(){}},fastModeControl:{sync(){}},visibleChat:()=>false,sessionActivity:{read(){}},attachments:{ready:()=>true},workModes:{render(view){ctx.modesView=view;}},workbench:{current:{}},chatTimeline:{refreshActions(){}},renderApprovals(rows){ctx.approvals=rows;},renderQueue(){},approvalStamp:'',chatKey:()=> 'local|a'};
   vm.createContext(ctx);vm.runInContext(accessCode+listCode+stateCode,ctx);
   return {ctx,$,nodes};
 }
@@ -28,7 +28,8 @@ test('history-only CLI hides join and write controls but keeps history and copy 
 });
 test('joinable CLI presents an explicit join without enabling unsupported controls',()=>{
   const {ctx,$}=fixture();const joinable={...cli,canReconnect:true};ctx.renderState({host:'local',title:'CLI thread',cwd:'/work',access:joinable,connected:false,status:'idle',requests:[],submissions:[],historyComplete:true});
-  assert.equal($('reconnect').hidden,false);assert.equal($('reconnect').textContent,'Connect CLI');assert.equal($('send').disabled,true);
+  assert.equal($('reconnect').hidden,false);assert.equal($('reconnect').textContent,'Continue chat');assert.equal($('send').disabled,true);
+  assert.match($('notice-text').textContent,/可先阅读聊天历史/);
 });
 test('joined CLI enables send, steer and approvals while keeping collaboration modes unavailable',()=>{
   const {ctx,$}=fixture(),access={...cli,readOnly:false,canSend:true,canInterrupt:true,canApprove:true,canReconnect:true};
@@ -46,7 +47,39 @@ test('a failed CLI join remains visible through later history renders and clears
   ctx.renderState({...view,connected:true,access:{...access,readOnly:false,canSend:true}});
   assert.equal(ctx.reconnectFailure,null);assert.equal($('notice').hidden,true);
 });
-test('session diagnostics is directly available from the list',()=>{
-  assert.match(html,/<a id="session-diagnostics"[^>]+href="#"[^>]+download="session-diagnostics\.json"/);
-  assert.match(app,/openingAccess\.source==='desktop'&&openingAccess\.canReconnect/);assert.match(app,/BridgeRelayURL\?\.\('\/api\/sessions\/diagnostics'\)/);
+test('connection diagnostics is secondary to settings and keeps the original export route',()=>{
+  assert.doesNotMatch(html,/<a id="session-diagnostics"/);
+  assert.match(html,/<button id="open-session-diagnostics"/);
+  assert.match(html,/<dialog id="session-diagnostics-dialog"/);
+  assert.match(app,/openingAccess\.source==='desktop'&&openingAccess\.canReconnect/);
+  assert.match(app,/const diagnosticsPath='\/api\/sessions\/diagnostics'/);
+});
+test('dismissed SSH faults stay hidden on refresh, then return after recovery or on another gateway',()=>{
+  const nodes=new Map(),$=id=>{if(!nodes.has(id))nodes.set(id,{children:[],replaceChildren(){this.children=[];},append(child){this.children.push(child);child.remove=()=>{this.children=this.children.filter(item=>item!==child);};},get childElementCount(){return this.children.length;}});return nodes.get(id);};
+  const ctx={$,window:{BridgeRelayBase:'/relay/a'},location:{origin:'https://bridge.example'},dismissedHostFaults:new Map(),t:value=>value,el:(tag,cls,text)=>({tag,cls,textContent:text,children:[],append(child){this.children.push(child);},setAttribute(){}})};
+  vm.createContext(ctx);vm.runInContext(extract('function renderHostErrors(hosts){','function authLost()'),ctx);
+  const fault=[{host:'remote-1',label:'Remote',error:'SSH unavailable'}];ctx.renderHostErrors(fault);
+  assert.equal($('host-errors').childElementCount,1);
+  $('host-errors').children[0].children[1].onclick();ctx.renderHostErrors(fault);
+  assert.equal($('host-errors').childElementCount,0);
+  ctx.window.BridgeRelayBase='/relay/b';ctx.renderHostErrors(fault);
+  assert.equal($('host-errors').childElementCount,1);
+  ctx.window.BridgeRelayBase='/relay/a';ctx.renderHostErrors([]);ctx.renderHostErrors(fault);
+  assert.equal($('host-errors').childElementCount,1);
+});
+test('diagnostics summary uses only aggregate fields and old native apps cannot export',async()=>{
+  const nodes=new Map(),$=id=>{if(!nodes.has(id))nodes.set(id,{hidden:false,disabled:false,textContent:'',close(){},showModal(){},children:[]});return nodes.get(id);};
+  const report={hosts:[{host:'local',status:'ok',phase:'discovery',counts:{cli:2,desktop:1,visible:3,archived:1},privatePath:'/secret',title:'secret title'},{host:'remote-1',status:'unavailable',phase:'ssh',reason:'remote_read_failed',alias:'secret alias'}]};
+  const ctx={$,window:{},BridgeHost:{isNativeApp:()=>true},t:key=>key,api:async()=>report};vm.createContext(ctx);
+  vm.runInContext(extract("let sessionDiagnosticsText='';","$('archived').onchange"),ctx);
+  $('open-session-diagnostics').onclick();await new Promise(setImmediate);
+  assert.match($('session-diagnostics-summary').textContent,/CLI: 2/);
+  assert.match($('session-diagnostics-summary').textContent,/remote-1|远端电脑 1/);
+  assert.doesNotMatch($('session-diagnostics-summary').textContent,/secret|\/secret/);
+  assert.equal($('session-diagnostics-export').hidden,true);
+  assert.equal($('session-diagnostics-export-note').hidden,false);
+  let prevented=false;$('session-diagnostics-export').onclick({preventDefault(){prevented=true;},currentTarget:{href:'#'}});
+  assert.equal(prevented,true);
+  ctx.window.BridgeMobileCapabilities={diagnosticsExport:true};$('open-session-diagnostics').onclick();await new Promise(setImmediate);
+  assert.equal($('session-diagnostics-export').hidden,false);
 });

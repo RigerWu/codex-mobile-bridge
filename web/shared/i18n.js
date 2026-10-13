@@ -2474,6 +2474,7 @@ const en={
   "返回电脑列表": "Back to computers",
   "请求批准": "Ask for approval",
   "帮我批准": "Approve for me",
+  "完全访问": "Full access",
   "完全访问权限": "Full access",
   "会话权限": "Chat permissions",
   "需要额外权限时询问你。": "Ask you when extra permissions are needed.",

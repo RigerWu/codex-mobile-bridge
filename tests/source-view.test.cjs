@@ -7,7 +7,7 @@ class Element {
   constructor(tag) { this.tagName = tag; this.children = []; this.dataset = {}; this.attributes = {}; this.style = {}; this.className = ''; this.value = ''; this.classList = {add:name=>{this.className += ' ' + name;}}; }
   get textContent() { return this.value + this.children.map(child => child.textContent).join(''); }
   set textContent(value) { this.value = value; this.children = []; }
-  append(child) { this.children.push(child); }
+  append(...children) { this.children.push(...children); }
   replaceChildren(...children) { this.value = ''; this.children = children; }
   setAttribute(name, value) { this.attributes[name] = value; }
   addEventListener() {}
@@ -121,8 +121,32 @@ test('file preview copies the original source rather than rendered tokens or lin
   await workbench.preview(session, {name:'file.js', path:'file.js'});
   const [head, content] = session.files[0].body.children;
   assert.equal(parts(content.children[0]).code.textContent, original);
-  const copy = head.children.find(child=>child.className==='wb-source-copy');
+  assert.equal(head.children[0].className, 'wb-preview-title');
+  assert.equal(head.children[1].className, 'wb-preview-actions');
+  assert.deepEqual(head.children[1].children.map(child=>child.className), ['wb-download','wb-preview-expand','wb-source-copy']);
+  const copy = tokens(head).find(child=>child.className==='wb-source-copy');
   assert.ok(copy);
   await copy.onclick();
   assert.deepEqual(copied, [original]);
+});
+
+test('HTML preview keeps mode controls separate and its Escape signal exits only its fullscreen', async () => {
+  let options, exits = 0;
+  context.BridgeHtmlPreview = {create(value) { options = value; return {element:new Element('iframe'), dispose() {}}; }};
+  const Workbench = vm.runInContext('Workbench', context), workbench = Object.create(Workbench.prototype);
+  const session = {key:'html', files:[]};
+  Object.assign(workbench, {
+    current:session, sessions:new Map([[session.key, session]]),
+    node:(tag, cls='', text)=>{const element=new Element(tag);element.className=cls;if(text!==undefined)element.textContent=text;return element;},
+    button:(text, action)=>{const button=new Element('button');button.textContent=text;button.onclick=action;return button;},
+    raw:element=>element, select:()=>{}, url:()=>'/fixture', closePreviewFullscreen:()=>{exits++;},
+    request:async()=>({kind:'text', name:'index.html', size:30, text:'<button>Click</button>'})
+  });
+  await workbench.preview(session, {name:'index.html', path:'index.html'});
+  const tab = session.files[0], [head,modes,content] = tab.body.children;
+  assert.equal(modes.className, 'wb-preview-modes');
+  assert.deepEqual(head.children[1].children.map(child=>child.className), ['wb-download','wb-preview-expand','wb-source-copy']);
+  assert.equal(content.children[0].tagName, 'iframe');
+  options.onEscape(); assert.equal(exits, 0);
+  workbench.previewFullscreen = {tab}; options.onEscape(); assert.equal(exits, 1);
 });

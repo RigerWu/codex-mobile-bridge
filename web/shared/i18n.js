@@ -1372,6 +1372,10 @@ const en={
 
   "复制": "Copy",
   "复制代码": "Copy code",
+  "下载文件": "Download file",
+  "全屏": "Fullscreen",
+  "全屏预览": "Fullscreen preview",
+  "退出全屏": "Exit fullscreen",
   "HTML 预览": "HTML preview",
   "HTML 预览无法加载，请查看源代码或下载文件": "HTML preview could not load. View the source or download the file.",
   "预览": "Preview",

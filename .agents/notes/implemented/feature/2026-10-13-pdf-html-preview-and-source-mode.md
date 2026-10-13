@@ -12,7 +12,7 @@ Status: implemented
 
 HTML 使用 `BridgeHtmlPreview.create({text}) -> {element, dispose()}`。工作台提供“预览／源代码”按钮；源码复用 `BridgeSourceView.create({name, text})`，复制从原始文本取值。切到源码或关闭标签即销毁 HTML iframe。首版只覆盖文本预览门槛内的自包含 HTML，不扩展多文件站点或外部依赖。
 
-HTML 执行环境是鉴权后返回的固定 `/html-preview-shell`，与用户正文分离。壳的 CSP 使用 `sandbox allow-scripts`，允许内联脚本与样式，默认禁资源，并禁止连接、表单和嵌套框架；主页面 `frame-src` 仅指定该壳路径。iframe 只授 `allow-scripts`，不授同源；壳发 ready 消息后，父页面核验 source/origin，单次传入不超过 512 KiB 的 UTF-8 文本。握手脚本使用局部作用域，避免 `document.open/write` 后保留的全局词法变量与用户 HTML 同名。iOS/Android 原生导航仅允许预览子帧进入固定壳，后续导航和高权限对话框被拒。壳不读取磁盘路径或任意 URL。
+HTML 执行环境是鉴权后返回的固定 `/html-preview-shell`，与用户正文分离。壳的 CSP 使用 `sandbox allow-scripts`，允许内联脚本与样式，默认禁资源，并禁止连接、表单和嵌套框架；主页面 `frame-src` 仅指定该壳路径。iframe 只授 `allow-scripts`，不授同源；壳发 ready 消息后，父页面核验 source/origin，按壳文档实例标识传入不超过 512 KiB 的固定 UTF-8 文本；壳只接收一次匹配该标识的内容。文件标签卸载后重新挂载会产生新壳文档并重新握手，避免标签返回后空白。标识仅用于文档生命周期去重，不作为权限凭证。握手脚本使用局部作用域，避免 `document.open/write` 后保留的全局词法变量与用户 HTML 同名。iOS/Android 原生导航仅允许预览子帧进入固定壳，后续导航和高权限对话框被拒。壳不读取磁盘路径或任意 URL。
 
 `web/assets.json`、固定公开 URL 白名单和 `scripts/gateway-resources.json` 同步纳入 PDF.js、HTML 壳、脚本与许可；CMap/字体仅由限定文件名的静态路由公开。SSH 注入的工作区 Python 源模块保持独立，不依赖页面脚本。
 
@@ -31,6 +31,6 @@ HTML 执行环境是鉴权后返回的固定 `/html-preview-shell`，与用户�
 
 ## Consequences
 
-普通、带文本层或扫描 PDF 可连续阅读；文档超过下载策略或 20 MiB 时需要下载后打开，扫描件不承诺 OCR。PDF.js 的本地资源增加网关体积，但离线和 SSH 页面不依赖 CDN。HTML 内联交互仅在隔离壳内运行，相对文件、外部 CDN、后端 API、表单提交和弹窗不属于首版支持范围。
+普通、带文本层或扫描 PDF 可连续阅读；文档超过下载策略或 20 MiB 时需要下载后打开，扫描件不承诺 OCR。PDF.js 的本地资源增加网关体积，但离线和 SSH 页面不依赖 CDN。全屏切换保留 HTML 交互状态；切换文件标签后返回会重新加载该 HTML，不承诺跨标签保留脚本内存。HTML 内联交互仅在隔离壳内运行，相对文件、外部 CDN、后端 API、表单提交和弹窗不属于首版支持范围。
 
 Node 定向测试覆盖大小预检、离屏渲染取消、混合尺寸和高视口可见页的画布预算、隐藏后恢复的阅读锚点、偏离中心的双指缩放、关闭销毁、工作台 info 路由及 HTML 源码切换；资源布局测试检查所有白名单与清单路径。HTML 合成 HTTP/relay 鉴权和 CSP 检查由同批安全测试覆盖。主审在真实 Chromium 验证了中文 PDF 的渲染与文本选择、翻页与缩放、扫描图页以及损坏/超限提示；HTML 的内联交互和源码切换通过，cookie、storage、父页面与宿主桥访问被拒，网络、表单与自导航未到达合成服务器。合成回归覆盖 PDF 在 info 后增长及 SSH/relay 参数路径。Android 构建和签名验证通过；iOS 类型检查通过，原生运行时验收另行记录，不能把浏览器结果等同于实机结果。多个隐藏 PDF 标签保留文档状态，关闭或重置才释放；同一预览内容进入全屏时在原 tab.body 上切换 fixed 布局并使外层界面 inert，退出时恢复原位；PDF 与 HTML 预览实例不重建，ResizeObserver 处理尺寸变化。HTML 壳经已核验的消息通道可请求退出全屏，父页面只把它映射为关闭当前全屏而不授予其它操作；不承诺全文件标签的统一内存配额。官方依据：[PDF.js API](https://mozilla.github.io/pdf.js/api/draft/module-pdfjsLib.html)、[PDF.js Getting Started](https://mozilla.github.io/pdf.js/getting_started/)；Context7 月配额耗尽后使用官方文档。

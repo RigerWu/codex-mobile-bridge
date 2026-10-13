@@ -27,15 +27,22 @@ test('HTML preview sends bounded text only to its opaque shell after a matching 
   assert.equal(frame.attrs.sandbox, 'allow-scripts');
   assert.equal(frame.src, window.BridgeRelayBase + '/html-preview-shell');
   const receive = listeners.get('message');
-  receive({source: {}, origin: 'null', data: {type: 'bridge-html-preview-ready'}});
-  receive({source: frame.contentWindow, origin: 'https://example.test', data: {type: 'bridge-html-preview-ready'}});
+  receive({source: {}, origin: 'null', data: {type: 'bridge-html-preview-ready',instance:'a'.repeat(32)}});
+  receive({source: frame.contentWindow, origin: 'https://example.test', data: {type: 'bridge-html-preview-ready',instance:'a'.repeat(32)}});
   assert.equal(sent.length, 0);
-  receive({source: frame.contentWindow, origin: 'null', data: {type: 'bridge-html-preview-ready'}});
+  receive({source: frame.contentWindow, origin: 'null', data: {type: 'bridge-html-preview-ready',instance:'a'.repeat(32)}});
   assert.equal(sent.length, 1);
   assert.equal(sent[0][0].text.length, 512 * 1024);
   assert.equal(sent[0][1], '*');
-  assert.equal(listeners.has('message'), false);
+  assert.equal(listeners.has('message'), true);
+  receive({source:frame.contentWindow,origin:'null',data:{type:'bridge-html-preview-ready',instance:'a'.repeat(32)}});
+  assert.equal(sent.length,1);
+  receive({source:frame.contentWindow,origin:'null',data:{type:'bridge-html-preview-ready',instance:'b'.repeat(32)}});
+  assert.equal(sent.length,2);
+  assert.equal(sent[1][0].text,sent[0][0].text);
+  assert.equal(sent[1][0].instance,'b'.repeat(32));
   preview.dispose();
+  assert.equal(listeners.has('message'),false);
   assert.equal(frame.removed, true);
   assert.throws(() => context.module.exports.create({text: 'x'.repeat(512 * 1024 + 1)}));
 });
@@ -50,7 +57,7 @@ test('fixed shell accepts one same-origin parent message and rejects oversized c
     close: () => writes.push(['close'])};
   const window = {addEventListener: (name, callback) => listeners.set(name, callback),
     removeEventListener: (name, callback) => {if (listeners.get(name) === callback) listeners.delete(name);}};
-  const context = vm.createContext({parent, document, window, TextEncoder, URL,
+  const context = vm.createContext({parent, document, window, TextEncoder, URL, crypto:require('node:crypto').webcrypto,
     location: {href: 'https://bridge.test/html-preview-shell'}});
   vm.runInContext(script, context);
   // document.open/write keeps the Window's lexical environment. Workspace HTML
@@ -58,11 +65,11 @@ test('fixed shell accepts one same-origin parent message and rejects oversized c
   assert.doesNotThrow(() => vm.runInContext('const sourceOrigin = "local", receive = "local";', context));
   assert.equal(writes[0][2], 'https://bridge.test');
   const receive = listeners.get('message');
-  receive({source: {}, origin: 'https://bridge.test', data: {type: 'bridge-html-preview-content', text: 'bad'}});
-  receive({source: parent, origin: 'https://other.test', data: {type: 'bridge-html-preview-content', text: 'bad'}});
-  receive({source: parent, origin: 'https://bridge.test', data: {type: 'bridge-html-preview-content', text: 'x'.repeat(512 * 1024 + 1)}});
+  receive({source: {}, origin: 'https://bridge.test', data: {type: 'bridge-html-preview-content', instance:writes[0][1].instance, text: 'bad'}});
+  receive({source: parent, origin: 'https://other.test', data: {type: 'bridge-html-preview-content', instance:writes[0][1].instance, text: 'bad'}});
+  receive({source: parent, origin: 'https://bridge.test', data: {type: 'bridge-html-preview-content', instance:writes[0][1].instance, text: 'x'.repeat(512 * 1024 + 1)}});
   assert.equal(writes.length, 1);
-  receive({source: parent, origin: 'https://bridge.test', data: {type: 'bridge-html-preview-content', text: '<button>OK</button>'}});
+  receive({source: parent, origin: 'https://bridge.test', data: {type: 'bridge-html-preview-content', instance:writes[0][1].instance, text: '<button>OK</button>'}});
   assert.deepEqual(writes.slice(1), [['open'], ['write', '<button>OK</button>'], ['close']]);
   assert.equal(listeners.has('message'), false);
   listeners.get('keydown')({key:'Enter'}); assert.equal(writes.length,4);
@@ -85,7 +92,7 @@ test('fullscreen Escape accepts only the ready opaque preview and never resends 
   vm.runInContext(fs.readFileSync(path.join(root,'web/features/workspace/html-preview.js'),'utf8'),context);
   const preview=context.module.exports.create({text:'<button>OK</button>',onEscape:()=>exits++});
   const frame=preview.element.children[0], receive=listeners.get('message');
-  const send=(type,source=frame.contentWindow,origin='null')=>receive({source,origin,data:{type}});
+  const send=(type,source=frame.contentWindow,origin='null')=>receive({source,origin,data:{type,instance:'a'.repeat(32)}});
   send('bridge-html-preview-escape'); assert.equal(exits,0);
   send('bridge-html-preview-ready'); send('bridge-html-preview-ready'); assert.equal(sent.length,1);
   send('bridge-html-preview-escape',{}); send('bridge-html-preview-escape',frame.contentWindow,'https://bridge.test'); assert.equal(exits,0);

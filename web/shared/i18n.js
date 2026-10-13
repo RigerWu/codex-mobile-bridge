@@ -21,6 +21,8 @@ const en={
 "此版本 App 不支持导出文件，请复制摘要或更新 App。":"This app version cannot export files. Copy the summary or update the app.",
 "继续会话":"Continue chat",
 "CLI 会话尚未恢复；操作未发送，请重试继续会话。":"The CLI chat has not resumed. Nothing was sent; try Continue chat again.",
+"正在等待原 Codex App 会话快照；未启动 CLI 后台服务。":"Waiting for the original Codex App chat. The CLI daemon was not started.",
+"现有 Codex App 连接与此会话不匹配，未连接":"The current Codex App connection does not match this chat. It was not connected.",
 "可先阅读聊天历史；继续时将连接或恢复原 CLI 会话。":"Read the chat history first. Continue to connect to or resume the original CLI session.",
 "CLI 聊天历史可阅读；当前无法继续此会话。":"CLI chat history is available. This chat cannot be continued now.",
 "未找到可用的 Codex CLI 后台服务或已安装的服务包；请先在电脑上安装或更新 Codex CLI，并运行一次。":"No Codex CLI daemon or installed daemon package was found. Install or update Codex CLI on the computer and run it once.",

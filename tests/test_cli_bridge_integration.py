@@ -34,10 +34,10 @@ class CliBridgeFixture(unittest.TestCase):
             'role': 'assistant', 'content': [{'type': 'text', 'text': self.private_text}]}}) + '\n')
         with sqlite3.connect(self.home / 'state_5.sqlite') as db:
             db.execute('CREATE TABLE threads(id TEXT, title TEXT, cwd TEXT, updated_at INT, archived INT, '
-                       'originator TEXT, source TEXT, rollout_path TEXT)')
-            db.execute('INSERT INTO threads VALUES(?,?,?,?,?,?,?,?)',
+                       'originator TEXT, source TEXT, rollout_path TEXT, model_provider TEXT)')
+            db.execute('INSERT INTO threads VALUES(?,?,?,?,?,?,?,?,?)',
                        (self.thread_id, 'Private CLI title', '/private/user/project', 1, 0,
-                        'codex_cli_rs', 'cli', str(rollout)))
+                        'codex_cli_rs', 'cli', str(rollout), 'openai'))
         self.native_state = {'id': self.thread_id, 'title': 'CLI fixture', 'cwd': '/private/user/project',
                              'modelProvider': 'openai', 'latestModel': 'test-model',
                              'threadRuntimeStatus': {'type': 'idle'}, 'turns': [], 'requests': []}
@@ -48,6 +48,7 @@ class CliBridgeFixture(unittest.TestCase):
         self.bridge = Bridge(self.home, self.home / 'bridge-data', codex_bin=self.home / 'no-codex',
                              cli_sessions=self.cli)
         self.bridge.ipc.connect = Mock(side_effect=IPCError('desktop absent'))
+        self.bridge.ipc.owner = Mock(side_effect=IPCError('no-client-found'))
         self.bridge.ipc.follow = Mock(side_effect=AssertionError('desktop follow'))
 
     def tearDown(self):
@@ -86,7 +87,8 @@ class CliBridgeTests(CliBridgeFixture):
         self.assertIn(self.private_text, str(self.bridge.view(self.thread_id, attach=False)))
         self.cli.attach.assert_not_called()
         self.cli.call.assert_not_called()
-        self.bridge.ipc.connect.assert_not_called()
+        self.bridge.ipc.connect.assert_called()
+        self.bridge.ipc.owner.assert_not_called()
         self.bridge.ipc.follow.assert_not_called()
         navigation.assert_not_called()
 
@@ -113,6 +115,149 @@ class CliBridgeTests(CliBridgeFixture):
         self.assertEqual(session.owner, 'cli:' + self.thread_id)
         self.assertEqual(session.runtime, 'cli')
         self.assertTrue(session.connected)
+
+    def desktop_owner(self, state=None):
+        self.bridge.ipc.connect = Mock()
+        self.bridge.ipc.owner = Mock(return_value='desktop-owner')
+        snapshot = dict(self.native_state if state is None else state)
+        snapshot.setdefault('hostId', 'local')
+        def follow(thread_id, owner, enabled=True, **kwargs):
+            if not enabled:
+                return
+            self.assertEqual((thread_id, owner, kwargs.get('host')), (self.thread_id, 'desktop-owner', 'local'))
+            self.bridge._event({'method': 'thread-stream-state-changed', 'version': 11,
+                                'sourceClientId': 'desktop-owner', 'params': {
+                                    'hostId': 'local', 'conversationId': self.thread_id,
+                                    'change': {'type': 'snapshot', 'revision': 1, 'conversationState': snapshot}}})
+        self.bridge.ipc.follow = Mock(side_effect=follow)
+
+    def test_existing_desktop_owner_of_cli_origin_is_followed_without_native_resume(self):
+        self.cli.available.return_value = False
+        self.desktop_owner()
+        session = self.bridge.activate(self.thread_id)
+        self.assertEqual(session.runtime, 'desktop')
+        self.assertEqual(session.owner, 'desktop-owner')
+        self.assertEqual(session.origin, 'cli')
+        self.assertEqual(session.access['source'], 'cli')
+        self.assertTrue(session.access['canReconnect'])
+        self.cli.attach.assert_not_called()
+        self.bridge.ipc.request = Mock(return_value={'result': {'ok': True}})
+        self.bridge.send(self.thread_id, 'fixture message', str(uuid.uuid4()))
+        self.assertEqual(self.bridge.ipc.request.call_args.args[0], 'thread-follower-start-turn')
+        self.assertEqual(self.bridge.ipc.request.call_args.kwargs['target'], 'desktop-owner')
+        self.cli.call.assert_not_called()
+        self.bridge._cli_state(self.thread_id, self.native_state)
+        self.bridge._cli_disconnected()
+        self.assertEqual(session.runtime, 'desktop')
+        self.assertTrue(session.connected)
+        self.bridge._event({'method': 'client-status-changed', 'params': {
+            'status': 'disconnected', 'clientId': 'desktop-owner'}})
+        self.assertFalse(session.connected)
+
+    def test_desktop_owner_identity_must_match_saved_cli_cwd_and_provider(self):
+        for field, value in [('cwd', '/other/project'), ('modelProvider', 'other'), ('hostId', 'other')]:
+            with self.subTest(field=field):
+                self.desktop_owner({**self.native_state, field: value})
+                session = self.bridge.session(self.thread_id, attach=True)
+                self.assertFalse(session.connected)
+                self.assertEqual(session.origin, 'cli')
+                self.cli.attach.assert_not_called()
+                self.bridge.live.pop(self.thread_id)
+
+    def test_late_desktop_and_cli_events_cannot_switch_the_active_writer(self):
+        session = self.bridge.activate(self.thread_id)
+        self.assertEqual(session.runtime, 'cli')
+        self.desktop_owner()
+        self.bridge._event({'method': 'thread-stream-state-changed', 'version': 11,
+                            'sourceClientId': 'desktop-owner', 'params': {'hostId': 'local',
+                                'conversationId': self.thread_id, 'change': {'type': 'snapshot',
+                                    'revision': 9, 'conversationState': self.native_state}}})
+        self.assertEqual(session.runtime, 'cli')
+        self.assertEqual(session.owner, 'cli:' + self.thread_id)
+
+    def test_late_native_state_cannot_replace_a_discovered_desktop_owner(self):
+        self.bridge.ipc.connect = Mock()
+        self.bridge.ipc.owner = Mock(return_value='desktop-owner')
+        self.bridge.ipc.follow = Mock()
+        session = self.bridge.session(self.thread_id, attach=False)
+        self.bridge._attach(session, timeout=0)
+        self.assertEqual(session.desktop_owner_probe, 'found')
+        self.bridge._cli_state(self.thread_id, self.native_state)
+        self.assertFalse(session.connected)
+        self.assertEqual(session.owner, 'desktop-owner')
+        self.bridge._event({'method': 'thread-stream-state-changed', 'version': 11,
+                            'sourceClientId': 'desktop-owner', 'params': {'hostId': 'local',
+                                'conversationId': self.thread_id, 'change': {'type': 'snapshot',
+                                    'revision': 1, 'conversationState': self.native_state}}})
+        self.assertEqual(session.runtime, 'desktop')
+        self.assertTrue(session.connected)
+        self.bridge._disconnected()
+        self.assertFalse(session.connected)
+
+    def test_background_owner_probe_cannot_overtake_in_flight_native_resume(self):
+        started,release=threading.Event(),threading.Event()
+        def attach(thread_id, explicit=False):
+            started.set()
+            self.assertTrue(release.wait(3))
+            return self.native_state
+        self.cli.attach.side_effect=attach
+        outcome=[]
+        worker=threading.Thread(target=lambda: outcome.append(self.bridge.activate(self.thread_id)))
+        worker.start();self.assertTrue(started.wait(3))
+        session=self.bridge.live[self.thread_id]
+        self.assertTrue(session.native_attaching)
+        self.desktop_owner()
+        late=threading.Thread(target=self.bridge._attach,args=(session,0))
+        late.start()
+        self.bridge._event({'method': 'thread-stream-state-changed', 'version': 11,
+                            'sourceClientId': 'desktop-owner', 'params': {'hostId': 'local',
+                                'conversationId': self.thread_id, 'change': {'type': 'snapshot',
+                                    'revision': 1, 'conversationState': self.native_state}}})
+        release.set();worker.join(3);late.join(3)
+        self.assertFalse(worker.is_alive());self.assertFalse(late.is_alive())
+        self.assertEqual(outcome, [session])
+        self.assertEqual(session.runtime, 'cli')
+        self.assertEqual(session.owner, 'cli:' + self.thread_id)
+        self.bridge.ipc.owner.assert_not_called()
+
+    def test_stale_native_state_after_disconnect_cannot_reclaim_writer(self):
+        session=self.bridge.activate(self.thread_id)
+        self.bridge._cli_disconnected()
+        self.assertFalse(session.connected)
+        self.bridge._cli_state(self.thread_id, self.native_state)
+        self.assertFalse(session.connected)
+        self.desktop_owner()
+        self.bridge._attach(session, timeout=0)
+        self.assertEqual(session.runtime, 'desktop')
+        self.assertEqual(session.owner, 'desktop-owner')
+
+    def test_owner_discovery_timeout_without_found_owner_allows_explicit_native_attempt(self):
+        self.bridge.ipc.connect=Mock()
+        self.bridge.ipc.owner=Mock(side_effect=IPCError('桌面读取超时；尚未取得实时会话状态。'))
+        self.bridge.ipc.follow=Mock(side_effect=AssertionError('unclaimed thread must not be followed'))
+        session=self.bridge.activate(self.thread_id)
+        self.assertEqual(session.runtime, 'cli')
+        self.cli.attach.assert_called_once_with(self.thread_id, explicit=True)
+
+    def test_found_owner_without_snapshot_never_falls_back_to_native(self):
+        self.bridge.ipc.connect=Mock()
+        self.bridge.ipc.owner=Mock(return_value='desktop-owner')
+        self.bridge.ipc.follow=Mock()
+        attach=self.bridge._attach
+        with patch.object(self.bridge, '_attach', side_effect=lambda session: attach(session, timeout=0)):
+            with self.assertRaisesRegex(IPCError, 'Codex App'):
+                self.bridge.activate(self.thread_id)
+        self.cli.attach.assert_not_called()
+
+    def test_adopted_desktop_owner_preserves_saved_history_when_snapshot_has_no_turns(self):
+        self.desktop_owner()
+        session = self.bridge.session(self.thread_id, attach=True)
+        history = self.bridge.full_history(self.thread_id)
+        self.assertEqual(history, {'loaded': True})
+        self.assertEqual(session.runtime, 'desktop')
+        self.assertIn(self.private_text, str(self.bridge.view(self.thread_id, attach=False)))
+        self.assertIn(self.private_text, str(self.bridge.timeline_read(self.thread_id, mode='page', limit=20)))
+        self.cli.attach.assert_not_called()
 
     def test_bridge_preserves_native_request_ids_for_approval_and_input(self):
         self.bridge.activate(self.thread_id)

@@ -44,6 +44,10 @@ class LiveSession:
         self.origin = "desktop"
         self.origin_verified = False
         self.runtime = "desktop"
+        self.saved_cwd = None
+        self.saved_provider = None
+        self.desktop_owner_probe = None
+        self.native_attaching = False
         self.access = None
         self.discovering = False
         self.state = None
@@ -95,7 +99,7 @@ class LiveSession:
                         turn['model'], turn['effort'] = saved.get('model'), saved.get('effort')
             # Native paginated snapshots only contain the loaded tail. Keep the
             # saved prefix in the presentation, never in the IPC patch base.
-            if self.saved_view and not result['historyComplete']:
+            if self.saved_view and (not result['historyComplete'] or self.origin == 'cli' and self.runtime == 'desktop'):
                 saved = self.saved_view['turns']
                 turns = result['turns']
                 first = next((i for i, turn in enumerate(saved) if turns and turn['id'] == turns[0]['id']), None)
@@ -755,7 +759,7 @@ class Bridge:
         desktop = origin != 'cli'
         connected = bool(session and session.connected)
         writable = desktop or connected
-        reconnect = desktop or self.cli_sessions.available()
+        reconnect = desktop or bool(session and session.desktop_owner_probe == 'found') or self.cli_sessions.available()
         return {'source': origin, 'runtime': (session.runtime if connected else None),
                 'readOnly': not writable, 'canSend': writable, 'canInterrupt': writable,
                 'canApprove': writable, 'canReconnect': reconnect,
@@ -776,6 +780,9 @@ class Bridge:
         if session is None or session.origin != 'cli' or self.closed.is_set():
             return
         with session.condition:
+            if (session.desktop_owner_probe == 'found' or
+                    not session.native_attaching and not (session.runtime == 'cli' and session.connected)):
+                return
             session.state = state
             session.runtime = 'cli'
             session.owner = 'cli:' + thread_id
@@ -790,8 +797,8 @@ class Bridge:
         with self.lock:
             sessions = list(self.live.values())
         for session in sessions:
-            if session.runtime == 'cli' and (thread_id is None or session.id == thread_id):
-                self._invalidate(session, 'CLI 连接已断开，请重新连接；未自动重发任何操作。')
+            if thread_id is None or session.id == thread_id:
+                self._invalidate(session, 'CLI 连接已断开，请重新连接；未自动重发任何操作。', runtime='cli')
 
     def discovery_diagnostics(self, thread_id=None):
         if thread_id is not None:
@@ -1020,10 +1027,10 @@ class Bridge:
             return session
         if attach and not session.connected:
             self._attach(session)
-        if session.state is None or session.activity_only:
+        if session.state is None or session.activity_only or (session.origin == 'cli' and session.runtime == 'desktop' and session.saved_view is None):
             fallback = self._saved_history(session)
             with session.condition:
-                if session.state is None or session.activity_only:
+                if session.state is None or session.activity_only or (session.origin == 'cli' and session.runtime == 'desktop' and session.saved_view is None):
                     session.set_history(fallback)
                     session.activity_only = False
         return session
@@ -1036,6 +1043,8 @@ class Bridge:
         metadata = self.store.get(session.id)
         with session.condition:
             session.origin = metadata.get("origin", "desktop")
+            session.saved_cwd = metadata.get('cwd')
+            session.saved_provider = metadata.get('model_provider')
             session.origin_verified = True
             session.access = self._access(session.origin, session)
 
@@ -1084,7 +1093,35 @@ class Bridge:
                 return
             self._load_session_origin(session)
             if session.origin == "cli":
-                # A desktop copy of the same ID must never take over CLI writes.
+                ipc_connected = False
+                try:
+                    self.ipc.connect()
+                    ipc_connected = True
+                    owner = self.ipc.owner(session.id, host=self.host)
+                    if not isinstance(owner, str) or not owner:
+                        raise IPCError('现有 Codex App 连接与此会话不匹配，未连接')
+                    with session.condition:
+                        session.owner = owner
+                        session.revision = None
+                        session.desktop_owner_probe = 'found'
+                        session.discovering = True
+                        session.access = self._access(session.origin, session)
+                    self.ipc.follow(session.id, owner, host=self.host)
+                    with session.condition:
+                        session.condition.wait_for(lambda: session.connected or self.closed.is_set(), timeout=timeout)
+                except IPCError as exc:
+                    with session.condition:
+                        session.discovering = False
+                        if (not ipc_connected or str(exc) in
+                                ('no-client-found', '桌面读取超时；尚未取得实时会话状态。')):
+                            session.owner = None
+                            session.desktop_owner_probe = 'absent'
+                            session.error = None
+                        else:
+                            session.desktop_owner_probe = 'unknown'
+                            session.error = str(exc)
+                        session.access = self._access(session.origin, session)
+                        session.changed()
                 return
             try:
                 # Owners answer a follow with a fresh snapshot. This also works
@@ -1122,17 +1159,30 @@ class Bridge:
                 self._attach(session)
                 if session.connected:
                     return session
+                if session.origin == 'cli' and session.desktop_owner_probe != 'absent':
+                    raise IPCError(session.error or '正在等待原 Codex App 会话快照；未启动 CLI 后台服务。')
                 if self.closed.is_set():
                     raise IPCError('网关正在停止；操作未发送，请稍后重试。')
                 if session.origin == 'cli':
-                    try:
-                        state = self.cli_sessions.attach(session.id, explicit=True)
-                    except AppServerError as exc:
-                        raise IPCError(str(exc)) from exc
-                    self._cli_state(session.id, state)
-                    if not session.connected:
-                        raise IPCError('CLI 会话尚未恢复；操作未发送，请重试继续会话。')
-                    return session
+                    with session.attach_lock:
+                        with session.condition:
+                            if session.connected:
+                                return session
+                            if session.desktop_owner_probe != 'absent':
+                                raise IPCError(session.error or '正在等待原 Codex App 会话快照；未启动 CLI 后台服务。')
+                            session.native_attaching = True
+                        try:
+                            try:
+                                state = self.cli_sessions.attach(session.id, explicit=True)
+                            except AppServerError as exc:
+                                raise IPCError(str(exc)) from exc
+                            self._cli_state(session.id, state)
+                            if not session.connected:
+                                raise IPCError('CLI 会话尚未恢复；操作未发送，请重试继续会话。')
+                            return session
+                        finally:
+                            with session.condition:
+                                session.native_attaching = False
                 if session.last_activation is not None and time.monotonic() - session.last_activation < 20:
                     raise IPCError(session.error or '桌面仍在加载此聊天；操作未发送，请稍后重试。')
                 session.last_activation = time.monotonic()
@@ -1165,7 +1215,7 @@ class Bridge:
                     sessions = list(self.live.values())
                 for session in sessions:
                     if session.owner == params.get("clientId"):
-                        self._invalidate(session, "桌面会话连接已断开，正在等待重连")
+                        self._invalidate(session, "桌面会话连接已断开，正在等待重连", runtime='desktop', owner=params.get("clientId"))
             # Owner changes can make previously unanswered probes available.
             self.notification_cursor = 0
             self.notification_boundary.clear()
@@ -1185,9 +1235,11 @@ class Bridge:
             return
         change = params.get("change", {})
         with session.condition:
-            if session.origin == "cli":
+            if session.origin == 'cli' and (session.native_attaching or session.runtime == 'cli' and session.connected):
                 return
-            if session.discovering and change.get("type") == "snapshot" and (change.get("conversationState") or {}).get("id") == session.id:
+            if session.origin == 'cli' and session.desktop_owner_probe != 'found':
+                return
+            if session.discovering and session.origin != 'cli' and change.get("type") == "snapshot" and (change.get("conversationState") or {}).get("id") == session.id:
                 session.owner = message.get("sourceClientId")
                 session.discovering = False
             if not session.owner or message.get("sourceClientId") != session.owner:
@@ -1195,16 +1247,23 @@ class Bridge:
             try:
                 if change.get("type") == "snapshot":
                     state = change["conversationState"]
-                    if state.get("id") != session.id:
-                        raise ValueError("Session mismatch")
-                    session.state = state
                 elif change.get("type") == "patches":
                     if session.revision is None or change.get("baseRevision") != session.revision:
                         raise ValueError("Revision mismatch")
-                    session.state = apply_patches(session.state, change["patches"])
+                    state = apply_patches(session.state, change["patches"])
                 else:
                     return
+                if state.get('id') != session.id:
+                    raise ValueError("Session mismatch")
+                if session.origin == 'cli' and (state.get('hostId', self.host) != self.host or
+                        not session.saved_cwd or not session.saved_provider or
+                        state.get('cwd') != session.saved_cwd or
+                        state.get('modelProvider') != session.saved_provider):
+                    raise ValueError("CLI owner identity mismatch")
+                session.state = state
                 session.revision = change["revision"]
+                session.runtime = 'desktop'
+                session.discovering = False
                 session.connected = True
                 session.error = None
                 session.access = self._access(session.origin, session)
@@ -1215,13 +1274,18 @@ class Bridge:
             except (ValueError, KeyError, IndexError, TypeError):
                 session.connected = False
                 session.revision = None
-                session.error = "同步状态发生变化，正在重新读取桌面快照"
+                session.error = "现有 Codex App 连接与此会话不匹配，未连接" if session.origin == 'cli' else "同步状态发生变化，正在重新读取桌面快照"
                 session.changed()
 
-    def _invalidate(self, session, message):
+    def _invalidate(self, session, message, runtime=None, owner=None):
         with session.condition:
+            if (runtime is not None and session.runtime != runtime) or (owner is not None and session.owner != owner):
+                return
             session.connected = False
             session.revision = None
+            if session.origin == 'cli' and session.runtime == 'desktop':
+                session.owner = None
+                session.desktop_owner_probe = None
             session.error = message
             session.access = self._access(session.origin, session)
             session.changed()
@@ -1233,8 +1297,8 @@ class Bridge:
         with self.lock:
             sessions = list(self.live.values())
         for session in sessions:
-            if session.origin != "cli":
-                self._invalidate(session, "桌面 App 连接已断开，正在等待重连")
+            if session.origin != 'cli' or session.desktop_owner_probe == 'found':
+                self._invalidate(session, "桌面 App 连接已断开，正在等待重连", runtime='desktop')
 
     def _maintain(self):
         delay = 3

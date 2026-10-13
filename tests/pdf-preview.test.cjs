@@ -16,7 +16,7 @@ class Element {
   append(...children) { this.children.push(...children); }
   replaceChildren(...children) { this.value=''; this.children=children; }
   setAttribute(name,value) { this.attributes[name]=value; }
-  getContext() { return {}; }
+  getContext() { return {canvas:this}; }
   getBoundingClientRect() { return {top:0,left:0}; }
   addEventListener(name,handler) { (this.listeners[name] ||= []).push(handler); }
   removeEventListener(name,handler) { this.listeners[name]=(this.listeners[name] || []).filter(value=>value!==handler); }
@@ -42,7 +42,7 @@ const cleanup = () => {
   delete global.document; delete global.BridgeI18n; delete global.window; delete global.ResizeObserver;
 };
 const fixture = (count=30, pending=false, textChunks=[]) => {
-  const events=[], loading={destroy(){events.push('destroy');}};
+  const events=[], renders=[], loading={destroy(){events.push('destroy');}};
   const dimensions=number => number % 3 === 1 ? [612,792] : number % 3 === 2 ? [792,400] : [420,1000];
   const doc={numPages:count, async getPage(number) {
     events.push('get '+number);
@@ -50,8 +50,15 @@ const fixture = (count=30, pending=false, textChunks=[]) => {
     return {
       getViewport:({scale})=>({width:width*scale,height:height*scale,scale}),
       cleanup(){events.push('cleanup '+number);},
-      render(){
+      render({canvasContext}={}){
         if (!pending) { events.push('render '+number); return {promise:Promise.resolve(),cancel(){events.push('cancel '+number);}}; }
+        if (pending === 'deferred') {
+          let resolve, reject;
+          const task={number,canvas:canvasContext?.canvas,settled:false,promise:new Promise((done,fail)=>{resolve=done;reject=fail;}),
+            finish(){this.settled=true;resolve();},
+            cancel(){this.settled=true;events.push('cancel '+number);reject({name:'RenderingCancelledException'});}};
+          events.push('render '+number); renders.push(task); return task;
+        }
         let reject;
         const task={promise:new Promise((_,fail)=>{reject=fail;}),cancel(){events.push('cancel '+number);reject({name:'RenderingCancelledException'});}};
         events.push('render '+number); return task;
@@ -75,8 +82,178 @@ const fixture = (count=30, pending=false, textChunks=[]) => {
   loading.promise=Promise.resolve(doc);
   let options;
   const loadLibrary=async()=>({GlobalWorkerOptions:{},getDocument:value=>{options=value;return loading;}});
-  return {events,loadLibrary,options:()=>options};
+  return {events,renders,loadLibrary,options:()=>options};
 };
+
+test('zoom keeps completed pixels visible until the newest deferred render replaces them', async () => {
+  setup();
+  try {
+    const fake=fixture(1,'deferred'), reader=pdf.create({url:'/api/workspace/download?path=file.pdf',
+      info:{size:1000,clickDownloadMiB:1},loadLibrary:fake.loadLibrary});
+    await reader.load(); await tick();
+    const sheet=reader.element.children[2].children[0].children[0];
+    fake.renders[0].finish(); await tick();
+    const old=sheet.children[0];
+    reader.element.children[0].children[5].click(); await tick();
+    assert.equal(sheet.children[0],old,'committed pixels remain while next canvas is pending');
+    assert.equal(Math.round(parseFloat(old.style.width)),710,'old pixels stretch to the new page width');
+    reader.element.children[0].children[5].click(); await tick();
+    assert.equal(sheet.children[0],old,'rapid zoom retains the same committed pixels');
+    assert.ok(fake.events.includes('cancel 1'),'obsolete render was cancelled');
+    assert.equal(fake.renders.length,3,'only the latest zoom starts after cancellation');
+    fake.renders[2].finish(); await tick();
+    assert.notEqual(sheet.children[0],old,'new pixels replace old pixels after completion');
+    assert.equal(parseFloat(sheet.children[0].style.width),852);
+    assert.equal(old.width,0,'old buffer is released after replacement');
+    reader.dispose();
+  } finally { cleanup(); }
+});
+
+test('returning to the original zoom reuses pixels and restores selectable text', async () => {
+  setup();
+  try {
+    const fake=fixture(1,'deferred',[{items:[{str:'text'}],styles:{},lang:'en'}]);
+    let textRenders=0;
+    const loadLibrary=async()=>({...await fake.loadLibrary(),TextLayer:class {
+      async render(){textRenders++;} cancel(){}
+    }});
+    const reader=pdf.create({url:'/api/workspace/download?path=file.pdf',
+      info:{size:1000,clickDownloadMiB:1},loadLibrary});
+    await reader.load(); await tick();
+    fake.renders[0].finish(); await tick();
+    const sheet=reader.element.children[2].children[0].children[0], old=sheet.children[0];
+    assert.equal(textRenders,1);
+    reader.element.children[0].children[5].click(); await tick();
+    reader.element.children[0].children[3].click(); await tick();
+    assert.equal(sheet.children[0],old);
+    assert.equal(fake.renders.length,2,'the matching old raster needs no third render');
+    assert.equal(textRenders,2,'text is restored after the cancelled intermediate zoom');
+    assert.equal(sheet.children[1].className,'wb-pdf-text textLayer');
+    reader.dispose();
+  } finally { cleanup(); }
+});
+
+test('a short scroll back reuses a bounded neighboring page canvas', async () => {
+  setup();
+  try {
+    const fake=fixture(8), reader=pdf.create({url:'/api/workspace/download?path=file.pdf',
+      info:{size:1000,clickDownloadMiB:1},loadLibrary:fake.loadLibrary});
+    await reader.load(); await tick();
+    const stage=reader.element.children[2], sheets=stage.children[0].children;
+    const first=sheets[0].children[0], renders=()=>fake.events.filter(value=>value==='render 1').length;
+    assert.equal(renders(),1);
+    stage.scrollTop=parseFloat(sheets[0].style.height)+16;
+    stage.dispatch('scroll'); await tick();
+    assert.equal(sheets[0].children[0],first,'nearby completed page remains cached');
+    stage.scrollTop=0; stage.dispatch('scroll'); await tick();
+    assert.equal(sheets[0].children[0],first);
+    assert.equal(renders(),1,'returning to the page does not re-render its pixels');
+    stage.scrollTop=10000; stage.dispatch('scroll'); await tick();
+    assert.equal(first.width,0,'distant page buffer is released');
+    reader.dispose();
+  } finally { cleanup(); }
+});
+
+test('text-layer selection changes do not re-render completed canvas pixels', async () => {
+  setup();
+  try {
+    const fake=fixture(4,false,[{items:[{str:'x'}],styles:{},lang:'en'}]);
+    const loadLibrary=async()=>({...await fake.loadLibrary(),TextLayer:class {
+      async render(){} cancel(){}
+    }});
+    const reader=pdf.create({url:'/api/workspace/download?path=file.pdf',
+      info:{size:1000,clickDownloadMiB:1},loadLibrary});
+    const stage=reader.element.children[2]; stage.clientHeight=3000;
+    await reader.load(); await tick();
+    const before=fake.events.filter(value=>value.startsWith('render ')).length;
+    stage.scrollTop=100; stage.dispatch('scroll'); await tick();
+    assert.equal(fake.events.filter(value=>value.startsWith('render ')).length,before);
+    assert.ok(fake.events.includes('stream 4'),'newly selected text layer loads separately');
+    reader.dispose();
+  } finally { cleanup(); }
+});
+
+test('a pending replacement adds at most one 4 MP canvas to a 12 MP committed budget', async () => {
+  setup();
+  try {
+    window.devicePixelRatio=2;
+    const fake=fixture(3,'deferred'), reader=pdf.create({url:'/api/workspace/download?path=file.pdf',
+      info:{size:1000,clickDownloadMiB:1},loadLibrary:fake.loadLibrary});
+    const stage=reader.element.children[2]; stage.clientWidth=1200; stage.clientHeight=3000;
+    await reader.load(); await tick();
+    for (let index=0; index<3; index++) { fake.renders[index].finish(); await tick(); }
+    const sheets=stage.children[0].children;
+    const committed=()=>sheets.reduce((sum,sheet)=>sum+(sheet.children[0]?.width || 0)
+      *(sheet.children[0]?.height || 0),0);
+    assert.ok(committed()<=12*1024*1024);
+    reader.element.children[0].children[5].click(); await tick();
+    const pending=fake.renders.at(-1).canvas;
+    assert.ok(pending.width*pending.height<=4*1024*1024);
+    assert.ok(committed()+pending.width*pending.height<=16*1024*1024);
+    reader.dispose(); await tick();
+    assert.equal(pending.width,0);
+    assert.equal(committed(),0);
+  } finally { cleanup(); }
+});
+
+test('showing a fourth page reduces prior raster budgets before adding it', async () => {
+  const observer=setup();
+  try {
+    window.devicePixelRatio=2;
+    const fake=fixture(4,'deferred'), reader=pdf.create({url:'/api/workspace/download?path=file.pdf',
+      info:{size:1000,clickDownloadMiB:1},loadLibrary:fake.loadLibrary});
+    const stage=reader.element.children[2]; stage.clientWidth=1200; stage.clientHeight=3000;
+    await reader.load(); await tick();
+    for (let index=0; index<3; index++) { fake.renders[index].finish(); await tick(); }
+    const sheets=stage.children[0].children;
+    const committed=()=>sheets.reduce((sum,sheet)=>sum+(sheet.children[0]?.width || 0)
+      *(sheet.children[0]?.height || 0),0);
+    stage.clientHeight=6000; observer.resize(); await tick();
+    for (let index=3; index<fake.renders.length && index<7; index++) {
+      const task=fake.renders[index];
+      assert.ok(committed()+task.canvas.width*task.canvas.height<=16*1024*1024);
+      task.finish(); await tick();
+    }
+    assert.equal(sheets.filter(sheet=>sheet.children.length).length,4);
+    assert.ok(committed()<=12*1024*1024);
+    reader.dispose();
+  } finally { cleanup(); }
+});
+
+test('interleaved zoom and neighboring-page return keep every committed frame within 12 MP', async () => {
+  setup();
+  try {
+    window.devicePixelRatio=2;
+    const fake=fixture(6,'deferred'), reader=pdf.create({url:'/api/workspace/download?path=file.pdf',
+      info:{size:1000,clickDownloadMiB:1},loadLibrary:fake.loadLibrary});
+    const stage=reader.element.children[2]; stage.clientWidth=1200; stage.clientHeight=3000;
+    const sheets=()=>stage.children[0].children;
+    const committed=()=>sheets().reduce((sum,sheet)=>sum+(sheet.children[0]?.width || 0)
+      *(sheet.children[0]?.height || 0),0);
+    const drain=async()=>{
+      for (let count=0; count<20; count++) {
+        await tick();
+        const active=fake.renders.filter(task=>!task.settled);
+        assert.ok(active.length<=1,'replacement canvases are serialized');
+        assert.ok(committed()<=12*1024*1024,'every committed frame stays within budget');
+        if (!active.length) return;
+        assert.ok(committed()+active[0].canvas.width*active[0].canvas.height<=16*1024*1024);
+        active[0].finish();
+      }
+      assert.fail('render queue did not settle');
+    };
+    await reader.load(); await drain();
+    stage.scrollTop=parseFloat(sheets()[0].style.height)+16;
+    stage.dispatch('scroll'); await drain();
+    reader.element.children[0].children[5].click(); await tick();
+    reader.element.children[0].children[5].click(); await drain();
+    stage.scrollTop=0; stage.dispatch('scroll'); await drain();
+    reader.element.children[0].children[3].click(); await drain();
+    reader.element.children[0].children[3].click(); await drain();
+    assert.ok(fake.events.some(event=>event==='cancel 2' || event==='cancel 3'));
+    reader.dispose();
+  } finally { cleanup(); }
+});
 
 test('PDF preview enforces preview and click-download limits before loading', async () => {
   setup();
@@ -93,7 +270,7 @@ test('PDF preview enforces preview and click-download limits before loading', as
   } finally { cleanup(); }
 });
 
-test('continuous reader lazily renders at most three mixed-size pages and releases offscreen resources', async () => {
+test('continuous reader lazily renders a bounded mixed-size neighborhood and releases distant resources', async () => {
   setup();
   try {
     const fake=fixture(), reader=pdf.create({url:'/api/workspace/download?path=file.pdf',
@@ -104,7 +281,7 @@ test('continuous reader lazily renders at most three mixed-size pages and releas
     assert.equal(fake.options().url,'/api/workspace/download?path=file.pdf&preview=1');
     assert.equal(fake.options().disableAutoFetch,true);
     assert.ok(fake.events.filter(value=>value.startsWith('get ')).length<=4);
-    assert.ok(pages.children.filter(sheet=>sheet.children.length).length<=3);
+    assert.ok(pages.children.filter(sheet=>sheet.children.length).length<=5);
     assert.ok(pages.children.some(sheet=>parseFloat(sheet.style.height)!==parseFloat(pages.children[0].style.height)));
     stage.scrollTop=20*parseFloat(pages.children[0].style.height);
     stage.dispatch('scroll'); await tick();
@@ -148,7 +325,8 @@ test('resize preserves current reading position and pinch rerenders only after g
     stage.dispatch('touchend',{touches:[]}); await tick();
     assert.equal(toolbar.children[4].textContent,'200%');
     assert.ok(fake.events.filter(value=>value.startsWith('render ')).length>renders);
-    assert.ok(pages.children.filter(sheet=>sheet.children.length).length<=3);
+    assert.ok(pages.children.filter(sheet=>sheet.children.length).reduce(
+      (sum,sheet)=>sum+sheet.children[0].width*sheet.children[0].height,0)<=12*1024*1024);
     reader.dispose();
   } finally { cleanup(); }
 });

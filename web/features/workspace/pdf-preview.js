@@ -33,7 +33,7 @@ const BridgePdfPreview = (() => {
     if (touch) element.classList.add('wb-pdf-touch');
     let documentProxy, loadingTask, resizeObserver, started = false, disposed = false;
     let slots = [], zoom = 1, firstWidth = 0, firstHeight = 0, current = 1, measuredWidth = 0;
-    let scheduled = null, resizeScheduled = null, gesture = null;
+    let scheduled = null, resizeScheduled = null, gesture = null, painting = null;
     const availableWidth = () => Math.max(1, stage.clientWidth - 32);
     const scaleOf = slot => measuredWidth * zoom / slot.naturalWidth;
     const wrapperWidth = () => slots.reduce((max, slot) => Math.max(max, slot.width), availableWidth());
@@ -76,20 +76,23 @@ const BridgePdfPreview = (() => {
     toolbar.append(previous, pageLabel, next, smaller, zoomLabel, larger);
     stage.tabIndex = 0; stage.append(pages); element.append(toolbar, status, stage); refresh();
 
-    const retire = slot => {
+    const retire = (slot, preserveCanvas = false) => {
       slot.token++;
       const task = slot.renderTask, proxy = slot.proxy;
       task?.cancel(); slot.textLayer?.cancel();
       slot.textReader?.cancel().catch(() => {});
-      slot.renderTask = slot.textLayer = slot.textReader = slot.proxy = null;
+      slot.textToken = (slot.textToken || 0) + 1;
+      slot.renderTask = slot.textLayer = slot.textReader = null;
+      if (!preserveCanvas) slot.proxy = null;
       slot.loading = slot.ready = false;
-      slot.budget = slot.textEnabled = null;
-      if (slot.canvas) { slot.canvas.width = slot.canvas.height = 0; slot.canvas = null; }
-      slot.element.replaceChildren();
-      if (proxy) {
-        const cleanup = () => { if (slot.proxy !== proxy) proxy.cleanup(); };
-        if (task) task.promise.finally(cleanup).catch(() => {});
-        else cleanup();
+      slot.budget = slot.textEnabled = slot.textLoading = null;
+      if (!preserveCanvas && slot.canvas) {
+        slot.canvas.width = slot.canvas.height = 0; slot.canvas = null;
+      }
+      slot.element.replaceChildren(...(slot.canvas ? [slot.canvas] : []));
+      if (proxy && !preserveCanvas) {
+        if (task) task.promise.finally(() => { if (slot.proxy !== proxy) proxy.cleanup(); }).catch(() => {});
+        else proxy.cleanup();
       }
     };
     const sizeSlot = (slot, preserveScroll = true) => {
@@ -102,6 +105,10 @@ const BridgePdfPreview = (() => {
           || slot.width <= 0 || slot.height <= 0) throw Error('Invalid PDF dimensions');
       slot.element.style.width = slot.width + 'px';
       slot.element.style.height = slot.height + 'px';
+      if (slot.canvas) {
+        slot.canvas.style.width = slot.width + 'px';
+        slot.canvas.style.height = slot.height + 'px';
+      }
       slot.element.style.setProperty('--total-scale-factor', String(scale));
       if (anchor) {
         const anchored = slots[anchor.number - 1];
@@ -110,30 +117,91 @@ const BridgePdfPreview = (() => {
           + anchored.width * anchor.fractionX - anchor.viewportX);
       }
     };
-    const hydrate = async (slot, budget, textEnabled) => {
-      if (slot.loading || slot.ready || slot.failed || disposed) return;
-      slot.loading = true;
-      slot.budget = budget; slot.textEnabled = textEnabled;
-      const token = ++slot.token;
+    const pixelCount = slot => slot.canvas ? slot.canvas.width * slot.canvas.height : 0;
+    const targetPixels = (slot, budget) => {
+      const ratio = Math.min(window.devicePixelRatio || 1, 2,
+        Math.sqrt(budget / (slot.width * slot.height)),
+        16384 / slot.width, 16384 / slot.height);
+      return Math.max(1, Math.floor(slot.width * ratio))
+        * Math.max(1, Math.floor(slot.height * ratio));
+    };
+    const committedPixels = () => slots.reduce((sum, slot) => sum + pixelCount(slot), 0);
+    const updateText = async (slot, enabled) => {
+      if (!enabled) {
+        if (!slot.textEnabled && !slot.textLoading) return;
+        slot.textToken = (slot.textToken || 0) + 1;
+        slot.textLayer?.cancel(); slot.textReader?.cancel().catch(() => {});
+        slot.textLayer = slot.textReader = null;
+        slot.textEnabled = slot.textLoading = false;
+        slot.element.replaceChildren(...(slot.canvas ? [slot.canvas] : []));
+        return;
+      }
+      if (!slot.ready || slot.textEnabled || slot.textLoading || !slot.proxy) return;
+      slot.textEnabled = slot.textLoading = true;
+      const token = slot.textToken = (slot.textToken || 0) + 1, proxy = slot.proxy;
       try {
-        const proxy = await documentProxy.getPage(slot.number);
-        if (disposed || token !== slot.token) { proxy.cleanup(); return; }
-        slot.proxy = proxy;
+        const reader = slot.textReader = proxy.streamTextContent().getReader();
+        const text = {items:[], styles:Object.create(null), lang:null};
+        let complete = false;
+        try {
+          while (true) {
+            const {value, done} = await reader.read();
+            if (disposed || token !== slot.textToken) return;
+            if (done) { complete = true; break; }
+            text.lang ??= value.lang;
+            Object.assign(text.styles, value.styles);
+            text.items.push(...value.items);
+          }
+        } finally {
+          if (!complete) await reader.cancel().catch(() => {});
+          reader.releaseLock();
+          if (slot.textReader === reader) slot.textReader = null;
+        }
+        if (text.items.length) {
+          const overlay = document.createElement('div'); overlay.className = 'wb-pdf-text textLayer';
+          slot.element.append(overlay);
+          const pdfjs = await loadLibrary();
+          if (disposed || token !== slot.textToken) return;
+          const viewport = proxy.getViewport({scale:scaleOf(slot)});
+          slot.textLayer = new pdfjs.TextLayer({textContentSource:text, container:overlay, viewport});
+          await slot.textLayer.render();
+        }
+      } catch (error) {
+        if (disposed || token !== slot.textToken) return;
+        slot.textLayer?.cancel(); slot.textLayer = null;
+        slot.element.replaceChildren(slot.canvas);
+      } finally {
+        if (token === slot.textToken) slot.textLoading = false;
+      }
+    };
+    const hydrate = async (slot, budget) => {
+      if (painting || slot.loading || slot.failed || disposed) return;
+      painting = slot; slot.loading = true; slot.budget = budget;
+      const token = ++slot.token;
+      let canvas;
+      try {
+        let proxy = slot.proxy;
+        if (!proxy) {
+          proxy = await documentProxy.getPage(slot.number);
+          if (disposed || token !== slot.token) { proxy.cleanup(); return; }
+          slot.proxy = proxy;
+        }
         const natural = proxy.getViewport({scale:1});
         if (!Number.isFinite(natural.width) || !Number.isFinite(natural.height)
             || natural.width <= 0 || natural.height <= 0) throw Error('Invalid PDF dimensions');
         slot.naturalWidth = natural.width; slot.naturalHeight = natural.height;
         sizeSlot(slot); schedule();
+        if (committedPixels() - pixelCount(slot) + targetPixels(slot, budget) > TOTAL_PIXELS) return;
         const viewport = proxy.getViewport({scale:scaleOf(slot)});
         const ratio = Math.min(window.devicePixelRatio || 1, 2,
           Math.sqrt(budget / (viewport.width * viewport.height)),
           16384 / viewport.width, 16384 / viewport.height);
         if (!Number.isFinite(ratio) || ratio <= 0) throw Error('Invalid PDF dimensions');
-        const canvas = document.createElement('canvas');
+        canvas = document.createElement('canvas');
         canvas.width = Math.max(1, Math.floor(viewport.width * ratio));
         canvas.height = Math.max(1, Math.floor(viewport.height * ratio));
         canvas.style.width = viewport.width + 'px'; canvas.style.height = viewport.height + 'px';
-        slot.canvas = canvas; slot.element.append(canvas);
+        slot.renderWidth = slot.width; slot.renderHeight = slot.height;
         const context = canvas.getContext('2d', {alpha:false});
         if (!context) throw Error('Canvas unavailable');
         const task = slot.renderTask = proxy.render({canvasContext:context, viewport,
@@ -141,46 +209,22 @@ const BridgePdfPreview = (() => {
         await task.promise;
         if (disposed || token !== slot.token) return;
         slot.renderTask = null;
-        if (textEnabled) {
-          try {
-            const reader = slot.textReader = proxy.streamTextContent().getReader();
-            const text = {items:[], styles:Object.create(null), lang:null};
-            let complete = false;
-            try {
-              while (true) {
-                const {value, done} = await reader.read();
-                if (disposed || token !== slot.token) return;
-                if (done) { complete = true; break; }
-                text.lang ??= value.lang;
-                Object.assign(text.styles, value.styles);
-                text.items.push(...value.items);
-              }
-            } finally {
-              if (!complete) await reader.cancel().catch(() => {});
-              reader.releaseLock();
-              if (slot.textReader === reader) slot.textReader = null;
-            }
-            if (text.items.length) {
-              const overlay = document.createElement('div'); overlay.className = 'wb-pdf-text textLayer';
-              slot.element.append(overlay);
-              const pdfjs = await loadLibrary();
-              if (disposed || token !== slot.token) return;
-              slot.textLayer = new pdfjs.TextLayer({textContentSource:text, container:overlay, viewport});
-              await slot.textLayer.render();
-            }
-          } catch (error) {
-            if (disposed || token !== slot.token) return;
-            slot.textLayer?.cancel(); slot.textLayer = null;
-            slot.element.replaceChildren(canvas);
-          }
-        }
-        if (disposed || token !== slot.token) return;
-        slot.loading = false; slot.ready = true; status.hidden = true; schedule();
+        const old = slot.canvas;
+        slot.canvas = canvas; slot.element.replaceChildren(canvas);
+        if (old) old.width = old.height = 0;
+        updateText(slot, false);
+        slot.paintedWidth = slot.width; slot.paintedHeight = slot.height;
+        slot.loading = false; slot.ready = true; status.hidden = true;
       } catch (error) {
         if (disposed || token !== slot.token || error?.name === 'RenderingCancelledException') return;
-        retire(slot); slot.failed = true;
+        retire(slot, !!slot.canvas); slot.failed = true;
         status.hidden = false; status.classList.add('error');
         status.textContent = BridgeI18n.t(errorMessage(error));
+      } finally {
+        if (canvas && slot.canvas !== canvas) canvas.width = canvas.height = 0;
+        if (token === slot.token && !slot.ready) slot.loading = false;
+        if (painting === slot) painting = null;
+        if (!disposed) schedule();
       }
     };
     const reconcile = () => {
@@ -205,12 +249,47 @@ const BridgePdfPreview = (() => {
         const middle = number => topOf(number - 1) + slots[number - 1].height / 2;
         return Math.abs(middle(a) - centerY) - Math.abs(middle(b) - centerY);
       }).slice(0, 3));
-      for (const slot of slots) {
-        if ((!wanted.has(slot.number) || slot.budget !== budget
-            || slot.textEnabled !== textPages.has(slot.number))
-            && (slot.loading || slot.ready || slot.proxy)) retire(slot);
+      const projected = slot => targetPixels(slot, budget);
+      let reserved = [...wanted].reduce((sum, number) => {
+        const slot = slots[number - 1];
+        return sum + Math.max(pixelCount(slot), projected(slot));
+      }, 0);
+      const cached = new Set();
+      const near = slots.filter(slot => slot.canvas && !wanted.has(slot.number)
+        && [...wanted].some(number => Math.abs(slot.number - number) === 1));
+      near.sort((a,b) => Math.abs(topOf(a.number - 1) - centerY)
+        - Math.abs(topOf(b.number - 1) - centerY));
+      for (const slot of near) {
+        if (cached.size >= 2 || reserved + pixelCount(slot) > TOTAL_PIXELS) continue;
+        cached.add(slot.number); reserved += pixelCount(slot);
       }
-      for (const number of wanted) hydrate(slots[number - 1], budget, textPages.has(number));
+      for (const slot of slots) {
+        if (!wanted.has(slot.number)) {
+          if (slot.loading || !cached.has(slot.number)) {
+            if (slot.loading || slot.canvas || slot.proxy) retire(slot, cached.has(slot.number));
+          } else updateText(slot, false);
+        } else if (slot.loading && (slot.budget !== budget
+            || slot.renderWidth !== slot.width || slot.renderHeight !== slot.height)) {
+          retire(slot, !!slot.canvas);
+        }
+      }
+      for (const number of wanted) {
+        const slot = slots[number - 1];
+        if (slot.canvas && !slot.loading && !slot.failed
+            && slot.paintedWidth === slot.width && slot.paintedHeight === slot.height
+            && pixelCount(slot) <= projected(slot)) slot.ready = true;
+        if (slot.ready) updateText(slot, textPages.has(number));
+      }
+      if (!painting) {
+        const candidates = [...wanted].map(number => slots[number - 1]).filter(slot =>
+          !slot.failed && !slot.loading && (!slot.canvas || slot.paintedWidth !== slot.width
+            || slot.paintedHeight !== slot.height || pixelCount(slot) > projected(slot)));
+        candidates.sort((a,b) => (projected(a) - pixelCount(a)) - (projected(b) - pixelCount(b))
+          || Math.abs(topOf(a.number - 1) - centerY) - Math.abs(topOf(b.number - 1) - centerY));
+        const candidate = candidates.find(slot =>
+          committedPixels() - pixelCount(slot) + projected(slot) <= TOTAL_PIXELS);
+        if (candidate) hydrate(candidate, budget);
+      }
       refresh();
     };
     const schedule = () => {
@@ -219,7 +298,7 @@ const BridgePdfPreview = (() => {
       else { scheduled = true; queueMicrotask(reconcile); }
     };
     const relayout = anchor => {
-      for (const slot of slots) { retire(slot); slot.failed = false; sizeSlot(slot, false); }
+      for (const slot of slots) { retire(slot, !!slot.canvas); slot.failed = false; sizeSlot(slot, false); }
       if (anchor) {
         stage.scrollTop = Math.max(0, topOf(anchor.number - 1)
           + slots[anchor.number - 1].height * anchor.fraction - anchor.viewportY);
@@ -354,7 +433,7 @@ const BridgePdfPreview = (() => {
         stage.removeEventListener('touchcancel', onTouchEnd);
       }
       if (scheduled !== null && typeof cancelAnimationFrame === 'function') cancelAnimationFrame(scheduled);
-      slots.forEach(retire); pages.replaceChildren();
+      slots.forEach(slot => retire(slot)); pages.replaceChildren();
       loadingTask?.destroy(); documentProxy = null;
     };
     return {element, load, dispose};

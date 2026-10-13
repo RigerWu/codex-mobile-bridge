@@ -98,6 +98,21 @@ test('Goal mode is disabled when the desktop runtime is unavailable',()=>{
  assert.match(ui.goalOption.title,/desktop Codex runtime was not found/);
 });
 
+test('a disconnected CLI cannot regain Goal actions on a later direct render',()=>{
+ const ui=fixture(),goal={objective:'Work',status:'active'};
+ ui.panel.open('local|a');ui.panel.render({...idle,goal,access:{source:'cli',canUseGoal:true}},'send',false);
+ assert.ok(ui.find(n=>(n.className||'').includes('goal-status')));
+ const disconnected={...idle,connected:false,goal,goalRuntimeAvailable:true,
+   access:{source:'cli',canUseGoal:false}};
+ ui.panel.render(disconnected,'send',false);
+ ui.panel.render(undefined,'queue',false);
+ assert.equal(ui.goalOption.disabled,true);
+ assert.equal(ui.find(n=>(n.className||'').includes('goal-status')),undefined);
+ assert.equal(ui.find(n=>(n.className||'').includes('goal-cancel')),undefined);
+ ui.panel.render({...idle,goal},'send',false);
+ assert.ok(ui.find(n=>(n.className||'').includes('goal-status')),'legacy views without access keep existing behavior');
+});
+
 test('goal controls work on first render without composer render and block double clicks',async()=>{
  const ui=fixture();ui.panel.open('local|a');ui.panel.render({...idle,goal:{objective:'Work',status:'active'}});
  let release,calls=0;ui.panel.onStatus=()=>{calls++;return new Promise(resolve=>release=resolve);};

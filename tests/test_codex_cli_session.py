@@ -173,8 +173,9 @@ class CliSessionTests(unittest.TestCase):
     def test_native_model_settings_and_collaboration_mode_keep_thread_identity(self):
         self.sessions.attach('thread-a', explicit=True)
         self.sessions._queue_refresh = Mock()
-        self.sessions.call('thread-a', 'thread-follower-update-thread-settings',
-                           {'threadSettings': {'model': 'native-model', 'effort': 'high'}})
+        result = self.sessions.call('thread-a', 'thread-follower-update-thread-settings',
+                                    {'threadSettings': {'model': 'native-model', 'effort': 'high'}})
+        self.assertEqual(result, {'applied': True})
         self.assertIn(('thread/settings/update', {'threadId': 'thread-a',
                                                    'model': 'native-model', 'effort': 'high'}), self.fake.sent)
         self.assertEqual(self.states[-1][1]['latestModel'], 'native-model')
@@ -250,6 +251,38 @@ class CliSessionTests(unittest.TestCase):
         self.assertEqual(state['latestModel'], 'native-model')
         self.assertEqual(state['latestThreadSettings']['serviceTier'], 'fast')
         self.assertEqual(state['latestCollaborationMode']['mode'], 'default')
+
+    def test_native_read_null_model_does_not_erase_newer_settings_event(self):
+        self.sessions.attach('thread-a', explicit=True)
+        self.fake.thread['model'] = None
+        self.fake.thread['reasoningEffort'] = None
+        self.sessions._event({'method': 'thread/settings/updated', 'params': {
+            'threadId': 'thread-a', 'threadSettings': {
+                'model': 'native-model', 'effort': None, 'serviceTier': 'fast'}}})
+        state = self.sessions.refresh('thread-a')
+        self.assertEqual(state['latestModel'], 'native-model')
+        self.assertIsNone(state['latestReasoningEffort'])
+        self.assertEqual(state['latestThreadSettings']['model'], 'native-model')
+        self.assertIsNone(state['latestThreadSettings']['effort'])
+
+    def test_resume_projects_persisted_mode_tier_and_goal(self):
+        original = self.fake.request
+        def request(method, params, **kwargs):
+            if method == 'thread/resume':
+                result = original(method, params, **kwargs)
+                result.update({'reasoningEffort': 'high', 'serviceTier': 'fast',
+                               'collaborationMode': {'mode': 'plan', 'settings': {}}})
+                return result
+            if method == 'thread/goal/get':
+                return {'goal': {'objective': 'Existing goal', 'status': 'paused'}}
+            return original(method, params, **kwargs)
+        self.fake.request = request
+        state = self.sessions.attach('thread-a', explicit=True)
+        self.assertEqual(state['latestThreadSettings']['serviceTier'], 'fast')
+        self.assertEqual(state['latestCollaborationMode']['mode'], 'plan')
+        self.assertEqual(state['threadGoal']['objective'], 'Existing goal')
+        self.sessions._event({'method': 'thread/goal/cleared', 'params': {'threadId': 'thread-a'}})
+        self.assertNotIn('threadGoal', self.sessions.refresh('thread-a'))
 
     def test_custom_provider_catalog_never_offers_openai_models(self):
         self.sessions.attach('thread-a', explicit=True)

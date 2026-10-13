@@ -225,12 +225,26 @@ class CliSessions:
                 self.attaching.discard(thread_id)
                 self.requests.pop(thread_id, None)
             raise AppServerUnsupported('CLI thread identity changed during join')
+        try:
+            goal = normalize_goal_result(self.client.request(
+                'thread/goal/get', {'threadId': thread_id}, replay_safe=True))
+        except AppServerUnsupported:
+            goal = None
+        except AppServerError:
+            with self.lock:
+                self.attaching.discard(thread_id)
+                self.requests.pop(thread_id, None)
+            raise
         with self.lock:
             self.joined[thread_id] = self.client.process
             self.attaching.discard(thread_id)
             self.metadata[thread_id] = {'model': resumed.get('model'),
                                         'modelProvider': resumed.get('modelProvider'),
-                                        'cwd': resumed.get('cwd')}
+                                        'cwd': resumed.get('cwd'),
+                                        'reasoningEffort': resumed.get('reasoningEffort'),
+                                        'serviceTier': resumed.get('serviceTier'),
+                                        'collaborationMode': resumed.get('collaborationMode'),
+                                        'goal': goal}
         try:
             return self.refresh(thread_id)
         except Exception:
@@ -262,6 +276,10 @@ class CliSessions:
             pending = list(self.requests.get(thread_id, {}).values())
             state = self._state(thread, pending, metadata)
             previous = self.states.get(thread_id) or {}
+            if thread.get('model') is None and previous.get('latestModel'):
+                state['latestModel'] = previous['latestModel']
+            if 'reasoningEffort' not in thread and 'latestReasoningEffort' in previous:
+                state['latestReasoningEffort'] = previous['latestReasoningEffort']
             for key in ('latestThreadSettings', 'latestCollaborationMode', 'threadGoal',
                         'completedThreadGoal', 'turnPlan'):
                 if key in previous:
@@ -307,7 +325,7 @@ class CliSessions:
             if not isinstance(settings, dict) or not settings or set(settings) - allowed:
                 raise AppServerUnsupported('Only explicit CLI model and effort settings are supported')
             native = {'threadId': thread_id, **settings}
-            result = self.client.request('thread/settings/update', native, timeout=timeout)
+            self.client.request('thread/settings/update', native, timeout=timeout)
             with self.lock:
                 state = self.states.get(thread_id)
                 if state is not None:
@@ -323,7 +341,7 @@ class CliSessions:
             if snapshot is not None:
                 self.on_state(thread_id, snapshot)
             self._queue_refresh(thread_id)
-            return result
+            return {'applied': True}
         if desktop_method == 'thread-follower-steer-turn':
             if params.get('attachments') or (params.get('restoreMessage') or {}).get('context', {}).get('fileAttachments'):
                 raise AppServerUnsupported('CLI steering with files is unavailable')
@@ -560,12 +578,20 @@ class CliSessions:
             turns.append({'turnId': turn.get('id'), 'status': turn.get('status'),
                           'turnStartedAtMs': (turn.get('startedAt') or 0) * 1000,
                           'items': turn.get('items') or [], 'error': turn.get('error')})
-        return {'id': thread['id'], 'title': thread.get('name') or thread.get('preview') or '未命名聊天',
+        state = {'id': thread['id'], 'title': thread.get('name') or thread.get('preview') or '未命名聊天',
                 'cwd': thread.get('cwd') or metadata['cwd'],
                 'modelProvider': thread.get('modelProvider') or metadata['modelProvider'],
                 'latestModel': thread.get('model') or metadata['model'],
-                'latestReasoningEffort': thread.get('reasoningEffort'),
+                'latestReasoningEffort': (thread['reasoningEffort'] if 'reasoningEffort' in thread
+                                          else metadata.get('reasoningEffort')),
                 'threadRuntimeStatus': status, 'turns': turns, 'requests': requests}
+        if metadata.get('serviceTier') is not None:
+            state['latestThreadSettings'] = {'serviceTier': metadata['serviceTier']}
+        if metadata.get('collaborationMode') is not None:
+            state['latestCollaborationMode'] = copy.deepcopy(metadata['collaborationMode'])
+        if metadata.get('goal') is not None:
+            state['threadGoal'] = copy.deepcopy(metadata['goal'])
+        return state
 
     def _require_joined(self, thread_id):
         with self.lock:
@@ -618,10 +644,12 @@ class CliSessions:
             elif method == 'thread/goal/updated':
                 goal = params.get('goal')
                 state['threadGoal'] = copy.deepcopy(goal)
+                self.metadata[thread_id]['goal'] = copy.deepcopy(goal)
                 state.pop('completedThreadGoal', None)
             elif method == 'thread/goal/cleared':
                 state.pop('threadGoal', None)
                 state.pop('completedThreadGoal', None)
+                self.metadata[thread_id]['goal'] = None
             elif method == 'turn/plan/updated':
                 state['turnPlan'] = copy.deepcopy(params.get('plan') or [])
             elif method == 'thread/status/changed':

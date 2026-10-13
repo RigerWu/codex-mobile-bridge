@@ -28,7 +28,7 @@ HTTP 阅读请求先返回，保存历史和实时连接在后台加载，通过
 
 CLI 来源表示创建方式，不固定当前执行进程。对 CLI 聊天，被动查询已有 Desktop owner 并定向订阅，核对 host/id/cwd/provider 后复用其执行连接；未发现 owner 时，仅显式继续才连接原生 daemon 或冷恢复。已发现 owner 但快照未到达或身份不符时不另行恢复。原生 writer 锁仍由官方运行时维护，网关不清锁、不终止持有者。详情见 [CLI 接入说明](docs/codex-cli.md)。
 
-模型、Skill 与工作模式使用独立能力字段，不借用会同时开放权限设置和重命名的 `canConfigure`。App 接续的 CLI 聊天使用既有 owner 通路；已连接原生 CLI 的目录、设置、Skill、计划请求和本机 Goal 使用同一 daemon。读取目录不激活会话，显式设置只更新所选模型/推理强度等字段，不替换 provider、认证或 cwd。
+模型、权限、Skill 与工作模式使用独立能力字段，不借用会同时开放重命名等操作的 `canConfigure`。App 接续的 CLI 聊天使用既有 owner 通路；已连接原生 CLI 的目录、设置、Skill、计划请求和本机/SSH Goal 使用同一 daemon。读取目录不激活会话，显式设置只更新所选模型/推理强度或经策略检查的权限字段，不替换 provider、认证或 cwd。原生 CLI 权限以 resume 的实际配置与 thread/settings/updated 事件为准，不把请求值投影为已生效；权限策略读取来自执行端，不依赖网关电脑的桌面开关。
 
 项目与 SSH 主机映射来自 App 的 `.codex-global-state.json`。远端只读取 App 已保存且有关联项目/会话的 SSH 别名；只读辅助脚本使用 `ssh` 和远端 Python，不向远端安装文件。
 

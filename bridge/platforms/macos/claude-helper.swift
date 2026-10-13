@@ -225,28 +225,41 @@ final class Connector {
         try fail("failed", "未找到 Claude Console，请确认开发者工具窗口可用后重试")
     }
     func verify(_ prompt: AXUIElement, _ expected: String) throws {
-        func read() throws -> Bool {
+        func read() throws -> String? {
             Thread.sleep(forTimeInterval: 0.025); try check(prompt)
-            let observed = (attribute(prompt, kAXValueAttribute) as? String)?.trimmingCharacters(in: .newlines)
-            return observed == expected
+            return (attribute(prompt, kAXValueAttribute) as? String)?.trimmingCharacters(in: .newlines)
         }
+        var observed: String?
         for _ in 0..<40 {
-            if try read() { return }
+            observed = try read()
+            if observed == expected { return }
         }
-        if !expected.isEmpty {
-            // Chromium can expose only the visible part of a long Console
-            // editor through AXValue. Page through it, accepting only a single
-            // AXValue that equals the entire expected source.
-            try key(126, flags: .maskCommand, prompt: prompt)
-            let deadline = Date().addingTimeInterval(8)
-            for page in 0..<64 where Date() < deadline {
-                if page > 0 { try key(121, prompt: prompt) }
-                for _ in 0..<4 {
-                    if try read() {
-                        // Subsequent CGEvent chunks and Return must act at the
-                        // end of the same verified editor, never mid-source.
+        if !expected.isEmpty && observed?.isEmpty == false {
+            // A long Console line can expose only a rendered slice through AX.
+            // Move the caret to reveal more; only a single full-value match
+            // establishes that the editor contains the expected source.
+            var settable = DarwinBoolean(false)
+            try check(prompt)
+            if AXUIElementIsAttributeSettable(prompt, kAXSelectedTextRangeAttribute as CFString, &settable) == .success && settable.boolValue {
+                for _ in 0..<3 {
+                    let live = try read()
+                    if live == expected {
                         try key(125, flags: .maskCommand, prompt: prompt)
                         return
+                    }
+                    guard let live = live, !live.isEmpty else { break }
+                    let position = min(expected.utf16.count / 2, live.utf16.count - 1)
+                    var range = CFRange(location: position, length: 0)
+                    guard let selected = AXValueCreate(.cfRange, &range) else { break }
+                    try check(prompt)
+                    guard AXUIElementSetAttributeValue(prompt, kAXSelectedTextRangeAttribute as CFString, selected) == .success else { break }
+                    // A selection alone need not scroll CodeMirror; Right updates its viewport.
+                    try key(124, prompt: prompt)
+                    for _ in 0..<4 {
+                        if try read() == expected {
+                            try key(125, flags: .maskCommand, prompt: prompt)
+                            return
+                        }
                     }
                 }
             }
@@ -315,7 +328,7 @@ final class Connector {
                 if end % 128 == 0 || end == units.count { try verify(prompt, String(decoding: units[0..<end], as: UTF16.self)) }
             }
         }
-        try verify(prompt, source); try submit(prompt)
+        try submit(prompt)
         output("submitted", "连接脚本已输入，正在等待 Claude 确认")
     }
     func closeConsole() throws {

@@ -341,6 +341,23 @@ class ClaudeAccountSnapshots(unittest.TestCase):
             self.assertEqual(ClaudeAccounts(self.root/'accounts', self.home).public()['current']['usage']['checkedAt'], original['checkedAt'])
             self.assertEqual(fetch.call_count, 1)
 
+    def test_unrecognized_response_keeps_successful_saved_and_current_snapshots(self):
+        saved = self.save()
+        for identifier in (saved, 'current'):
+            with self.subTest(identifier=identifier):
+                if identifier == 'current':
+                    self.login('unsaved')
+                with patch(MODULE+'_web_json', return_value={'five_hour': {'utilization': 25}}):
+                    original = self.accounts.details(identifier, refresh=True)['current']['usage']
+                with patch(MODULE+'_web_json', return_value={'unrecognized': 'private'}):
+                    result = self.accounts.details(identifier, refresh=True)
+                usage = result['current']['usage']
+                self.assertEqual(usage['status'], 'error')
+                self.assertEqual(usage['checkedAt'], original['checkedAt'])
+                self.assertEqual(usage['limits'], original['limits'])
+                recreated = ClaudeAccounts(self.root/'accounts', self.home)
+                self.assertEqual(recreated.public()['current']['usage'], usage)
+
     def test_api_has_no_subscription_quota_request(self):
         self.gateway()
         identifier = self.save()

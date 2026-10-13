@@ -10,7 +10,7 @@ Claude 账号面板打开及可见时的五分钟刷新会逐个请求 `details`
 
 Claude 的面板打开、返回、切换后的列表刷新及定时刷新只请求账号公开快照。Claude `details(refresh=False)` 也只返回快照，作为服务端边界；仅明确的 `details(refresh=True)` 查询额度。DeepSeek Harness 和 Codex 的既有刷新行为不变。
 
-成功查询保存 `checkedAt` 和额度；失败保留已有成功额度及其 `checkedAt`，将状态与脱敏错误改为失败。没有成功快照时不写入成功查询时间。界面以本地 `YYYY-MM-DD HH:mm` 显示 Claude 的成功查询时间，并把失败与旧数据同时显示。查询期间按钮禁用，同一面板不重复提交。每次明确查询仅在该调用的局部字典内复用 Claude Safe Storage 派生密钥；调用结束后不保留进程级明文密钥缓存。
+成功解析出可识别额度后才替换快照并保存 `checkedAt`；失败保留已有成功额度及其 `checkedAt`，将状态与脱敏错误改为失败。没有成功快照时不写入成功查询时间。界面以本地 `YYYY-MM-DD HH:mm` 显示 Claude 的成功查询时间，并把失败与旧数据同时显示。查询期间按钮显示“查询中”并禁用，同一面板不重复提交。每次明确查询仅在该调用的局部字典内复用 Claude Safe Storage 派生密钥；调用结束后不保留进程级明文密钥缓存。
 
 ## Existing-note audit
 

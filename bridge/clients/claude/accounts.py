@@ -701,9 +701,10 @@ class ClaudeAccounts:
                     data = _web_json('/api/organizations/'+parse.quote(org, safe='')+'/usage', cookies, org)
                     if ephemeral and self._current()[:2] != (kind, fingerprint):
                         raise ValueError('Claude 当前登录已发生变化，请重新查询')
-                    usage['limits'] = _usage_limits(data)
-                    if not usage['limits']:
+                    limits = _usage_limits(data)
+                    if not limits:
                         raise ValueError('Claude 未返回可识别的剩余额度')
+                    usage['limits'] = limits
                     usage['status'] = 'ready'
                     usage['checkedAt'] = time.time()
                 except Exception:

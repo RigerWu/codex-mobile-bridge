@@ -174,6 +174,20 @@ class CliSessionTests(unittest.TestCase):
             'threadId': 'thread-a', 'turn': {'id': 'turn-1', 'status': 'completed'}}})
         self.assertEqual(self.states[-1][1]['turns'][0]['status'], 'completed')
 
+    def test_completed_turn_keeps_user_item_omitted_from_event(self):
+        self.fake.thread['turns'] = [{'id': 'turn-1', 'status': 'inProgress', 'items': [
+            {'id': 'user-1', 'type': 'userMessage', 'content': [{'type': 'text', 'text': 'Hello'}]},
+            {'id': 'reasoning-1', 'type': 'reasoning', 'summary': 'Draft'},
+            {'id': 'assistant-1', 'type': 'agentMessage', 'text': 'Partial'}]}]
+        self.sessions.attach('thread-a', explicit=True)
+        self.sessions._event({'method': 'turn/completed', 'params': {
+            'threadId': 'thread-a', 'turn': {'id': 'turn-1', 'status': 'completed', 'items': [
+                {'id': 'assistant-1', 'type': 'agentMessage', 'text': 'Final'}]}}})
+        items = self.states[-1][1]['turns'][0]['items']
+        self.assertEqual([(item['id'], item['type']) for item in items],
+                         [('user-1', 'userMessage'), ('assistant-1', 'agentMessage')])
+        self.assertEqual(items[1]['text'], 'Final')
+
     def test_unload_revokes_write_access(self):
         self.sessions.attach('thread-a', explicit=True)
         self.sessions._event({'method': 'thread/closed', 'params': {'threadId': 'thread-a'}})

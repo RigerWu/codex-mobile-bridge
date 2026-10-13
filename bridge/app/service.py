@@ -48,6 +48,8 @@ class LiveSession:
         self.saved_provider = None
         self.desktop_owner_probe = None
         self.native_attaching = False
+        self.native_goal_supported = None
+        self.native_goal_refresh_at = 0
         self.access = None
         self.discovering = False
         self.state = None
@@ -182,6 +184,45 @@ class Bridge:
         executable = getattr(self.goal, "executable", None)
         return bool(executable and Path(executable).is_file())
 
+    def _session_goal_available(self, session):
+        if self.host != 'local':
+            return False
+        with session.condition:
+            native = session.connected and session.runtime == 'cli'
+            known = session.native_goal_supported
+        if not native:
+            return self._goal_runtime_available()
+        if known is None:
+            try:
+                known = self.cli_sessions.supports_goal(session.id)
+            except GoalError:
+                return False
+            with session.condition:
+                if session.connected and session.runtime == 'cli':
+                    session.native_goal_supported = known
+                    session.access = self._access(session.origin, session)
+                    session.changed()
+        return known is True
+
+    def _refresh_session_goal(self, session):
+        if not self._session_goal_available(session):
+            return False
+        with session.condition:
+            native = session.connected and session.runtime == 'cli'
+            due = time.monotonic() >= session.native_goal_refresh_at
+        if native and due:
+            try:
+                goal = normalize_goal_result(self.cli_sessions.get_goal(session.id))
+            except GoalError:
+                return True
+            with session.condition:
+                if session.connected and session.runtime == 'cli' and session.state is not None:
+                    if session.state.get('threadGoal') != goal:
+                        session.state['threadGoal'] = goal
+                        session.changed()
+                    session.native_goal_refresh_at = time.monotonic() + 2
+        return True
+
     def _save_goal_commands(self):
         target = self.goal_commands_path.with_suffix('.tmp')
         target.write_text(json.dumps(self.goal_commands, ensure_ascii=False), encoding='utf-8')
@@ -189,16 +230,18 @@ class Bridge:
         target.replace(self.goal_commands_path)
 
     def _native_goal_state(self, thread_id, *, strict=False):
-        if self.goal:
+        session = self.live.get(thread_id)
+        if self.goal or session and session.origin == 'cli' and session.runtime == 'cli':
             try:
                 native = self._goal_call('get_goal', thread_id)
                 # A successful empty answer is authoritative. Do not let a stale
                 # desktop snapshot resurrect a goal that native state has cleared.
                 return normalize_goal_result(native)
             except GoalUnsupported:
-                pass
+                if session and session.runtime == 'cli':
+                    raise
             except GoalError:
-                if strict:
+                if strict or session and session.runtime == 'cli':
                     raise
         native = normalize_goal(read_native_goal(self.codex_home, thread_id))
         if strict and native is None and not native_goal_absent(self.codex_home, thread_id):
@@ -343,8 +386,8 @@ class Bridge:
                 else:
                     result = self._goal_call(rpc_method, thread_id, rpc_arg)
             except GoalUnsupported as exc:
-                fail('桌面 Codex 版本不支持原生目标模式')
-                raise IPCError('桌面 Codex 版本不支持原生目标模式') from exc
+                fail('当前 Codex 版本不支持原生目标模式')
+                raise IPCError('当前 Codex 版本不支持原生目标模式') from exc
             except GoalError as exc:
                 # Timeout and disconnect leave delivery unknown; ordinary native
                 # errors are deterministic failures. Neither is replayed by id.
@@ -357,6 +400,12 @@ class Bridge:
             except GoalError as exc:
                 fail(str(exc), unknown=True)
                 raise IPCError('目标操作已发送，但状态尚未确认') from exc
+            if session.runtime == 'cli':
+                with session.condition:
+                    if session.state is not None:
+                        session.state['threadGoal'] = native
+                        session.native_goal_refresh_at = time.monotonic() + 2
+                        session.changed()
             confirmed = goal_state_confirms_command(command, native)
             if action == 'cancel':
                 if confirmed:
@@ -760,10 +809,17 @@ class Bridge:
         connected = bool(session and session.connected)
         writable = desktop or connected
         reconnect = desktop or bool(session and session.desktop_owner_probe == 'found') or self.cli_sessions.available()
+        cli_controls = connected and origin == 'cli'
+        goal = (self._goal_runtime_available() if not session or session.runtime != 'cli'
+                else session.native_goal_supported is True)
+        goal = goal and self.host == 'local'
         return {'source': origin, 'runtime': (session.runtime if connected else None),
                 'readOnly': not writable, 'canSend': writable, 'canInterrupt': writable,
                 'canApprove': writable, 'canReconnect': reconnect,
-                'canConfigure': desktop, 'canUseModes': desktop, 'canUseGoal': desktop,
+                'canConfigure': desktop, 'canChangeModel': desktop or cli_controls,
+                'canSelectSkills': desktop or cli_controls,
+                'canUseModes': desktop or cli_controls,
+                'canUseGoal': desktop or cli_controls and goal,
                 'canUseSideChat': desktop, 'canEditMessages': desktop,
                 'reason': None if reconnect else '未找到可用的 Codex CLI 后台服务或已安装的服务包；请先在电脑上安装或更新 Codex CLI，并运行一次。'}
 
@@ -798,6 +854,8 @@ class Bridge:
             sessions = list(self.live.values())
         for session in sessions:
             if thread_id is None or session.id == thread_id:
+                with session.condition:
+                    session.native_goal_supported = None
                 self._invalidate(session, 'CLI 连接已断开，请重新连接；未自动重发任何操作。', runtime='cli')
 
     def discovery_diagnostics(self, thread_id=None):
@@ -1365,6 +1423,7 @@ class Bridge:
 
     def view(self, thread_id, attach=True, background=False, force=False):
         session = self.session(thread_id, attach=attach, background=background, force=force)
+        goal_available = self._refresh_session_goal(session)
         with session.condition:
             session.access = self._access(session.origin, session)
         view = session.view()
@@ -1374,8 +1433,8 @@ class Bridge:
                 view["permissionMode"] = linux_permissions.current_mode(session.state)
         view["host"] = self.host
         view["hostLabel"] = "此电脑" if self.host == "local" else self.hosts.hosts().get(self.host, {}).get("displayName", self.host)
-        view["goalTransport"] = self.goal_transport
-        view["goalRuntimeAvailable"] = self._goal_runtime_available()
+        view["goalTransport"] = 'cli' if session.connected and session.runtime == 'cli' else self.goal_transport
+        view["goalRuntimeAvailable"] = goal_available
         view["goalActivationIds"] = sorted(self._goal_activation_ids(thread_id))
         with session.condition:
             artifacts = artifact_paths(session.state or {}, self.store.home) if self.host == "local" else {}
@@ -1638,7 +1697,7 @@ class Bridge:
                     attachments.append({'type': 'file', 'name': name})
 
     def _overlay_native_goal(self, session, thread_id, view):
-        if self.host != "local" or session.origin == "cli":
+        if self.host != "local" or session.runtime == "cli":
             return view
         native_goal = normalize_goal(read_native_goal(self.codex_home, thread_id))
         if native_goal:
@@ -1651,6 +1710,7 @@ class Bridge:
 
     def timeline_read(self, thread_id, mode='page', **options):
         session = self.session(thread_id, background=True)
+        goal_available = self._refresh_session_goal(session)
         # Expand saved history only when the reader reaches its loaded edge.
         if mode == 'page' and options.get('before'):
             with session.condition:
@@ -1678,7 +1738,8 @@ class Bridge:
             else:
                 result = projection.changes(**options) if mode == 'changes' else projection.page(**options)
                 result['meta'] = dict(result['meta'], host=self.host,
-                                      hostLabel='此电脑' if self.host == 'local' else self.hosts.hosts().get(self.host, {}).get('displayName', self.host))
+                                      hostLabel='此电脑' if self.host == 'local' else self.hosts.hosts().get(self.host, {}).get('displayName', self.host),
+                                      goalRuntimeAvailable=goal_available)
                 if linux_permissions.enabled(self.host):
                     result['meta']['linuxPermissionChecks'] = True
                     result['meta']['permissionMode'] = linux_permissions.current_mode(session.state)
@@ -1700,14 +1761,28 @@ class Bridge:
         return result
 
     def catalog(self, thread_id, refresh=False, kind=None, query='', offset=0, limit=200, ids=None):
-        self._require_desktop_feature(thread_id)
-        session = self.session(thread_id)
+        session = self.session(thread_id, attach=False, background=True)
         with session.condition:
-            cwd = session.state.get("cwd")
-            model = session.state.get("latestModel")
-            effort = session.state.get("latestReasoningEffort") or (session.state.get("latestThreadSettings") or {}).get("effort")
+            state = session.state or {}
+            native = session.origin == 'cli' and session.runtime == 'cli' and session.connected
+            if session.origin == 'cli' and not session.connected:
+                raise ValueError('请先继续此会话，再读取模型或 Skill')
+            cwd = state.get("cwd") or session.saved_cwd
+            model = state.get("latestModel")
+            effort = state.get("latestReasoningEffort") or (state.get("latestThreadSettings") or {}).get("effort")
             provider = session.view().get('provider')
-        selected = self.accounts.current_models(refresh) if self.host == 'local' and self.accounts and kind != 'skills' else None
+        if native:
+            if kind in ('models', 'skills'):
+                value = self.cli_sessions.get_kind(thread_id, kind, refresh=refresh, query=query,
+                                                   offset=offset, limit=limit, ids=ids)
+                return {**value, 'kind': kind, **({'currentModel': model or value.get('currentModel'),
+                        'currentEffort': effort or value.get('currentEffort')} if kind == 'models' else {})}
+            models = self.cli_sessions.get_kind(thread_id, 'models', refresh=refresh)
+            skills = self.cli_sessions.get_kind(thread_id, 'skills', refresh=refresh)
+            return {**models, **skills, 'currentModel': model or models.get('currentModel'),
+                    'currentEffort': effort or models.get('currentEffort')}
+        selected = (self.accounts.current_models(refresh) if session.origin != 'cli' and
+                    self.host == 'local' and self.accounts and kind != 'skills' else None)
         if kind == 'models' and selected is not None:
             return {**selected, 'kind':'models', 'currentModel':model, 'currentEffort':effort}
         if kind in ('models', 'skills'):
@@ -1738,7 +1813,9 @@ class Bridge:
         with session.condition:
             cwd = session.state.get("cwd") or str(self.codex_home)
         identifiers = sorted(set(skills))
-        rows = self.catalog_reader.validate_skills(cwd, identifiers)
+        rows = (self.cli_sessions.validate_skills(session.id, identifiers)
+                if session.origin == 'cli' and session.runtime == 'cli'
+                else self.catalog_reader.validate_skills(cwd, identifiers))
         by_id = {row["id"]: row for row in rows}
         selected = []
         for key in identifiers:
@@ -1823,7 +1900,6 @@ class Bridge:
 
     @operation
     def settings(self, thread_id, model, effort, *, fast_mode=None):
-        self._require_desktop_feature(thread_id)
         if not isinstance(model, str) or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_./:@+-]{0,199}", model):
             raise ValueError("模型 ID 格式不正确")
         if effort not in ("none", "minimal", "low", "medium", "high", "xhigh", "max", "ultra"):
@@ -1831,6 +1907,8 @@ class Bridge:
         if fast_mode is not None and not isinstance(fast_mode, bool):
             raise ValueError('Fast 模式开关无效')
         session = self._target(thread_id)
+        if not self._access(session.origin, session)['canChangeModel']:
+            raise ValueError('此会话暂不能修改模型设置')
         with session.action_lock:
             # Recheck login/model/policy on the execution host before a speed change.
             catalog = self.catalog(thread_id, refresh=fast_mode is not None, kind='models')
@@ -1847,7 +1925,7 @@ class Bridge:
                 settings['serviceTier'] = known['fastTier'] if fast_mode else 'default'
             result = self._call(session, "thread-follower-update-thread-settings", {"threadSettings": settings})
         if not result.get("applied"):
-            raise IPCError("桌面未应用模型设置，请刷新后重试")
+            raise IPCError("Codex 未应用模型设置，请刷新后重试")
         with session.condition:
             confirmed = session.condition.wait_for(lambda: session.state.get("latestModel") == model and session.view().get("effort") == effort and
                 (fast_mode is None or (session.state.get('latestThreadSettings') or {}).get('serviceTier') == settings['serviceTier']), timeout=5)
@@ -1916,6 +1994,9 @@ class Bridge:
 
     def _goal_call(self, method, *args):
         """Use the owner when available, otherwise the isolated sidecar."""
+        session = self.live.get(args[0]) if args else None
+        if session and session.origin == 'cli' and session.runtime == 'cli':
+            return getattr(self.cli_sessions, method)(*args)
         if self.owner_goal is not None:
             # A configured owner transport is authoritative. Never silently
             # fall back after the owner path was selected: that could create a
@@ -1936,11 +2017,16 @@ class Bridge:
 
     @operation
     def _goal_control(self, thread_id, request_id, action, *, status=None, objective=None, ui_locale=None, expected=None):
-        self._require_desktop_feature(thread_id)
         uuid.UUID(request_id)
-        if self.host != 'local' or self.goal is None:
+        if self.host != 'local':
             raise ValueError('目标模式暂不支持 SSH 主机')
         session = self.session(thread_id, attach=False, background=True)
+        if session.origin != 'cli' and self.goal is None:
+            raise ValueError('目标模式暂不支持 SSH 主机')
+        if session.origin == 'cli' and not session.connected:
+            raise ValueError('请先继续此会话，再操作目标')
+        if session.origin == 'cli' and not self._session_goal_available(session):
+            raise ValueError('当前 Codex 会话暂不支持目标模式')
         # Match the queue dispatcher lock order and serialize state + activation.
         with session.action_lock, self.goal_lock:
             prior = self.goal_commands.get(thread_id + ':' + request_id)
@@ -2020,16 +2106,18 @@ class Bridge:
             raise ValueError("补充当前任务时不能切换工作模式")
         if work_mode == "goal" and (mode != "send" or not text.strip() or len(text) > 4000):
             raise ValueError("目标需在当前任务结束后直接发送，且不超过 4000 字")
-        if work_mode not in (None, "default") or skills:
-            self._require_desktop_feature(thread_id)
         if work_mode == "goal":
-            if self.host != "local" or self.goal is None:
+            if self.host != "local":
                 raise ValueError("目标模式暂不支持 SSH 主机")
             if identifiers:
                 raise ValueError("目标模式暂不支持附件")
             if skills:
                 raise ValueError("目标模式只接受纯文本目标")
             session = self._target(thread_id)
+            if session.origin != 'cli' and self.goal is None:
+                raise ValueError('目标模式暂不支持 SSH 主机')
+            if session.origin == 'cli' and not self._session_goal_available(session):
+                raise ValueError('当前 Codex 会话暂不支持目标模式')
             with session.action_lock, self.goal_lock:
                 response = self._goal_command(session, thread_id, submission_id, "create", objective=text,
                                               ui_locale=ui_locale or activation.get("uiLocale") if activation else ui_locale)
@@ -2040,6 +2128,11 @@ class Bridge:
                     session, response, "create", ui_locale or activation.get("uiLocale") if activation else ui_locale)
                 return result
         session = self._target(thread_id)
+        access = self._access(session.origin, session)
+        if work_mode is not None and not access['canUseModes']:
+            raise ValueError('此会话暂不能切换工作模式')
+        if skills and not access['canSelectSkills']:
+            raise ValueError('此会话暂不能选择 Skill')
         selected = self._resolve_skills(session, [] if skills is None else skills)
         key = thread_id + ":" + submission_id
         with session.action_lock:
@@ -2057,9 +2150,9 @@ class Bridge:
                     raise ValueError("Codex 正在执行。请选择「排队发送」或「补充当前任务」。")
                 if not active and mode == "steer":
                     raise ValueError("当前任务已经结束，请使用普通发送")
-                if work_mode is not None and session.runtime != "cli" and not (session.state.get("latestModel") or
+                if work_mode is not None and not (session.state.get("latestModel") or
                         (session.state.get("latestCollaborationMode") or {}).get("settings", {}).get("model")):
-                    raise ValueError("尚未取得桌面模型设置，请重新连接后再切换模式")
+                    raise ValueError("尚未取得模型设置，请重新连接后再切换模式")
                 if plan_response is not None:
                     pending = next((r for r in session.state.get("requests", [])
                                     if r.get("id") == plan_response["requestId"] and r.get("method") == "item/plan/requestImplementation"), None)
@@ -2127,13 +2220,13 @@ class Bridge:
         context = {'attachments': [], 'commentAttachments': []}
         if files:
             context['fileAttachments'] = [{'path': f['path'], 'label': f['name']} for f in files]
-        if entry.get("workMode") is not None and session.runtime != "cli":
+        if entry.get("workMode") is not None:
             with session.condition:
                 current = session.state
                 model = current.get("latestModel") or (current.get("latestCollaborationMode") or {}).get("settings", {}).get("model")
                 effort = current.get("latestReasoningEffort") or (current.get("latestThreadSettings") or {}).get("effort")
             if not model:
-                raise ValueError("尚未取得桌面模型设置，请重新连接后再切换模式")
+                raise ValueError("尚未取得模型设置，请重新连接后再切换模式")
             request["collaborationMode"] = {"mode": "plan" if entry["workMode"] == "plan" else "default",
                                             "settings": {"model": model, "reasoning_effort": effort, "developer_instructions": None}}
         request["input"].extend({"type": "skill", "name": s["name"], "path": s["path"]} for s in entry.get("skills", []))

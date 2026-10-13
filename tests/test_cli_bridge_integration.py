@@ -15,6 +15,7 @@ from bridge.app.service import Bridge, LiveSession
 from bridge.clients.codex.app_server import AppServerUnavailable, AppServerUnknownResult
 from bridge.clients.codex.cli_session import CliSessions
 from bridge.clients.codex.ipc import IPCError
+from bridge.features.sessions.goal import GoalUnavailable
 from bridge.features.auth.auth import password_record
 
 
@@ -140,6 +141,10 @@ class CliBridgeTests(CliBridgeFixture):
         self.assertEqual(session.origin, 'cli')
         self.assertEqual(session.access['source'], 'cli')
         self.assertTrue(session.access['canReconnect'])
+        self.assertTrue(session.access['canChangeModel'])
+        self.assertTrue(session.access['canSelectSkills'])
+        self.assertTrue(session.access['canUseModes'])
+        self.assertFalse(session.access['canConfigure'])
         self.cli.attach.assert_not_called()
         self.bridge.ipc.request = Mock(return_value={'result': {'ok': True}})
         self.bridge.send(self.thread_id, 'fixture message', str(uuid.uuid4()))
@@ -295,15 +300,134 @@ class CliBridgeTests(CliBridgeFixture):
             self.assertFalse(session.connected)
             navigation.assert_not_called()
 
-    def test_unsupported_configuration_is_rejected_before_native_write(self):
+    def test_joined_native_cli_model_skill_and_plan_use_same_daemon(self):
+        session = self.bridge.activate(self.thread_id)
+        self.cli.get_kind.return_value = {'models': [{'id': 'test-model', 'efforts': ['high']}],
+                                          'modelSource': 'codex', 'fastMode': {'allowed': False}}
+        self.cli.validate_skills.return_value = [{'id': 'fixture-skill', 'name': 'Fixture', 'path': '/skills/fixture'}]
+        self.assertTrue(self.bridge.view(self.thread_id, attach=False)['access']['canChangeModel'])
+        self.assertFalse(self.bridge.view(self.thread_id, attach=False)['access']['canConfigure'])
+        self.bridge.catalog(self.thread_id, kind='models')
+        self.cli.get_kind.assert_called_with(self.thread_id, 'models', refresh=False, query='', offset=0, limit=200, ids=None)
+        self.cli.call.return_value = {'applied': True}
+        with session.condition:
+            session.state['latestReasoningEffort'] = 'high'
+        result = self.bridge.settings(self.thread_id, 'test-model', 'high')
+        self.assertTrue(result['confirmed'])
+        self.assertEqual(self.cli.call.call_args.args[1], 'thread-follower-update-thread-settings')
+        self.bridge.send(self.thread_id, 'planned', str(uuid.uuid4()), work_mode='plan', skills=['fixture-skill'])
+        request = self.cli.call.call_args.args[2]['turnStart']['request']
+        self.assertEqual(request['collaborationMode']['mode'], 'plan')
+        self.assertIn({'type': 'skill', 'name': 'Fixture', 'path': '/skills/fixture'}, request['input'])
+        self.cli.validate_skills.assert_called_with(self.thread_id, ['fixture-skill'])
+        self.cli.get_kind.side_effect = lambda thread_id, kind, **kwargs: (
+            {'models': [{'id': 'test-model'}]} if kind == 'models' else {'skills': [{'id': 'fixture-skill'}]})
+        combined = self.bridge.catalog(self.thread_id)
+        self.assertEqual(combined['models'][0]['id'], 'test-model')
+        self.assertEqual(combined['skills'][0]['id'], 'fixture-skill')
+        self.cli.get_kind.side_effect = None
+        queued_id = str(uuid.uuid4())
+        self.bridge.send(self.thread_id, 'queued plan', queued_id, mode='queue', work_mode='plan')
+        self.bridge._send_queued(session, self.thread_id + ':' + queued_id,
+                                 self.bridge.submissions[self.thread_id + ':' + queued_id])
+        self.assertEqual(self.cli.call.call_args.args[2]['turnStart']['request']['collaborationMode']['mode'], 'plan')
+
+    def test_passive_cli_catalog_does_not_join_native_runtime(self):
+        self.bridge.catalog_reader.get_kind = Mock(return_value={'models': [], 'fastMode': {'allowed': False}})
+        with self.assertRaisesRegex(ValueError, '继续此会话'):
+            self.bridge.catalog(self.thread_id, kind='models')
+        self.cli.attach.assert_not_called()
+        self.cli.get_kind.assert_not_called()
+        self.bridge.catalog_reader.get_kind.assert_not_called()
+
+    def test_native_goal_is_probed_and_routed_only_to_joined_daemon(self):
+        session = self.bridge.activate(self.thread_id)
+        self.cli.supports_goal.return_value = True
+        self.cli.get_goal.return_value = None
+        view = self.bridge.view(self.thread_id, attach=False)
+        self.assertTrue(view['access']['canUseGoal'])
+        self.assertTrue(view['goalRuntimeAvailable'])
+        self.bridge._goal_call('get_goal', self.thread_id)
+        self.cli.get_goal.assert_called_with(self.thread_id)
+        self.bridge.goal.get_goal = Mock(side_effect=AssertionError('sidecar goal read'))
+        self.bridge.timeline_read(self.thread_id)
+        self.assertEqual(session.runtime, 'cli')
+        self.bridge._cli_disconnected()
+        self.assertIsNone(session.native_goal_supported)
+        self.cli.get_goal.side_effect = GoalUnavailable('native unavailable')
+        with self.assertRaises(GoalUnavailable):
+            self.bridge._native_goal_state(self.thread_id, strict=True)
+
+    def test_unsupported_native_goal_stays_unavailable_without_sidecar_fallback(self):
         self.bridge.activate(self.thread_id)
-        with self.assertRaisesRegex(ValueError, 'CLI'):
-            self.bridge.settings(self.thread_id, 'test-model', 'high')
-        with self.assertRaisesRegex(ValueError, 'CLI'):
-            self.bridge.send(self.thread_id, 'planned', str(uuid.uuid4()), work_mode='plan')
-        with self.assertRaisesRegex(ValueError, 'CLI'):
-            self.bridge.send(self.thread_id, 'skill', str(uuid.uuid4()), skills=['fixture-skill'])
-        self.cli.call.assert_not_called()
+        self.cli.supports_goal.return_value = False
+        view = self.bridge.view(self.thread_id, attach=False)
+        self.assertFalse(view['access']['canUseGoal'])
+        self.assertFalse(view['goalRuntimeAvailable'])
+        self.bridge.goal.get_goal = Mock(side_effect=AssertionError('sidecar goal read'))
+        with self.assertRaisesRegex(ValueError, '目标模式'):
+            self.bridge.send(self.thread_id, 'objective', str(uuid.uuid4()), work_mode='goal')
+        self.cli.set_goal.assert_not_called()
+
+    def test_native_goal_create_pause_resume_cancel_is_durable_and_uses_one_daemon(self):
+        self.bridge.activate(self.thread_id)
+        self.cli.supports_goal.return_value = True
+        goal = {'value': None}
+        self.cli.get_goal.side_effect = lambda thread_id: goal['value']
+        def set_goal(thread_id, objective):
+            goal['value'] = {'objective': objective, 'status': 'active'}
+            return goal['value']
+        def set_status(thread_id, status):
+            goal['value'] = {**goal['value'], 'status': status}
+            return goal['value']
+        def clear_goal(thread_id):
+            goal['value'] = None
+            return {'cleared': True}
+        self.cli.set_goal.side_effect = set_goal
+        self.cli.set_goal_status.side_effect = set_status
+        self.cli.clear_goal.side_effect = clear_goal
+        self.bridge.goal.get_goal = Mock(side_effect=AssertionError('sidecar read'))
+        self.bridge.goal.set_goal = Mock(side_effect=AssertionError('sidecar write'))
+        created = str(uuid.uuid4())
+        result = self.bridge.send(self.thread_id, 'Finish fixture', created, work_mode='goal')
+        self.assertEqual(result['status'], 'accepted')
+        self.assertEqual(result['activation']['status'], 'accepted')
+        self.assertEqual(self.bridge.goal_commands[self.thread_id + ':' + created]['state'], 'confirmed')
+        self.bridge.send(self.thread_id, 'Finish fixture', created, work_mode='goal')
+        self.cli.set_goal.assert_called_once_with(self.thread_id, 'Finish fixture')
+        paused = self.bridge.set_goal_status(self.thread_id, 'paused', str(uuid.uuid4()))
+        self.assertTrue(paused['confirmed'])
+        resumed = self.bridge.set_goal_status(self.thread_id, 'active', str(uuid.uuid4()))
+        self.assertTrue(resumed['confirmed'])
+        self.assertEqual(resumed['activation']['status'], 'accepted')
+        cancelled = self.bridge.cancel_goal(self.thread_id, str(uuid.uuid4()))
+        self.assertTrue(cancelled['confirmed'])
+        self.cli.clear_goal.assert_called_once_with(self.thread_id)
+        self.assertIsNone(self.bridge.view(self.thread_id, attach=False)['goal'])
+
+    def test_desktop_goal_metadata_control_does_not_activate_owner(self):
+        session = self.bridge.session(self.thread_id, attach=False)
+        with session.condition:
+            session.origin = 'desktop'
+        self.bridge._native_goal_state = Mock(return_value={'objective': 'Fixture', 'status': 'paused'})
+        self.bridge._goal_command = Mock(return_value={'status': 'cancelled', 'confirmed': True})
+        with patch.object(self.bridge, '_target', side_effect=AssertionError('goal metadata activated owner')):
+            result = self.bridge.cancel_goal(self.thread_id, str(uuid.uuid4()))
+        self.assertTrue(result['confirmed'])
+        self.cli.attach.assert_not_called()
+
+    def test_uncertain_native_goal_write_is_never_replayed(self):
+        self.bridge.activate(self.thread_id)
+        self.cli.supports_goal.return_value = True
+        self.cli.get_goal.return_value = None
+        self.cli.set_goal.side_effect = GoalUnavailable('native result unknown')
+        request_id = str(uuid.uuid4())
+        with self.assertRaises(IPCError):
+            self.bridge.send(self.thread_id, 'Fixture objective', request_id, work_mode='goal')
+        self.assertEqual(self.bridge.goal_commands[self.thread_id + ':' + request_id]['state'], 'unknown')
+        result = self.bridge.send(self.thread_id, 'Fixture objective', request_id, work_mode='goal')
+        self.assertEqual(result['status'], 'unknown')
+        self.cli.set_goal.assert_called_once_with(self.thread_id, 'Fixture objective')
 
     def test_unknown_native_send_is_not_replayed_after_disconnect(self):
         self.bridge.activate(self.thread_id)

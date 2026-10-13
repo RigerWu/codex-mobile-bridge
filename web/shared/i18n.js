@@ -1475,6 +1475,7 @@ const en={
   "目标取消失败，请重试": "Could not cancel the goal. Try again.",
   "目标模式暂不支持 SSH 主机": "Goal mode is not yet available for SSH hosts",
   "未找到桌面 App 的 Codex 运行时": "The desktop Codex runtime was not found",
+  "当前 Codex 会话暂不支持目标模式": "Goal mode is unavailable for this Codex chat",
   "目标模式暂不支持附件": "Goal mode does not support attachments yet",
   "目标模式只接受纯文本目标": "Goal mode accepts a plain-text objective only",
   "桌面 Codex 版本不支持原生目标模式": "The desktop Codex version does not support native goals",

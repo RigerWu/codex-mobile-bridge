@@ -32,7 +32,6 @@ AUTH_ITEMS = ('Local State', 'Preferences', 'Cookies', 'Cookies-journal', 'Cooki
               'Local Storage', 'IndexedDB', 'Session Storage', 'Service Worker', 'ant-did')
 CONFIG = 'claude_desktop_config.json'
 TOKEN_KEY = 'oauth:tokenCache'
-TTL = 300
 AMBIGUOUS_PROFILE = '检测到多个 Claude 登录目录，无法安全切换账号；请在设置中指定客户端数据目录'
 
 
@@ -130,18 +129,25 @@ def _web_json(path, cookies, organization):
         raise ValueError('Claude 暂时无法查询剩余额度，请稍后重试') from None
 
 
-def _decrypt_cookie(host, encrypted, home):
+def _decrypt_cookie(host, encrypted, home, keys=None):
     # The original OS protects native cookies. Decrypted values remain only in
     # this process, never in snapshots, command arguments, public data or logs.
     from cryptography.hazmat.primitives import padding
     from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
     if sys.platform == 'darwin':
-        from keyring.backends.macOS import Keyring
-        vault = Keyring()
-        password = vault.get_password('Claude Safe Storage', 'Claude') or vault.get_password('Claude Safe Storage', 'Claude Key')
-        if not password or not encrypted.startswith(b'v10'):
+        if not encrypted.startswith(b'v10'):
             raise ValueError('无法读取 Claude 登录凭据，请解锁系统钥匙串后重试')
-        key = hashlib.pbkdf2_hmac('sha1', password.encode(), b'saltysalt', 1003, dklen=16)
+        if keys is None or 'claude' not in keys:
+            from keyring.backends.macOS import Keyring
+            vault = Keyring()
+            password = vault.get_password('Claude Safe Storage', 'Claude') or vault.get_password('Claude Safe Storage', 'Claude Key')
+            if not password:
+                raise ValueError('无法读取 Claude 登录凭据，请解锁系统钥匙串后重试')
+            key = hashlib.pbkdf2_hmac('sha1', password.encode(), b'saltysalt', 1003, dklen=16)
+            if keys is not None:
+                keys['claude'] = key
+        else:
+            key = keys['claude']
         decryptor = Cipher(algorithms.AES(key), modes.CBC(b' '*16)).decryptor()
         padded = decryptor.update(encrypted[3:])+decryptor.finalize()
         unpadder = padding.PKCS7(128).unpadder()
@@ -647,6 +653,10 @@ class ClaudeAccounts:
 
     def details(self, identifier, refresh=False):
         with self.lock:
+            if not refresh:
+                if identifier != 'current':
+                    self._account(identifier)
+                return self.public()
             ephemeral = identifier == 'current'
             if ephemeral:
                 active = self.public()['activeId']
@@ -667,25 +677,21 @@ class ClaudeAccounts:
                     row['usage'] = cache['usage']
             else:
                 row, snapshot = self._account(identifier)
-            usage = row.get('usage') or {}
-            try:
-                checked = _timestamp(usage.get('checkedAt', ''))
-            except (TypeError, ValueError, AttributeError, OSError, OverflowError):
-                checked = 0
-            if not refresh and 0 <= time.time()-checked < TTL:
-                return self.public()
-            usage = {'status': 'unsupported' if row['kind'] == 'api' else 'error',
-                     'checkedAt': time.time(), 'limits': []}
+            previous = row.get('usage') or {}
+            usage = {'status': 'unsupported' if row['kind'] == 'api' else 'error', 'limits': []}
+            if row['kind'] != 'api' and previous.get('limits') and previous.get('checkedAt'):
+                usage.update(checkedAt=previous['checkedAt'], limits=previous['limits'])
             if row['kind'] != 'api':
                 try:
                     cookies = {}
+                    keys = {}
                     # The active native cookie can rotate; use its current login
                     # only when the fingerprint still matches this saved account.
                     source = self.home if self.public()['activeId'] == identifier else snapshot
                     for host, name, value, encrypted, expiry in _cookies(source):
                         if expiry and expiry/1000000-11644473600 <= time.time():
                             continue
-                        value = value or _decrypt_cookie(host, encrypted, source)
+                        value = value or _decrypt_cookie(host, encrypted, source, keys)
                         if not value or any(ord(c) < 33 or ord(c) > 126 or c in ';\r\n' for c in value):
                             raise ValueError('Claude 登录凭据不可用，请在客户端重新登录后保存')
                         cookies[name] = value
@@ -699,6 +705,7 @@ class ClaudeAccounts:
                     if not usage['limits']:
                         raise ValueError('Claude 未返回可识别的剩余额度')
                     usage['status'] = 'ready'
+                    usage['checkedAt'] = time.time()
                 except Exception:
                     # Network/server bodies and OS errors may contain credentials.
                     usage['error'] = '无法查询 Claude 剩余额度，请确认客户端登录有效并解锁系统凭据存储后重试'

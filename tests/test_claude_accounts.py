@@ -294,14 +294,14 @@ class ClaudeAccountSnapshots(unittest.TestCase):
             self.save()
         self.assertEqual(self.accounts.public()['accounts'], [])
 
-    def test_usage_queries_once_then_caches_and_manual_refresh_restarts_timer(self):
+    def test_passive_details_reads_snapshot_and_only_explicit_refresh_queries(self):
         identifier = self.save()
         data = {'five_hour': {'utilization': 25, 'resets_at': '2026-10-09T12:00:00Z'}, 'seven_day': {'utilization': 50}}
-        with patch(MODULE+'_web_json', return_value=data) as fetch:
-            first = self.accounts.details(identifier)
-            again = self.accounts.details(identifier)
-            self.assertEqual(fetch.call_count, 1)
-            self.assertEqual(first, again)
+        with patch(MODULE+'_web_json', return_value=data) as fetch, patch(MODULE+'_decrypt_cookie') as decrypt:
+            self.assertNotIn('usage', self.accounts.details(identifier)['current'])
+            fetch.assert_not_called()
+            decrypt.assert_not_called()
+            first = self.accounts.details(identifier, refresh=True)
             usage = first['current']['usage']
             self.assertEqual(usage['status'], 'ready')
             self.assertIsInstance(usage['checkedAt'], (int, float))
@@ -310,25 +310,36 @@ class ClaudeAccountSnapshots(unittest.TestCase):
             self.assertEqual(usage['limits'][0]['windows'][0]['remainingPercent'], 75)
             self.assertEqual(fetch.call_args.args[0], '/api/organizations/ORG-first/usage')
             self.assertNotIn('NEVER-SEND', json.dumps(fetch.call_args.args))
+            self.assertEqual(self.accounts.details(identifier), first)
             self.accounts.details(identifier, refresh=True)
-            self.accounts.details(identifier)
             self.assertEqual(fetch.call_count, 2)
 
-    def test_expired_usage_cache_fetches_again_and_errors_are_cached_and_redacted(self):
+    @unittest.skipUnless(importlib.util.find_spec('keyring'), 'bundled desktop keyring dependency required')
+    def test_passive_current_with_encrypted_cookie_never_opens_keyring(self):
+        with closing(sqlite3.connect(self.home/'Cookies')) as db, db:
+            db.execute("UPDATE cookies SET value='', encrypted_value=? WHERE name='sessionKey'", (b'v10synthetic',))
+        with patch(MODULE+'sys.platform', 'darwin'), patch('keyring.backends.macOS.Keyring') as vault, \
+                patch(MODULE+'_web_json') as fetch:
+            result = self.accounts.details('current')
+        self.assertEqual(result['activeId'], 'current')
+        vault.assert_not_called()
+        fetch.assert_not_called()
+
+    def test_failed_explicit_query_preserves_last_success_and_does_not_retry_passively(self):
         identifier = self.save()
+        with patch(MODULE+'_web_json', return_value={'five_hour': {'utilization': 25}}):
+            original = self.accounts.details(identifier, refresh=True)['current']['usage']
         with patch(MODULE+'_web_json', side_effect=RuntimeError('PRIVATE-SERVER-BODY COOKIE-first')) as fetch:
-            result = self.accounts.details(identifier)
+            result = self.accounts.details(identifier, refresh=True)
             self.accounts.details(identifier)
             self.assertEqual(fetch.call_count, 1)
             usage = result['current']['usage']
             self.assertEqual(usage['status'], 'error')
-            self.assertTrue(usage['checkedAt'])
+            self.assertEqual(usage['checkedAt'], original['checkedAt'])
+            self.assertEqual(usage['limits'], original['limits'])
             self.assertNotIn('PRIVATE', json.dumps(result))
-            index = json.loads((self.root/'accounts'/'index.json').read_text(encoding='utf-8'))
-            index['accounts'][0]['usage']['checkedAt'] = '2000-01-01T00:00:00+00:00'
-            self.write(self.root/'accounts'/'index.json', index)
-            self.accounts.details(identifier)
-            self.assertEqual(fetch.call_count, 2)
+            self.assertEqual(ClaudeAccounts(self.root/'accounts', self.home).public()['current']['usage']['checkedAt'], original['checkedAt'])
+            self.assertEqual(fetch.call_count, 1)
 
     def test_api_has_no_subscription_quota_request(self):
         self.gateway()
@@ -341,7 +352,7 @@ class ClaudeAccountSnapshots(unittest.TestCase):
     def test_current_alias_resolves_saved_account_and_detected_threep_profile(self):
         identifier = self.save()
         with patch(MODULE+'_web_json', return_value={'five_hour': {'utilization': 30}}):
-            result = self.accounts.details('current')
+            result = self.accounts.details('current', refresh=True)
         self.assertEqual(result['current']['id'], identifier)
         self.assertEqual(result['current']['usage']['status'], 'ready')
         self.gateway()
@@ -465,14 +476,15 @@ class ClaudeAccountSnapshots(unittest.TestCase):
     def test_unknown_usage_payload_never_implies_full_remaining_quota(self):
         identifier = self.save()
         with patch(MODULE+'_web_json', return_value={'unrecognized': 'private'}):
-            result = self.accounts.details(identifier)
+            result = self.accounts.details(identifier, refresh=True)
         self.assertEqual(result['current']['usage']['status'], 'error')
         self.assertEqual(result['current']['usage']['limits'], [])
+        self.assertNotIn('checkedAt', result['current']['usage'])
 
     def test_unsaved_current_can_query_quota_without_enrollment_or_a_profile_snapshot(self):
         self.assertEqual(self.accounts.public()['activeId'], 'current')
         with patch(MODULE+'_web_json', return_value={'five_hour': {'utilization': 10}}) as fetch:
-            result = self.accounts.details('current')
+            result = self.accounts.details('current', refresh=True)
             self.accounts.details('current')
         self.assertEqual(fetch.call_count, 1)
         self.assertEqual(result['current']['usage']['status'], 'ready')
@@ -485,16 +497,16 @@ class ClaudeAccountSnapshots(unittest.TestCase):
 
     def test_unsaved_current_cache_is_bound_to_native_identity_across_manager_recreation(self):
         with patch(MODULE+'_web_json', return_value={'five_hour': {'utilization': 10}}) as fetch:
-            self.accounts.details('current')
+            self.accounts.details('current', refresh=True)
             recreated = ClaudeAccounts(self.root/'accounts', self.home)
             recreated.details('current')
             self.assertEqual(fetch.call_count, 1)
             self.login('second')
             self.assertNotIn('usage', recreated.public()['current'])
-            recreated.details('current')
+            recreated.details('current', refresh=True)
             self.assertEqual(fetch.call_count, 2)
         (self.home/'Cookies').unlink()
-        result = self.accounts.details('current')
+        result = self.accounts.details('current', refresh=True)
         self.assertIsNone(result['current'])
         self.assertTrue(result['notice'])
 
@@ -524,7 +536,7 @@ class ClaudeAccountSnapshots(unittest.TestCase):
             self.login('second')
             return {'five_hour': {'utilization': 10}}
         with patch(MODULE+'_web_json', side_effect=query):
-            result = self.accounts.details('current')
+            result = self.accounts.details('current', refresh=True)
         self.assertNotIn('usage', result['current'])
 
     def test_current_usage_limits_schema_preserves_scopes_and_skips_missing_values(self):
@@ -535,7 +547,7 @@ class ClaudeAccountSnapshots(unittest.TestCase):
             {'group': 'weekly'}, {'group': 'weekly', 'percent': float('nan')},
         ]}
         with patch(MODULE+'_web_json', return_value=data):
-            result = self.accounts.details('current')
+            result = self.accounts.details('current', refresh=True)
         limits = result['current']['usage']['limits']
         self.assertEqual(len(limits), 3)
         self.assertEqual(limits[0]['windows'][0]['remainingPercent'], 57.6)
@@ -547,7 +559,7 @@ class ClaudeAccountSnapshots(unittest.TestCase):
         with closing(sqlite3.connect(self.home/'Cookies')) as db, db:
             db.execute('UPDATE cookies SET expires_utc=1')
         with patch(MODULE+'_web_json') as fetch:
-            result = self.accounts.details(identifier)
+            result = self.accounts.details(identifier, refresh=True)
         fetch.assert_not_called()
         self.assertEqual(result['current']['usage']['status'], 'error')
 
@@ -589,7 +601,10 @@ class ClaudeAccountSnapshots(unittest.TestCase):
         encrypted = b'v10'+encryptor.update(padded)+encryptor.finalize()
         with patch(MODULE+'sys.platform', 'darwin'), patch('keyring.backends.macOS.Keyring') as vault:
             vault.return_value.get_password.side_effect = [None, password]
-            self.assertEqual(_decrypt_cookie(host, encrypted, self.home), 'fixture-session')
+            keys = {}
+            self.assertEqual(_decrypt_cookie(host, encrypted, self.home, keys), 'fixture-session')
+            self.assertEqual(_decrypt_cookie(host, encrypted, self.home, keys), 'fixture-session')
+            self.assertEqual(vault.return_value.get_password.call_count, 2, 'one lookup per keychain item in one query')
             self.assertEqual(vault.return_value.get_password.call_args_list[0].args, ('Claude Safe Storage', 'Claude'))
             self.assertEqual(vault.return_value.get_password.call_args_list[1].args, ('Claude Safe Storage', 'Claude Key'))
 

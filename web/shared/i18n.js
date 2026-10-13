@@ -2099,6 +2099,8 @@ const en={
   "ChatGPT 账号": "ChatGPT account",
   "此电脑 · 账号共享额度": "This computer · Shared account limits",
   "暂未提供额度信息": "Usage limits are not available yet",
+  "尚未查询": "Not queried yet",
+  "查询时间：": "Queried at: ",
   "额度窗口": "Usage window",
   "暂未提供": "Not available",
   " 天": " days",

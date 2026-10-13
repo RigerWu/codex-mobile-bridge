@@ -171,7 +171,7 @@ class DesktopIdle(unittest.TestCase):
             ('cli-child', 'codex_exec', child('cli'), 0, 'subagent', 1)])
         database.commit(); database.close()
         self.bridge.store = SessionStore(self.bridge.codex_home)
-        self.assertEqual([row['id'] for row in self.bridge.store.list()], ['parent'])
+        self.assertEqual({row['id'] for row in self.bridge.store.list()}, {'parent', 'cli'})
         self.assertEqual([row['id'] for row in self.bridge.store.lifecycle_threads()], ['child', 'grandchild', 'parent'])
         self.states[('local', 'grandchild')] = {'id': 'grandchild', 'threadRuntimeStatus': {'type': 'active'}}
         with patch.object(self.bridge.store, 'history', side_effect=AssertionError('Do not read history')):

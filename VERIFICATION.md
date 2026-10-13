@@ -23,7 +23,8 @@
 - Linux：x64/ARM64 的 Debian 包安装、架构/版本、打包运行时、HTTPS、通知、登录、配对及 AppImage 解包启动检查通过。Linux 仍为实验性支持，Claude 自动初始化仍不支持。
 - Android：2.0.3 / versionCode 30 的 APK 已构建，v2/v3 签名校验通过，签名证书与 v2.0.2 发布 APK 一致；保留覆盖安装所需的应用标识与签名。
 - [iOS 原生 CI](https://github.com/try2love/codex-mobile-bridge/actions/runs/38368994811) 通过。下载后核对 IPA 主 App、两个扩展均为 2.0.3 / build 30，标识和资源正确，未包含签名或描述文件；Xcode 源码 ZIP 与候选提交一致。安装仍需用户自行签名。
-- 正式分发由 v2.0.3 标签工作流生成 Release 草稿；公开发布前，统一核对全部 15 个文件、桌面更新清单签名、SHA-256 和下载后完整性。
+- [v2.0.3 标签构建](https://github.com/try2love/codex-mobile-bridge/actions/runs/38371899527) 的五个桌面原生目标与 iOS 全部通过，生成正式分发文件。
+- [发布文件完整性 CI](https://github.com/try2love/codex-mobile-bridge/actions/runs/38375594938) 两次下载完整 Release 草稿，核对全部 15 个文件及 14 项内容文件的 SHA-256；更新校验清单后再次下载验证通过。Android 文件与已核验签名的本地 APK 一致；Windows x64、macOS arm64/x64 的更新清单签名、安装包大小和哈希通过 v2.0.2 升级校验。本机仅取回小型报告，复核文件 ID、大小、摘要及已批准的发布说明与草稿一致。
 
 历史验证记录保留如下，不作为 v2.0.3 的新增验收结果。
 

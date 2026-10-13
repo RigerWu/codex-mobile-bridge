@@ -68,8 +68,7 @@ class SessionStore:
             fields = [name for name in ("id", "name", "title", "cwd", "updated_at", "updated_at_ms", "recency_at", "recency_at_ms", "model_provider", "model", "originator", "source", "archived", "is_pinned") if name in columns]
             where = ["archived = ?"]
             params = [int(archived)]
-            if "originator" in columns:
-                where.append(self._user_origin_filter(columns))
+            where.append(self._user_origin_filter(columns))
             if "thread_source" in columns:
                 where.append("COALESCE(thread_source, '') != 'subagent'")
             if "source" in columns:
@@ -84,12 +83,12 @@ class SessionStore:
 
     @staticmethod
     def _user_origin_filter(columns):
-        if 'source' not in columns:
-            return "originator IN ('Codex Desktop', 'codex_work_desktop', 'codex_mobile_bridge')"
-        return ("(originator IN ('Codex Desktop', 'codex_work_desktop', 'codex_mobile_bridge') "
-                "OR (originator IS NULL AND source = 'vscode') "
-                "OR (originator = 'codex-tui' AND source = 'vscode') "
-                "OR (originator = 'codex_cli_rs' AND source = 'cli'))")
+        if 'originator' in columns:
+            recognized = "originator IN ('Codex Desktop', 'codex_work_desktop', 'codex_mobile_bridge', 'codex-tui', 'codex_cli_rs')"
+            if 'source' in columns:
+                return '(' + recognized + " OR (originator IS NULL AND source IN ('vscode', 'cli')))"
+            return recognized
+        return "source IN ('vscode', 'cli')" if 'source' in columns else '0'
 
     @classmethod
     def _origin(cls, row):
@@ -97,7 +96,7 @@ class SessionStore:
             return 'subagent'
         if row.get('originator') in cls.DESKTOP_ORIGINATORS or (row.get('originator') is None and row.get('source') == 'vscode'):
             return 'desktop'
-        if (row.get('originator'), row.get('source')) in (('codex-tui', 'vscode'), ('codex_cli_rs', 'cli')):
+        if row.get('originator') in ('codex-tui', 'codex_cli_rs') or (row.get('originator') is None and row.get('source') == 'cli'):
             return 'cli'
         return 'other'
 
@@ -108,7 +107,7 @@ class SessionStore:
             clocks = [name + ('' if name.endswith('_ms') else ' * 1000')
                       for name in ('updated_at', 'updated_at_ms', 'recency_at', 'recency_at_ms') if name in columns]
             clock = 'MAX(' + ','.join('COALESCE(' + c + ',0)' for c in clocks) + ',0)'
-            owner = self._user_origin_filter(columns) if 'originator' in columns else '1'
+            owner = self._user_origin_filter(columns)
             filters = [owner, clock + ' >= ?']
             if 'thread_source' in columns:
                 filters.append("COALESCE(thread_source, '') != 'subagent'")
@@ -182,7 +181,8 @@ class SessionStore:
                              'threadSource': 'thread_source' in columns, 'rolloutPath': 'rollout_path' in columns}}
         if thread_id is not None:
             if target is None:
-                result['target'] = {'found': False, 'origin': None, 'reason': 'missing', 'read': 'unavailable'}
+                result['target'] = {'found': False, 'origin': None, 'archived': None,
+                                    'reason': 'missing', 'read': 'unavailable'}
             else:
                 origin = self._origin(target)
                 reason = 'subagent' if origin == 'subagent' else 'unsupported_origin' if origin == 'other' else 'readable'
@@ -202,7 +202,7 @@ class SessionStore:
                                     stream.read(1)
                             except OSError:
                                 reason = 'rollout_unreadable'
-                result['target'] = {'found': True, 'origin': origin, 'reason': reason,
+                result['target'] = {'found': True, 'origin': origin, 'archived': bool(target.get('archived')), 'reason': reason,
                                     'read': 'ready' if reason == 'readable' else 'unavailable'}
         return result
 

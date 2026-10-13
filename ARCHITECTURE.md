@@ -10,7 +10,7 @@
 
 ## 原生 Goal 控制
 
-本地 Goal 元数据通过受限的官方运行时连接读写，只允许 `initialize` 和 `thread/goal/get/set/clear`；该连接不加载或恢复聊天，不调用 `turn/start`，也不修改 provider、认证或审批设置。原桌面 owner 继续拥有实际执行和审批。当前 follower IPC 没有 Goal 写接口，SSH Goal 因此禁用；不能把此通路当作任意 App Server RPC 代理。
+App 执行的本地聊天，其 Goal 元数据通过受限的官方运行时连接读写，只允许 `initialize` 和 `thread/goal/get/set/clear`；该连接不加载或恢复聊天，不调用 `turn/start`，也不修改 provider、认证或审批设置。原桌面 owner 继续拥有实际执行和审批。已连接原生 CLI 的本地聊天则通过其同一 daemon 读写 Goal，能力经原生接口探测；两条路径共用操作 ID 与结果确认规则。当前 follower IPC 没有 Goal 写接口，SSH Goal 仍禁用；不能把此通路当作任意 App Server RPC 代理。
 
 创建和每一次恢复有独立的持久化操作 ID；该操作的重试沿用 ID 和启动消息，后续恢复不能复用历史启动 ID。写入断连、超时和重启遗留的 sent/pending 均作为结果未知处理，只依据可确认的原生状态核验，不自动重放写入。手机提交所见目标的身份和状态，拒绝对已经变化的目标执行新操作；原生接口尚无原子条件更新，桌面与手机同时修改仍应避免。
 
@@ -27,6 +27,8 @@ HTTP 阅读请求先返回，保存历史和实时连接在后台加载，通过
 网页点击或打开会话时，并行读取渐进历史并通过带 CSRF 的重连接口自动连接原生 owner。首屏不等待激活完成，切换会话取消旧页面请求，首次历史读取失败会自动重试。后台阅读、轮询和通知监听本身只订阅状态。打开会话、发送、处理授权或点击“重新连接”时，优先等待后台订阅；仍无 owner 才通过已有 `codex://threads/…` 链接让原 App 加载聊天，最多等待约 20 秒。该兜底可能切换桌面当前聊天，不调用第二个 app-server，不改 provider。连接失败时操作尚未发送，草稿保留。原 App 因 provider 缺失等配置问题无法恢复的聊天，网关也不会擅自迁移。
 
 CLI 来源表示创建方式，不固定当前执行进程。对 CLI 聊天，被动查询已有 Desktop owner 并定向订阅，核对 host/id/cwd/provider 后复用其执行连接；未发现 owner 时，仅显式继续才连接原生 daemon 或冷恢复。已发现 owner 但快照未到达或身份不符时不另行恢复。原生 writer 锁仍由官方运行时维护，网关不清锁、不终止持有者。详情见 [CLI 接入说明](docs/codex-cli.md)。
+
+模型、Skill 与工作模式使用独立能力字段，不借用会同时开放权限设置和重命名的 `canConfigure`。App 接续的 CLI 聊天使用既有 owner 通路；已连接原生 CLI 的目录、设置、Skill、计划请求和本机 Goal 使用同一 daemon。读取目录不激活会话，显式设置只更新所选模型/推理强度等字段，不替换 provider、认证或 cwd。
 
 项目与 SSH 主机映射来自 App 的 `.codex-global-state.json`。远端只读取 App 已保存且有关联项目/会话的 SSH 别名；只读辅助脚本使用 `ssh` 和远端 Python，不向远端安装文件。
 

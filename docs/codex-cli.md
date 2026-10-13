@@ -6,13 +6,15 @@
 
 1. 在手机或 Web 中打开带 `CLI` 标记的聊天，先阅读已保存历史。
 2. 如果这条聊天已由 Codex App 接续，网关会核验并复用该执行连接。否则点击“继续会话”，连接原 CLI daemon；原终端可以已经关闭，必要时显式启动该 `CODEX_HOME` 中已安装的原生托管 daemon，再恢复同一条会话。
-3. 连接成功后可发送、排队、补充任务、停止，以及处理支持的审批和问题卡片。任务继续使用原会话的提供商、认证与工作目录。
+3. 连接成功后可发送、排队、补充任务、停止，以及处理支持的审批和问题卡片；也可选择模型与推理强度、添加 Skill、切换普通/计划模式。本机兼容的运行时支持 Goal 的创建、暂停、修改、恢复与关闭。任务继续使用原会话的提供商、认证与工作目录。
 
 只有点击“继续会话”才会启动托管 daemon 或恢复会话；打开聊天、读取历史和列表刷新都不会触发。网关不会安装 CLI、接受新的 SSH 主机密钥、强行夺取其他进程的写入权，或覆盖原会话身份。原生 daemon 未安装、版本不兼容或身份核验失败时，历史仍可阅读，并显示连接失败原因。
 
 macOS 的 Codex CLI **0.162.1** 已分别验证 daemon 正在运行时接入，以及原终端关闭后的冷恢复；两种情况下发送与流式回复均通过。SSH 使用已有主机配置和密钥校验，不自动接受新主机密钥或安装远端程序。Windows、Linux 与不同远端配置的原生交互仍需各自验收，不能根据 macOS 结果认定全部兼容。
 
-CLI 中的模型/权限设置、Skill 选择、计划/目标切换、消息编辑/分支、重命名和临时侧边聊天暂不开放；需要时回原 CLI 操作。网关关闭或手机页面退出只断开网关连接，不停止 CLI 任务。连接中断或写入结果不确定时不自动重发；先查看原会话历史与运行状态，再决定后续操作。
+由 Codex App 接续的 CLI 聊天复用现有 App 的模型、Skill 和模式操作；由原生 CLI 执行的聊天从同一个 daemon 读取目录并提交设置、Skill 和计划请求。自定义提供商可手动填写模型 ID，不切换到其他提供商的模型目录。Goal 仅在本机且原生接口可用时开放，SSH Goal 暂不支持。连接成功后目录自动加载，短暂断线保留已选 Skill 与输入草稿。
+
+CLI 中的权限设置、消息编辑/分支、重命名和临时侧边聊天暂不开放。网关关闭或手机页面退出只断开网关连接，不停止 CLI 任务。连接中断或写入结果不确定时不自动重发；先查看原会话历史与运行状态，再决定后续操作。
 
 ## 会话缺失时
 
@@ -26,6 +28,8 @@ CLI 中的模型/权限设置、Skill 选择、计划/目标切换、消息编�
 
 ## English
 
-CLI chats appear with a **CLI** badge. Opening one reads saved history and passively checks for an existing Codex App owner. If App already owns the chat, Bridge verifies and follows that owner. Otherwise, select **Continue chat** to connect to the native CLI daemon or explicitly start its already installed, managed daemon and resume the same chat, even if the terminal has closed. It does not install CLI, bypass SSH host-key checks, change the chat's identity, or seize another runtime's writer lock. Supported actions include send, queue, steer, interrupt, approvals and input requests. Configuration, modes, goals, Skills, editing/forking, rename and side chats remain in the original CLI.
+CLI chats appear with a **CLI** badge. Opening one reads saved history and passively checks for an existing Codex App owner. If App already owns the chat, Bridge verifies and follows that owner. Otherwise, select **Continue chat** to connect to the native CLI daemon or explicitly start its already installed, managed daemon and resume the same chat, even if the terminal has closed. It does not install CLI, bypass SSH host-key checks, change the chat's identity, or seize another runtime's writer lock. Supported actions include send, queue, steer, interrupt, approvals and input requests, plus model/effort selection, Skills and default/plan modes. Compatible local runtimes also support creating, pausing, editing, resuming and clearing Goals; SSH Goals remain unavailable.
+
+Native CLI controls use the same daemon for catalogs, settings, Skills, modes and Goals. Custom providers accept manually entered model IDs without switching providers. Catalogs load after connection; transient disconnects retain draft text and selected Skills. Permission settings, editing/forking, rename and side chats remain unavailable for CLI-origin chats.
 
 Warm join and cold resume, including send and streaming replies, passed on macOS with CLI 0.162.1; this does not establish Windows, Linux or every SSH environment as verified. Open **Connection diagnostics** in Settings to read local and remote status and counts, copy the summary, or export a file. Older native apps can read and copy but need an update to export. Diagnostics require login and omit chat text, titles, paths, aliases and credentials. Dismissing an SSH error suppresses the same fault across automatic refreshes until recovery or a changed fault; reloading the page resets that dismissal. Unknown writes are not automatically replayed. The upstream resume API has no atomic identity guard across preflight and resume.

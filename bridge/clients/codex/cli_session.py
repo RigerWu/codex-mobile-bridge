@@ -429,7 +429,13 @@ class CliSessions:
                 row.update(status=turn.get('status'), error=turn.get('error'))
                 state['threadRuntimeStatus'] = {'type': 'active' if method == 'turn/started' else 'idle'}
                 if turn.get('items'):
-                    row['items'] = turn['items']
+                    items = turn['items']
+                    if method == 'turn/completed':
+                        incoming_ids = {item.get('id') for item in items}
+                        # Completed event items can omit user messages still present in thread/read.
+                        items = [item for item in row['items'] if item.get('type') == 'userMessage'
+                                 and item.get('id') not in incoming_ids] + items
+                    row['items'] = items
                 if method == 'turn/completed':
                     pending = self.requests.get(thread_id, {})
                     for request_id in list(pending):

@@ -11,6 +11,7 @@ const $ = id => document.getElementById(id),t=BridgeI18n.t;
 let csrf='', currentId=null, state=null, listOffset=0, listQuery='', approvalStamp='', sending=false;
 let currentHost='local', listRows=[], listGeneration=0, listHasMore=false, listArchived=false, listRenderStamp='';
 let chatTimeline=null,reconnectFailure=null;
+const dismissedHostFaults=new Map();
 const submittedRequestIds=new Set();
 const sessionActivity=new SessionActivity();
 const recentInteractions=new Map();
@@ -41,6 +42,21 @@ let listLoading=0;
 let modelCatalogGeneration=0;let catalogData={models:null,skills:null};let catalogResults={models:null,skills:null};let catalogTasks={models:null,skills:null};let selectedSkills=new Set(),invalidSkills=new Set(),skillIndex=new Map(),skillTotal=0,skillPages=[],skillQuery={q:'',offset:0,limit:200},skillSearchTimer,skillRequest=0;
 function el(tag,cls,text){const node=document.createElement(tag);if(cls)node.className=cls;if(text!==undefined)node.textContent=text;return node;}
 function toast(text){text=t(text);$('toast').textContent=text;$('toast').hidden=false;clearTimeout(toast.timer);toast.timer=setTimeout(()=>$('toast').hidden=true,4200);}
+function renderHostErrors(hosts){
+  const root=$('host-errors'),gateway=(window.BridgeRelayBase||location.origin||'')+'|';
+  const active=new Set(hosts.map(host=>gateway+(host.host||host.label)));
+  for(const key of dismissedHostFaults.keys())if(key.startsWith(gateway)&&!active.has(key))dismissedHostFaults.delete(key);
+  root.replaceChildren();
+  for(const host of hosts){
+    const key=gateway+(host.host||host.label),fault=String(host.error||'');
+    if(dismissedHostFaults.get(key)===fault)continue;
+    const row=el('div','host-error-row');row.append(el('span','',host.label+'：'+fault));
+    const close=el('button','plain','×');close.type='button';close.setAttribute('aria-label',t('关闭连接错误'));
+    close.onclick=()=>{dismissedHostFaults.set(key,fault);row.remove();root.hidden=!root.childElementCount;};
+    row.append(close);root.append(row);
+  }
+  root.hidden=!root.childElementCount;
+}
 function authLost(){if(!$('app').hidden)document.dispatchEvent(new Event('bridge-auth-lost'));showLogin();}
 async function api(path,body,signal){const options={signal,credentials:'same-origin',cache:'no-store',headers:{}};if(body!==undefined){options.method='POST';options.headers={'Content-Type':'application/json','X-CSRF-Token':csrf};options.body=JSON.stringify(body);}const response=await fetch(hostUrl(path),options);const data=await response.json();if(!response.ok){if(response.status===401)authLost();throw Object.assign(Error(data.error||t('请求失败')),{loginStatus:data.loginStatus,status:response.status});}return data;}
 const workbench=window.BridgeWorkbench=new Workbench({chat:$('chat'),request:api,csrf:()=>csrf,notify:toast,onUnauthorized:authLost,openChat});
@@ -164,8 +180,7 @@ async function loadList(reset=false){
   for(const row of result.sessions){const key=chatKey(row.id,row.host);row.recency=Math.max(row.recency,recentInteractions.get(key)||0);rows.set(key,row);}
   listRows=[...rows.values()];listRows.sort((a,b)=>b.recency-a.recency);
   listOffset=offset+result.sessions.length;listHasMore=result.sessions.length===100;
-  $('host-errors').textContent=(result.unavailableHosts||[]).map(h=>h.label+'：'+h.error).join('\n');
-  $('host-errors').hidden=!(result.unavailableHosts||[]).length;renderList();refreshActivity();clientNavigation.acknowledgeList('codex',result);listSync.acknowledgeSuccess();
+  renderHostErrors(result.unavailableHosts||[]);renderList();refreshActivity();clientNavigation.acknowledgeList('codex',result);listSync.acknowledgeSuccess();
 }
 function loadMoreSessions(){
   const root=$('sessions');
@@ -187,7 +202,42 @@ $('sessions').addEventListener('touchmove',event=>{
 $('sessions').addEventListener('touchend',()=>{listTouch=null;},{passive:true});
 $('sessions').addEventListener('touchcancel',()=>{listTouch=null;},{passive:true});
 $('search').oninput=()=>{clearTimeout(loadList.timer);loadList.timer=setTimeout(()=>loadList(true).catch(e=>toast(e.message)),300);};$('refresh').onclick=()=>loadList(true).catch(e=>toast(e.message));
-$('session-diagnostics').onclick=event=>{event.currentTarget.href=window.BridgeRelayURL?.('/api/sessions/diagnostics')||'/api/sessions/diagnostics';};
+let sessionDiagnosticsText='';
+const diagnosticsPath='/api/sessions/diagnostics';
+function diagnosticsSummary(value){
+  const lines=[t('连接诊断')];
+  for(const host of value.hosts||[]){
+    const location=host.host==='local'?t('此电脑'):t('远端电脑')+' '+(String(host.host).match(/^remote-\d+$/)?.[0].slice(7)||'?'),status=host.status==='ok'?t('可用'):t('不可用');
+    lines.push(location+' · '+status+' · '+t(host.phase==='ssh'?'SSH 连接':host.phase==='store'?'历史读取':'会话发现'));
+    if(host.status==='ok'){
+      const counts=host.counts||{};
+      lines.push([['CLI',counts.cli],['Desktop',counts.desktop],[t('其他来源'),counts.other],[t('可见会话'),counts.visible],[t('已归档'),counts.archived]].map(([name,count])=>name+': '+(Number.isInteger(count)?count:0)).join(' · '));
+    }else if(host.reason)lines.push(t(host.reason==='remote_read_failed'?'远端读取失败':'本机历史读取失败'));
+  }
+  return lines.join('\n');
+}
+async function loadSessionDiagnostics(){
+  const status=$('session-diagnostics-status'),summary=$('session-diagnostics-summary'),error=$('session-diagnostics-error');
+  status.textContent=t('正在读取连接诊断…');summary.textContent='';error.textContent='';sessionDiagnosticsText='';
+  $('session-diagnostics-copy').disabled=true;
+  try{
+    const value=await api(diagnosticsPath);
+    sessionDiagnosticsText=diagnosticsSummary(value);summary.textContent=sessionDiagnosticsText;
+    status.textContent=t('诊断已更新');$('session-diagnostics-copy').disabled=false;
+  }catch(e){status.textContent='';error.textContent=t(e.message);}
+}
+$('open-session-diagnostics').onclick=()=>{
+  $('appearance-dialog').close();$('session-diagnostics-dialog').showModal();
+  const exportLink=$('session-diagnostics-export');
+  const nativeUnsupported=BridgeHost.isNativeApp()&&window.BridgeMobileCapabilities?.diagnosticsExport!==true;
+  exportLink.hidden=nativeUnsupported;
+  $('session-diagnostics-export-note').hidden=!nativeUnsupported;
+  $('session-diagnostics-export-note').textContent=nativeUnsupported?t('此版本 App 不支持导出文件，请复制摘要或更新 App。'):'';
+  loadSessionDiagnostics();
+};
+$('session-diagnostics-refresh').onclick=loadSessionDiagnostics;
+$('session-diagnostics-copy').onclick=()=>window.BridgeClipboard.copy(()=>sessionDiagnosticsText,$('session-diagnostics-copy'));
+$('session-diagnostics-export').onclick=event=>{if(BridgeHost.isNativeApp()&&window.BridgeMobileCapabilities?.diagnosticsExport!==true){event.preventDefault();return;}event.currentTarget.href=window.BridgeRelayURL?.(diagnosticsPath)||diagnosticsPath;};
 $('archived').onchange=()=>loadList(true).catch(e=>toast(e.message));
 const listSync=window.BridgeListSync=new ListSync({root:$('sessions'),status:$('list-sync'),refresh:()=>loadList(true),visible:()=>!$('app').hidden&&$('sidebar').getBoundingClientRect().width>0,ready:()=>!listLoading&&document.activeElement!==$('search')});
 const contextUsageControl=new ContextUsageControl();$('permissions-button').after(contextUsageControl.button);
@@ -324,9 +374,9 @@ function renderState(view){
   $('status').textContent=!view.connected?(view.loadingHistory?t('读取历史中'):access.source==='cli'?t('历史记录'):view.activating?t('正在加载桌面聊天…'):view.connecting?t('连接桌面中'):t('历史记录')):view.requests.length?t('等待回应'):view.status==='active'?t('运行中'):t('已连接');
   $('status').classList.toggle('offline',!view.connected);
   $('notice').hidden=view.connected;
-  $('notice-text').textContent=access.source==='cli'?(t(reconnectFailure||view.connectionError||access.reason)||t(access.canReconnect?'CLI 聊天历史可阅读；点击连接 CLI 后尝试接入正在运行的会话。':'CLI 聊天历史可阅读；当前无法接入正在运行的会话。')):limited&&!access.canReconnect?(t(access.reason)||t('已保存的历史可阅读；当前来源未提供远程控制。')):view.activating?t('正在自动连接；必要时会在电脑 Codex 中打开此聊天。'):view.connecting?t('正在连接桌面，可先阅读已保存的历史。'):t(view.connectionError)||t('暂未连接，可先阅读历史或点击重新连接。');
+  $('notice-text').textContent=access.source==='cli'?(t(reconnectFailure||view.connectionError)||t(access.canReconnect?'可先阅读聊天历史；继续时将连接或恢复原 CLI 会话。':access.reason||'CLI 聊天历史可阅读；当前无法继续此会话。')):limited&&!access.canReconnect?(t(access.reason)||t('已保存的历史可阅读；当前来源未提供远程控制。')):view.activating?t('正在自动连接；必要时会在电脑 Codex 中打开此聊天。'):view.connecting?t('正在连接桌面，可先阅读已保存的历史。'):t(view.connectionError)||t('暂未连接，可先阅读历史或点击重新连接。');
   $('reconnect').hidden=limited&&!access.canReconnect;
-  $('reconnect').textContent=t(access.source==='cli'?'连接 CLI':'重新连接');
+  $('reconnect').textContent=t(access.source==='cli'?'继续会话':'重新连接');
   $('history').hidden=view.historyComplete||!view.connected;
   $('working').hidden=view.status!=='active';$('stop').hidden=view.status!=='active'||!view.connected||!access.canInterrupt;
   $('send').disabled=view.loadingHistory||view.activating||sending||!attachments.ready()||!access.canSend;

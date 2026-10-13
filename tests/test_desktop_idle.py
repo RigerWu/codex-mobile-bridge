@@ -20,7 +20,7 @@ class DesktopIdle(unittest.TestCase):
         temporary = tempfile.TemporaryDirectory(dir=ROOT/'.tmp'); self.addCleanup(temporary.cleanup)
         self.bridge = Bridge.__new__(Bridge)
         self.bridge.host = 'local'; self.bridge.codex_home = Path(temporary.name)
-        self.bridge.hosts = SimpleNamespace(hosts=Mock(return_value={}))
+        self.bridge.hosts = SimpleNamespace(lifecycle_hosts=Mock(return_value={}))
         self.bridge.lock = threading.RLock(); self.bridge.live = {}
         self.bridge.store = SimpleNamespace(lifecycle_threads=Mock(return_value=[{'id': 'desktop-only'}]), history=Mock())
         self.bridge.ipc = SimpleNamespace(path='fixture-ipc')
@@ -97,7 +97,7 @@ class DesktopIdle(unittest.TestCase):
         remote = SimpleNamespace(host='remote:test', lock=threading.RLock(), live={'remote-live': object()},
                                  store=SimpleNamespace(lifecycle_threads=Mock(return_value=[{'id': 'remote-history'}])),
                                  ipc=SimpleNamespace(path='fixture-ipc'))
-        self.bridge.hosts.hosts.return_value = {'remote:test': {'alias': 'test'}}
+        self.bridge.hosts.lifecycle_hosts.return_value = {'remote:test': {'alias': 'test'}}
         self.bridge.for_host = Mock(return_value=remote)
         self.bridge.remote_bridges['remote:test'] = remote
         self.states[('remote:test', 'remote-live')] = {'id': 'remote-live', 'threadRuntimeStatus': {'type': 'active'}}

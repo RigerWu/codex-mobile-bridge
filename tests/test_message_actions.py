@@ -1,6 +1,7 @@
 import copy
 import json
 import os
+import sqlite3
 import subprocess
 import sys
 import tempfile
@@ -22,6 +23,9 @@ class MessageActionTests(unittest.TestCase):
         self.temp = tempfile.TemporaryDirectory(dir=ROOT / '.tmp')
         self.root = Path(self.temp.name)
         self.source, self.child = str(uuid.uuid4()), str(uuid.uuid4())
+        with sqlite3.connect(self.root / 'state_fixture.sqlite') as database:
+            database.execute('CREATE TABLE threads (id TEXT PRIMARY KEY, originator TEXT, archived INTEGER, updated_at INTEGER)')
+            database.execute('INSERT INTO threads VALUES (?, ?, 0, 0)', (self.source, 'Codex Desktop'))
         self.bridge = Bridge(self.root, self.root / 'data')
         self.session = LiveSession(self.source)
         self.session.connected = True
@@ -145,7 +149,8 @@ class MessageActionTests(unittest.TestCase):
         self.bridge.host = 'remote-ssh-discovered:fixture'
         self.bridge.hosts.hosts = lambda: {self.bridge.host: {'alias': 'fixture'}}
         self.bridge.store = RemoteStore('fixture')
-        with patch('bridge.app.service.ssh_read', return_value={'id': self.child}) as ssh:
+        with patch.object(self.bridge.store, 'get', return_value={'id': self.source, 'origin': 'desktop'}), \
+             patch('bridge.app.service.ssh_read', return_value={'id': self.child}) as ssh:
             result = self.bridge.message_action(self.source, self.body('first', 'fork', 'assistant'))
         self.assertEqual(result['host'], self.bridge.host)
         self.assertEqual(ssh.call_args.args[0], 'fixture')

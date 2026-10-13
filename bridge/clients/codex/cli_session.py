@@ -1,23 +1,47 @@
 """Explicitly join threads already loaded in the existing CLI app-server."""
 
 import copy
+import os
+import shlex
+import shutil
 import threading
 from pathlib import Path
 
 from bridge.clients.codex.app_server import (
     AppServerError, AppServerUnavailable, AppServerUnsupported, CodexAppServer)
+from bridge.clients.codex.catalog import Catalog
 
 
 def _ssh_proxy_command(alias):
     if not alias or alias.startswith('-') or any(c.isspace() for c in alias):
         raise ValueError('Invalid SSH host alias')
-    remote = ('sh -lc \'if command -v codex >/dev/null 2>&1; then '
-              'exec codex app-server proxy; '
-              'elif test -x "$HOME/.local/bin/codex"; then '
-              'exec "$HOME/.local/bin/codex" app-server proxy; else exit 127; fi\'')
+    # Match RemoteStore's explicit user login shell, so it resolves the same
+    # CODEX_HOME and PATH. Quote the inner program as one -lc argument.
+    inner = ('if command -v codex >/dev/null 2>&1; then '
+             'exec codex app-server proxy; '
+             'elif test -x "$HOME/.local/bin/codex"; then '
+             'exec "$HOME/.local/bin/codex" app-server proxy; else exit 127; fi')
+    remote = 'exec "$SHELL" -lc ' + shlex.quote(inner)
     return ['ssh', '-T', '-o', 'BatchMode=yes', '-o', 'ClearAllForwardings=yes',
             '-o', 'ConnectTimeout=8', '-o', 'StrictHostKeyChecking=yes',
             '-o', 'UpdateHostKeys=no', alias, remote]
+
+
+def _local_cli(home, configured):
+    if configured and configured != 'codex':
+        path = Path(configured)
+        if path.is_file() and os.access(path, os.X_OK):
+            return str(path)
+        raise AppServerUnavailable('Configured Codex CLI is unavailable')
+    candidates = (shutil.which('codex'), Path.home()/'.local/bin/codex',
+                  Path(home)/'packages/app-server-daemon/current/bin/codex')
+    for candidate in candidates:
+        if candidate and Path(candidate).is_file() and os.access(candidate, os.X_OK):
+            return str(candidate)
+    candidate = Catalog.find_runtime()
+    if candidate and Path(candidate).is_file() and os.access(candidate, os.X_OK):
+        return str(candidate)
+    raise AppServerUnavailable('Codex CLI executable is unavailable')
 
 
 class CliSessions:
@@ -42,6 +66,7 @@ class CliSessions:
             on_event=self._event, on_server_request=self._server_request,
             on_disconnect=self._disconnect, process_factory=process_factory,
             command=command, check_socket=alias is None)
+        self.configured_cli = cli
 
     def available(self):
         return self.alias is not None or Path(self.client.socket_path).exists()
@@ -52,6 +77,9 @@ class CliSessions:
             return None
         if not self.available():
             raise AppServerUnavailable('Existing Codex CLI runtime is unavailable')
+        if self.alias is None and isinstance(self.client, CodexAppServer):
+            executable = _local_cli(self.home, self.configured_cli)
+            self.client.command[0] = executable
         info = self.client.connect()
         if self.alias is None and Path(info['codexHome']) != self.home:
             raise AppServerUnavailable('Codex CLI runtime belongs to another home')
@@ -70,9 +98,10 @@ class CliSessions:
                                      replay_safe=True)['thread']
         if before.get('id') != thread_id or before.get('status', {}).get('type') == 'notLoaded':
             raise AppServerUnavailable('CLI thread is no longer loaded')
-        # Resume rejoins a running thread. The protocol has no atomic loaded-only
-        # guard, so an unload between this check and resume remains a fail-closed
-        # limitation for callers that require strict ownership guarantees.
+        # Resume rejoins a running thread, but this protocol has no atomic
+        # loaded-only guard. A thread unloading after the checks above can be
+        # cold-restored by resume. Only an explicit user connection reaches here;
+        # callers requiring strict existing-owner proof must not use this path.
         with self.lock:
             self.attaching.add(thread_id)
         try:
@@ -108,8 +137,16 @@ class CliSessions:
             self._invalidate(thread_id)
             raise AppServerUnavailable('CLI thread unloaded')
         with self.lock:
+            metadata = self.metadata.get(thread_id)
+        if metadata is None:
+            raise AppServerUnavailable('CLI thread is no longer joined')
+        if (thread.get('cwd') != metadata['cwd'] or
+                thread.get('modelProvider') != metadata['modelProvider']):
+            self._invalidate(thread_id)
+            raise AppServerUnavailable('CLI thread provider or working directory changed')
+        with self.lock:
             pending = list(self.requests.get(thread_id, {}).values())
-            state = self._state(thread, pending, self.metadata[thread_id])
+            state = self._state(thread, pending, metadata)
             self.states[thread_id] = state
         self.on_state(thread_id, copy.deepcopy(state))
         return copy.deepcopy(state)
@@ -119,6 +156,7 @@ class CliSessions:
         if not self.client.is_loaded(thread_id):
             self._invalidate(thread_id)
             raise AppServerUnavailable('CLI thread unloaded before the operation')
+        self._check_identity(thread_id)
         if desktop_method == 'thread-follower-start-turn':
             start = params.get('turnStart') or {}
             request = start.get('request') or {}
@@ -220,6 +258,20 @@ class CliSessions:
         with self.lock:
             if self.joined.get(thread_id) is not self.client.process or self.client.process is None:
                 raise AppServerUnavailable('CLI thread is not joined on this connection')
+
+    def _check_identity(self, thread_id):
+        result = self.client.request('thread/read', {'threadId': thread_id,
+                                                      'includeTurns': False}, replay_safe=True)
+        thread = result.get('thread') or {}
+        with self.lock:
+            metadata = self.metadata.get(thread_id)
+        if metadata is None:
+            raise AppServerUnavailable('CLI thread is no longer joined')
+        if (thread.get('id') != thread_id or thread.get('status', {}).get('type') == 'notLoaded' or
+                thread.get('cwd') != metadata['cwd'] or
+                thread.get('modelProvider') != metadata['modelProvider']):
+            self._invalidate(thread_id)
+            raise AppServerUnavailable('CLI thread identity changed before the operation')
 
     def _event(self, event):
         method = event.get('method')

@@ -104,6 +104,47 @@ test('Claude lists distinguish Code and Cowork and retain archive/project filter
 test('workspace tabs use the real Workbench provider routes and split behavior',async()=>{
  const ui=await opened();assert.equal(ui.view.workbench.current.provider,'claude');ui.view.workbench.files();await Promise.resolve();assert.ok(ui.calls.some(c=>c.url.includes('/api/desktop-sessions/claude/workspace?sessionId=a')));ui.view.workbench.split('files');assert.equal(ui.view.workbench.splitMode,true);assert.ok(ui.view.conversation.classList.contains('wb-split'));assert.equal(ui.view.workbench.current.splitTab,'files');
 });
+test('file back follows parent directories before returning to chat on the shared page button',async()=>{
+ const ui=await opened(),wb=ui.view.workbench,session=wb.current;
+ const settle=()=>new Promise(setImmediate);
+ const entries={'':[{'name':'src','path':'src','kind':'directory'}],src:[{'name':'lib','path':'src/lib','kind':'directory'}],'src/lib':[]};
+ ui.setHandler(async url=>{const at=new URL(url,'http://fixture').searchParams.get('path');return {project:'/project',total:entries[at]?.length||0,entries:entries[at]||[],nextOffset:null};});
+ wb.files();await settle();const tab=session.files.find(t=>t.id==='files');
+ tab.list.querySelector('.wb-file').click();await settle();tab.list.querySelector('.wb-file').click();await settle();assert.equal(session.directory,'src/lib');
+ await ui.view.back.click();assert.equal(session.directory,'src');assert.equal(session.active,'files');
+ await ui.view.back.click();assert.equal(session.directory,'');assert.equal(session.active,'files');
+ await ui.view.back.click();assert.equal(session.active,'chat');assert.equal(ui.view.isChatOpen,true);
+ await ui.view.back.click();assert.equal(ui.view.isChatOpen,false);
+});
+test('rapid file backs ignore stale responses and a failed parent read stays in the file browser',async()=>{
+ const ui=await opened(),wb=ui.view.workbench,session=wb.current,pending=[];
+ ui.setHandler((url,_body)=>{const path=new URL(url,'http://fixture').searchParams.get('path');if(path==='')return Promise.resolve({project:'/project',total:0,entries:[],nextOffset:null});return new Promise((resolve,reject)=>pending.push({path,resolve,reject}));});
+ wb.files();await Promise.resolve();const tab=session.files.find(t=>t.id==='files');
+ const deep=wb.directory(session,tab,'src/lib');assert.equal(wb.back(),true);assert.equal(session.directory,'src');
+ const parent=pending.at(-1);assert.equal(parent.path,'src');assert.equal(wb.back(),true);assert.equal(session.directory,'');
+ parent.reject(Error('late parent failure'));pending[0].resolve({project:'/old',total:1,entries:[{name:'old',path:'old',kind:'file'}],nextOffset:null});
+ await deep;await Promise.resolve();assert.equal(session.directory,'');assert.equal(tab.status.classList.contains('error'),false);assert.equal(tab.list.children.length,0);
+ const failed=wb.directory(session,tab,'src');pending.at(-1).reject(Error('directory unavailable'));await failed;
+ assert.equal(session.active,'files');assert.equal(session.directory,'src');assert.equal(tab.status.classList.contains('error'),true);
+ assert.equal(wb.back(),true);await Promise.resolve();assert.equal(session.directory,'');assert.equal(session.active,'files');
+});
+test('a directory response from an earlier chat cannot replace the selected chat file view',async()=>{
+ const ui=await opened(),wb=ui.view.workbench,first=wb.current;let finish;
+ ui.setHandler(url=>new Promise(resolve=>{const path=new URL(url,'http://fixture').searchParams.get('path');if(path==='src')finish=resolve;else resolve({project:'/second',total:0,entries:[],nextOffset:null});}));
+ wb.files();await Promise.resolve();const oldTab=first.files.find(t=>t.id==='files'),reading=wb.directory(first,oldTab,'src');
+ wb.open('b','local');wb.files();await Promise.resolve();const second=wb.current,secondTab=second.files.find(t=>t.id==='files');
+ finish({project:'/first',total:1,entries:[{name:'old',path:'src/old',kind:'file'}],nextOffset:null});await reading;
+ assert.equal(wb.current,second);assert.equal(second.directory,'');assert.equal(secondTab.list.children.length,0);assert.equal(wb.panel.firstElementChild,secondTab.body);
+});
+test('wide split file back consumes the visible file tab, then returns to unsplit chat',async()=>{
+ const ui=await opened(),wb=ui.view.workbench,session=wb.current;
+ ui.setHandler(async()=>({project:'/project',total:0,entries:[],nextOffset:null}));wb.files();await Promise.resolve();const tab=session.files.find(t=>t.id==='files');
+ wb.split('files');await wb.directory(session,tab,'src/lib');assert.equal(wb.isFileVisible,false);
+ assert.equal(wb.back(),true);assert.equal(session.directory,'src');assert.equal(wb.splitMode,true);
+ assert.equal(wb.back(),true);assert.equal(session.directory,'');assert.equal(wb.splitMode,true);
+ assert.equal(wb.back(),true);assert.equal(session.active,'chat');assert.equal(session.splitTab,null);assert.equal(wb.splitMode,false);
+ assert.equal(wb.back(),false);
+});
 
 for(const [closed,next] of [['files','terminal'],['terminal','file:preview'],['file:preview','terminal']])test(`closing active split ${closed} selects adjacent ${next} and preserves the main chat`,async()=>{
  const ui=await opened(),wb=ui.view.workbench,session=wb.current,disposed=[];

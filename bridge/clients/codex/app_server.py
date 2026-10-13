@@ -172,14 +172,15 @@ class CodexAppServer:
                     handshake.set_exception(exc)
             threading.Thread(target=open_websocket, daemon=True).start()
             try:
-                self.transport = handshake.result(timeout=timeout)
+                transport = handshake.result(timeout=timeout)
+                self.transport = transport
             except TimeoutError as exc:
                 self.close()
                 raise AppServerUnavailable('Codex control socket handshake timed out') from exc
             except Exception:
                 self.close()
                 raise
-            threading.Thread(target=self._read_loop, args=(process,), daemon=True).start()
+            threading.Thread(target=self._read_loop, args=(process, transport), daemon=True).start()
             try:
                 info = self.request('initialize', {
                     'clientInfo': {'name': 'codex-mobile-bridge', 'version': '1'},
@@ -260,14 +261,19 @@ class CodexAppServer:
         else:
             self._send({'id': request_id, 'result': result})
 
-    def _read_loop(self, process):
+    def _read_loop(self, process, transport):
         try:
             while True:
-                message = self.transport.receive()
+                message = transport.receive()
+                with self.lock:
+                    if self.process is not process:
+                        return
                 if not isinstance(message, dict):
                     continue
                 if 'id' in message and ('result' in message or 'error' in message):
                     with self.lock:
+                        if self.process is not process:
+                            return
                         future = self.pending.get(message['id'])
                         if future is not None and not future.done():
                             future.set_result(message)

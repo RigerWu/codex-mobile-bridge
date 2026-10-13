@@ -2,6 +2,7 @@ import json
 import base64
 import hashlib
 import os
+import queue
 import struct
 import tempfile
 import threading
@@ -158,6 +159,32 @@ class AppServerTests(unittest.TestCase):
         with self.assertRaises(Exception):
             self.client.connect()
         self.assertEqual(self.processes, [])
+
+    def test_old_reader_does_not_read_or_dispatch_from_new_connection(self):
+        class QueuedTransport:
+            def __init__(self):
+                self.messages = queue.Queue()
+
+            def receive(self):
+                return self.messages.get(timeout=2)
+
+        old_process, new_process = object(), object()
+        old_transport, new_transport = QueuedTransport(), QueuedTransport()
+        self.client.process = old_process
+        self.client.transport = old_transport
+        reader = threading.Thread(target=self.client._read_loop,
+                                  args=(old_process, old_transport), daemon=True)
+        reader.start()
+        self.client.process = new_process
+        self.client.transport = new_transport
+        old_transport.messages.put({'method': 'turn/started', 'params': {'threadId': 'old'}})
+        new_transport.messages.put({'method': 'turn/started', 'params': {'threadId': 'new'}})
+        reader.join(2)
+        self.assertFalse(reader.is_alive())
+        self.assertEqual(self.events, [])
+        self.assertEqual(new_transport.receive()['params']['threadId'], 'new')
+        self.client.process = None
+        self.client.transport = None
 
 
 if __name__ == '__main__':

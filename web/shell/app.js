@@ -359,6 +359,10 @@ $('notification-requests').onchange=$('notification-completions').onchange=saveN
 $('back').onclick=()=>{if(workbench.back())return;desktopSessions.onListEnter();workbench.rememberScroll();workbench.stopThumbnails();$('app').classList.remove('chat-open');history.replaceState(null,'',location.pathname);loadList(true).catch(e=>toast(e.message));};
 function renderState(view){
   contextUsageControl.update(view);state=view;
+  if(typeof document!=='undefined')for(const dialog of document.querySelectorAll('dialog[data-permission-runtime]')){
+    if(!view.connected||dialog.dataset.permissionThread!==currentId||dialog.dataset.permissionHost!==currentHost||
+       dialog.dataset.permissionRuntime!==(view.access?.runtime||'desktop'))dialog.close();
+  }
   if(view.connected)reconnectFailure=null;
   const access=sessionAccess(view.access),limited=!!view.access;
   $('permissions-button').textContent=t({'ask':'请求批准','auto-review':'帮我批准','full-access':'完全访问权限'}[view.permissionMode]||'权限');
@@ -864,23 +868,31 @@ window.BridgeNavigation={
 
 $('permissions-button').onclick=()=>{
   if(!currentId||!state?.connected)return;
-  const id=currentId,host=currentHost,dialog=el('dialog','picker'),head=el('div','picker-head');
+  const id=currentId,host=currentHost,runtime=state.access?.runtime||'desktop',dialog=el('dialog','picker'),head=el('div','picker-head');
+  dialog.dataset.permissionThread=id;dialog.dataset.permissionHost=host;dialog.dataset.permissionRuntime=runtime;
+  const isCurrent=()=>{
+    const current=dialog.open&&currentId===id&&currentHost===host&&state?.connected===true&&
+      (state.access?.runtime||'desktop')===runtime;
+    if(!current&&dialog.open)dialog.close();
+    return current;
+  };
   head.append(el('h2','',t('会话权限')));const close=el('button','icon-button','×');close.type='button';close.setAttribute('aria-label',t('关闭'));close.onclick=()=>dialog.close();head.append(close);dialog.append(head,el('p','muted',t('保存后从下一轮生效')));
   if(state.linuxPermissionChecks===true||state.access?.runtime==='cli'){
     document.body.append(dialog);dialog.addEventListener('close',()=>dialog.remove());dialog.showModal();
-    permissionPicker(dialog,{nativeCli:state.access?.runtime==='cli',load:()=>api(sessionUrl(id,'permissions',host)),
-      save:preset=>api(sessionUrl(id,'permissions',host),{preset,confirmed:preset==='full-access'}),
-      isCurrent:()=>currentId===id&&currentHost===host&&state?.connected===true,onSaved:()=>toast('权限已更新')});
+    permissionPicker(dialog,{nativeCli:runtime==='cli',load:()=>api(sessionUrl(id,'permissions',host)),
+      save:preset=>api(sessionUrl(id,'permissions',host),{preset,confirmed:preset==='full-access',expectedRuntime:runtime}),
+      isCurrent,onSaved:()=>toast('权限已更新')});
     return;
   }
   const error=el('p','error');
   for(const [preset,label,help] of [['ask','请求批准','需要额外权限时询问你。'],['auto-review','帮我批准','由 Codex 审核需要额外权限的操作。'],['full-access','完全访问权限','允许访问工作区外的文件和网络，无需逐次批准。']]){
     const button=permissionOption(el('button'),preset,label,help,state.permissionMode===preset);
     button.onclick=async()=>{
+      if(!isCurrent())return;
       if(preset==='full-access'&&!confirm(t('允许此会话完全访问电脑文件和网络？请仅在信任任务内容时开启。')))return;
       dialog.querySelectorAll('button').forEach(b=>b.disabled=true);
-      try{const result=await api(sessionUrl(id,'permissions',host),{preset,confirmed:preset==='full-access'});if(result.confirmed){dialog.close();toast('权限已更新');}else error.textContent=t('已提交权限设置，等待桌面确认。');}
-      catch(e){error.textContent=t(e.message);}finally{dialog.querySelectorAll('button').forEach(b=>b.disabled=false);}
+      try{const result=await api(sessionUrl(id,'permissions',host),{preset,confirmed:preset==='full-access',expectedRuntime:runtime});if(!isCurrent())return;if(result.confirmed){dialog.close();toast('权限已更新');}else error.textContent=t('已提交权限设置，等待桌面确认。');}
+      catch(e){if(isCurrent())error.textContent=t(e.message);}finally{dialog.querySelectorAll('button').forEach(b=>b.disabled=false);}
     };dialog.append(button);
   }
   dialog.append(error);document.body.append(dialog);dialog.addEventListener('close',()=>dialog.remove());dialog.showModal();

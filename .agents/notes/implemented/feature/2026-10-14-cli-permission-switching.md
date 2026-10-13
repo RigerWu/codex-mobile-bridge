@@ -12,6 +12,8 @@ Expose an independent `canChangePermissions` capability after a CLI chat has an 
 
 The native adapter sends only the selected profile, approval policy and reviewer through `thread/settings/update`. It never changes provider, authentication, cwd or global config. The requested setting does not become displayed state. The effective `thread/settings/updated` notification updates the state, and the bridge confirms the requested mode only after a later state sequence reports it. Attach projects the effective permission state from `thread/resume`; disconnect and invalidation clear adapter state before reconnect. Unsupported older daemons cannot pass capability discovery, and unknown writes are not replayed. Native CLI messages name the CLI runtime; Desktop-owned permission messages retain their existing wording.
 
+The main permission dialog binds its options and save request to the runtime active when it opens. A chat or runtime change and a disconnect close the dialog. The optional `expectedRuntime` request field is checked under the session action lock before a setting write, so a delayed native dialog cannot write to a newly attached Desktop owner. Older clients that omit the field retain their existing request behavior.
+
 ## Alternatives considered
 
 Enabling `canConfigure` would be a small gate change, but would expose unsupported CLI rename and other Desktop controls. Reusing local Desktop preference files for native and SSH CLI could offer a mode forbidden by the selected runtime. Projecting requested settings immediately would make a successful RPC look like proof of effective permission, even when a later policy decision differs.

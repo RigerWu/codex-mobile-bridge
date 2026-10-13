@@ -1880,15 +1880,19 @@ class Bridge:
         return self._linux_permission_options(session)[1]
 
     @operation
-    def permissions(self, thread_id, preset, confirmed=False):
+    def permissions(self, thread_id, preset, confirmed=False, *, expected_runtime=None):
         if preset not in ('ask', 'auto-review', 'full-access'):
             raise ValueError('权限设置无效')
+        if expected_runtime is not None and expected_runtime not in ('cli', 'desktop'):
+            raise ValueError('会话运行时无效')
         if preset == 'full-access' and confirmed is not True:
             raise ValueError('请确认完全访问权限')
         session = self._target(thread_id)
         if not self._access(session.origin, session)['canChangePermissions']:
             raise ValueError('此会话暂不能修改权限')
         with session.action_lock:
+            if expected_runtime is not None and (not session.connected or session.runtime != expected_runtime):
+                raise ValueError('会话运行时已变化，请重新打开权限面板')
             if session.runtime == 'cli':
                 facts, options = self.cli_sessions.permission_options(thread_id)
                 linux_permissions.require_permission(options, preset)

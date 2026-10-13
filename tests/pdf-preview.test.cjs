@@ -24,6 +24,7 @@ class Element {
   click() { this.onclick?.(); }
 }
 const element = tag => new Element(tag);
+const childWithClass = (node, name) => node.children.find(child => child.className.split(' ').includes(name));
 const tick = async () => { await new Promise(setImmediate); await new Promise(setImmediate); };
 const setup = (coarse=false) => {
   global.document={createElement:element};
@@ -223,7 +224,9 @@ test('workbench uses download info and disposes PDF when the tab closes', async 
   await workbench.preview(session,{name:'file.pdf',path:'file.pdf'});
   assert.deepEqual(calls,['/api/workspace/download?path=file.pdf&info=1']);
   assert.deepEqual(events.map(event=>event[0]),['create','load']);
-  assert.equal(session.files[0].body.children[0].children[1].children[0].href,'/api/workspace/download?path=file.pdf');
+  const head=childWithClass(session.files[0].body,'wb-preview-head');
+  const actions=childWithClass(head,'wb-preview-actions');
+  assert.equal(childWithClass(actions,'wb-download').href,'/api/workspace/download?path=file.pdf');
   await workbench.close('file:file.pdf');
   assert.deepEqual(events.map(event=>event[0]),['create','load','dispose']);
 });
@@ -244,7 +247,8 @@ test('HTML preview switches to the original source and disposes its script frame
     raw:node=>node,select:()=>{},paint:()=>{},url:()=>'/api/workspace',
     request:async()=>({kind:'text',name:'page.html',size:original.length,text:original})});
   await workbench.preview(session,{name:'page.html',path:'page.html'});
-  const [head,modes,content]=session.files[0].body.children;
+  const body=session.files[0].body;
+  const modes=childWithClass(body,'wb-preview-modes'), content=childWithClass(body,'wb-preview-content');
   assert.equal(content.children[0].tagName,'frame');
   modes.children[1].onclick();
   assert.equal(content.children[0].textContent,original);

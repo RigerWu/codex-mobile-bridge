@@ -151,7 +151,7 @@ class LocalCliSync:
             accounts = self._accounts()
             current = accounts.info.current()
             if current.get('id') == row['id'] and accounts.active_matches():
-                return {'status': 'applied', 'sharedWithDesktop': True}
+                return {'status': 'applied', 'sharedWithDesktop': True, 'mutated': False}
             running, _ = self._codex_runtime()
             if running:
                 raise ValueError('Codex Desktop 正在运行，请先通过桌面账号切换流程')
@@ -179,7 +179,7 @@ class LocalCliSync:
                 finally:
                     import shutil
                     shutil.rmtree(folder, ignore_errors=True)
-            return {'status': 'applied', 'sharedWithDesktop': True}
+            return {'status': 'applied', 'sharedWithDesktop': True, 'mutated': True}
         if provider == 'claude':
             directory = self._claude_dir(row)
             self._close_claude_idle()
@@ -194,7 +194,8 @@ class LocalCliSync:
             baseline = self._claude_baseline(directory)
             if row['kind'] == 'native':
                 if baseline.is_file():
-                    saved = json.loads(baseline.read_text())
+                    baseline_content = baseline.read_bytes()
+                    saved = json.loads(baseline_content)
                     for key in CLAUDE_ENV_KEYS:
                         if key in saved:
                             env[key] = saved[key]
@@ -202,7 +203,7 @@ class LocalCliSync:
                             env.pop(key, None)
                     settings['env'] = env
                     private_json(settings_path, settings)
-                    self._claude_backup = (settings_path, original, baseline, None)
+                    self._claude_backup = (settings_path, original, baseline, None, baseline_content)
                 return {'status': 'selected', 'directory': str(directory)}
             if row['kind'] != 'api':
                 raise ValueError('不支持的 Claude Code 接入')
@@ -218,7 +219,7 @@ class LocalCliSync:
             if row.get('model'):
                 env['ANTHROPIC_MODEL'] = row['model']
             settings['env'] = env
-            self._claude_backup = (settings_path, original, baseline, created)
+            self._claude_backup = (settings_path, original, baseline, created, None)
             private_json(settings_path, settings)
             return {'status': 'applied', 'directory': str(directory)}
         raise ValueError('不支持的本机 CLI 客户端')
@@ -280,13 +281,15 @@ class LocalCliSync:
             return {'status': 'restored'}
         if provider == 'claude':
             if self._claude_backup:
-                path, content, baseline, created = self._claude_backup
+                path, content, baseline, created, baseline_content = self._claude_backup
                 if content is None:
                     path.unlink(missing_ok=True)
                 else:
                     private_bytes(path, content)
                 if created:
                     created.unlink(missing_ok=True)
+                elif baseline_content is not None:
+                    private_bytes(baseline, baseline_content)
                 self._claude_backup = None
             if self._claude_created_dir:
                 try:

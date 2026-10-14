@@ -9,6 +9,8 @@ from types import SimpleNamespace
 from unittest.mock import Mock, patch
 
 from bridge.features.accounts.cli_access import CliAccess
+from bridge.features.accounts.cli_sync import LocalCliSync
+from bridge.features.accounts.accounts import private_json
 from bridge.clients.claude.cli_session import ClaudeCli, ResumePreflightBlocked
 
 
@@ -23,8 +25,9 @@ class CliAccessTests(unittest.TestCase):
                         'origin': 'default:'+str(self.native)+':none'}
         self.accounts = SimpleNamespace(public=Mock(return_value={
             'accounts': [], 'activeId': None, 'activeVerified': False,
-            'switch': {}, 'blockers': []}))
-        self.bridge = SimpleNamespace(data_dir=self.root, accounts=self.accounts)
+            'switch': {}, 'blockers': []}), gate=threading.RLock(), check_ready=Mock())
+        self.bridge = SimpleNamespace(data_dir=self.root, accounts=self.accounts,
+                                      account=SimpleNamespace(lock=threading.RLock()))
         self.profile_patch = patch('bridge.features.accounts.cli_access._profile', return_value=self.profile)
         self.profile_patch.start()
         self.addCleanup(self.profile_patch.stop)
@@ -113,6 +116,31 @@ class CliAccessTests(unittest.TestCase):
         self.assertIsNone(self.manager.public()['claude']['activeId'])
         self.assertEqual(self.manager.claude_profile(), self.profile)
         sync.restore.assert_called_once()
+
+    def test_native_baseline_survives_pointer_save_failure(self):
+        api_id = self.save_api()
+        self.manager.index['activeClaude'] = api_id
+        self.manager._save()
+        native_id = 'c'*32
+        native_row = {'id': native_id, 'name': 'Original', 'kind': 'native',
+                      'directory': str(self.native), 'originBase': 'native:'+str(self.native)}
+        self.manager.index['claude'].append(native_row)
+        private_json(self.native/'settings.json', {'env': {
+            'ANTHROPIC_BASE_URL': 'https://managed.invalid',
+            'ANTHROPIC_AUTH_TOKEN': 'managed-fixture-key'}})
+        settings_before = (self.native/'settings.json').read_bytes()
+        baseline = LocalCliSync(self.bridge)._claude_baseline(self.native.resolve())
+        private_json(baseline, {'ANTHROPIC_API_KEY': 'original-fixture-key'})
+        baseline_before = baseline.read_bytes()
+        with patch('bridge.features.accounts.cli_sync.LocalCliSync._claude_auth',
+                   return_value={'loggedIn': True}), \
+             patch.object(self.manager, '_save', side_effect=[OSError('durable save failed'), None]):
+            with self.assertRaisesRegex(OSError, 'durable save failed'):
+                self.manager.change({'provider': 'claude', 'action': 'switch',
+                                     'id': native_id, 'confirmed': True})
+        self.assertEqual(self.manager.index['activeClaude'], api_id)
+        self.assertEqual((self.native/'settings.json').read_bytes(), settings_before)
+        self.assertEqual(baseline.read_bytes(), baseline_before)
 
     def test_busy_preflight_rejects_without_mutating_selection(self):
         identifier = self.save_api()
@@ -235,6 +263,75 @@ class CliAccessTests(unittest.TestCase):
                                  'id': 'saved', 'confirmed': True})
         sync.apply.assert_called_once_with('codex', row)
         sync.verify.assert_called_once_with('codex', row)
+
+    def test_codex_prewrite_rejection_never_restores_stale_snapshot(self):
+        row = {'id': 'saved', 'kind': 'api', 'name': 'Codex API'}
+        self.accounts.row = Mock(return_value=row)
+        config = self.root/'config.toml'
+        config.write_text('before')
+        sync = Mock()
+        sync.preflight.return_value = {'desktopRunning': False}
+        sync.snapshot.side_effect = lambda _: {'files': {'config.toml': config.read_text()}}
+        def reject_before_write(*_):
+            # Another Desktop transaction has changed the shared files. The
+            # CLI apply rejects before its own write and must not undo it.
+            config.write_text('desktop-new')
+            raise ValueError('Desktop switch in progress')
+        sync.apply.side_effect = reject_before_write
+        with self.sync_patch(sync), self.assertRaisesRegex(ValueError, 'Desktop switch'):
+            self.manager.change({'provider': 'codex', 'action': 'switch',
+                                 'id': 'saved', 'confirmed': True})
+        self.assertEqual(config.read_text(), 'desktop-new')
+        sync.restore.assert_not_called()
+        sync.verify.assert_not_called()
+
+    def test_codex_postapply_verification_restores_only_mutated_switch(self):
+        row = {'id': 'saved', 'kind': 'api'}
+        self.accounts.row = Mock(return_value=row)
+        sync = Mock()
+        sync.preflight.return_value = {'desktopRunning': False}
+        sync.apply.return_value = {'status': 'applied', 'mutated': True}
+        sync.verify.side_effect = ValueError('verification failed')
+        with self.sync_patch(sync), self.assertRaisesRegex(ValueError, 'verification failed'):
+            self.manager.change({'provider': 'codex', 'action': 'switch',
+                                 'id': 'saved', 'confirmed': True})
+        sync.restore.assert_called_once()
+
+    def test_codex_snapshot_through_verify_holds_desktop_transaction_gate(self):
+        self.accounts.row = Mock(return_value={'id': 'saved', 'kind': 'api'})
+        applying = threading.Event()
+        finish = threading.Event()
+        desktop_entered = threading.Event()
+        switch_done = threading.Event()
+        failures = []
+        sync = Mock()
+        sync.preflight.return_value = {'desktopRunning': False}
+        sync.apply.return_value = {'status': 'applied', 'mutated': True}
+        def apply(*_):
+            applying.set()
+            assert finish.wait(2)
+            return {'status': 'applied', 'mutated': True}
+        sync.apply.side_effect = apply
+        def switch():
+            try:
+                self.manager.change({'provider': 'codex', 'action': 'switch',
+                                     'id': 'saved', 'confirmed': True})
+            except Exception as error:
+                failures.append(error)
+            finally:
+                switch_done.set()
+        def desktop():
+            with self.accounts.gate:
+                desktop_entered.set()
+        with self.sync_patch(sync):
+            threading.Thread(target=switch, daemon=True).start()
+            self.assertTrue(applying.wait(2))
+            threading.Thread(target=desktop, daemon=True).start()
+            self.assertFalse(desktop_entered.wait(.1))
+            finish.set()
+            self.assertTrue(switch_done.wait(2))
+            self.assertTrue(desktop_entered.wait(2))
+        self.assertFalse(failures)
 
     def test_codex_running_desktop_requires_explicit_restart_confirmation(self):
         self.accounts.row = Mock(return_value={'id': 'saved', 'kind': 'api'})

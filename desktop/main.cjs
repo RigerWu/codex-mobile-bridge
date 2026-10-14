@@ -277,9 +277,9 @@ function register(){
   });
   ipcMain.handle('bridge:copy',async(event,target)=>{
     authorize(event);const snapshot=await worker('snapshot');
-    const port=Number(snapshot.preferences?.port);
-    const localTarget=Number.isInteger(port)&&port>=1&&port<=65535?'http://127.0.0.1:'+port:null;
-    if(!snapshot.urls.includes(target)&&target!==localTarget)throw Error('地址不可用');
+    const localPort=typeof target==='string'?/^http:\/\/127\.0\.0\.1:([1-9]\d{0,4})$/.exec(target):null;
+    const localTarget=localPort&&Number(localPort[1])<=65535;
+    if(!snapshot.urls.includes(target)&&!localTarget)throw Error('地址不可用');
     clipboard.writeText(target);
   });
 }

@@ -130,7 +130,14 @@ class ClaudeCliContract(unittest.TestCase):
     def test_managed_api_ignores_ambient_anthropic_overrides(self):
         self.profile['managedApi'] = True
         with patch.dict(os.environ, {'ANTHROPIC_API_KEY': 'wrong', 'ANTHROPIC_BASE_URL': 'https://wrong.invalid',
-                                     'ANTHROPIC_AUTH_TOKEN': 'wrong', 'KEEP_ME': 'yes'}), \
+                                     'ANTHROPIC_AUTH_TOKEN': 'wrong',
+                                     'CLAUDE_CODE_USE_BEDROCK': '1',
+                                     'CLAUDE_CODE_USE_ANTHROPIC_AWS': '1',
+                                     'CLAUDE_CODE_USE_FOUNDRY': '1',
+                                     'CLAUDE_CODE_USE_MANTLE': '1',
+                                     'CLAUDE_CODE_USE_VERTEX': '1',
+                                     'CLAUDE_CODE_PROVIDER_MANAGED_BY_HOST': '1',
+                                     'KEEP_ME': 'yes'}), \
              patch('bridge.clients.claude.cli_session.subprocess.run') as run:
             run.return_value.returncode = 0
             run.return_value.stdout = '{"loggedIn": true}'
@@ -139,6 +146,10 @@ class ClaudeCliContract(unittest.TestCase):
             self.assertNotIn('ANTHROPIC_API_KEY', environment)
             self.assertNotIn('ANTHROPIC_BASE_URL', environment)
             self.assertNotIn('ANTHROPIC_AUTH_TOKEN', environment)
+            for key in ('CLAUDE_CODE_USE_BEDROCK', 'CLAUDE_CODE_USE_ANTHROPIC_AWS',
+                        'CLAUDE_CODE_USE_FOUNDRY', 'CLAUDE_CODE_USE_MANTLE',
+                        'CLAUDE_CODE_USE_VERTEX', 'CLAUDE_CODE_PROVIDER_MANAGED_BY_HOST'):
+                self.assertNotIn(key, environment)
             self.assertEqual(environment['CLAUDE_CONFIG_DIR'], str(self.config))
             self.assertEqual(environment['KEEP_ME'], 'yes')
             process = Mock();process.poll.return_value = None;process.stdout = iter(())
@@ -154,6 +165,10 @@ class ClaudeCliContract(unittest.TestCase):
                 self.assertNotIn('ANTHROPIC_API_KEY', environment)
                 self.assertNotIn('ANTHROPIC_BASE_URL', environment)
                 self.assertNotIn('ANTHROPIC_AUTH_TOKEN', environment)
+                for key in ('CLAUDE_CODE_USE_BEDROCK', 'CLAUDE_CODE_USE_ANTHROPIC_AWS',
+                            'CLAUDE_CODE_USE_FOUNDRY', 'CLAUDE_CODE_USE_MANTLE',
+                            'CLAUDE_CODE_USE_VERTEX', 'CLAUDE_CODE_PROVIDER_MANAGED_BY_HOST'):
+                    self.assertNotIn(key, environment)
                 self.assertEqual(environment['CLAUDE_CONFIG_DIR'], str(self.config))
                 self.assertEqual(environment['KEEP_ME'], 'yes')
 

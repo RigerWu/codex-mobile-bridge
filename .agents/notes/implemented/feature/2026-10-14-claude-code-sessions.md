@@ -22,7 +22,11 @@ Routing the user's credentials through a new SDK service adds a second configura
 
 ## Consequences
 
-Closed local sessions can resume and expose native controls in the existing mobile/Web interface. Unknown original permissions, unavailable original configuration or uncertain writer evidence remain non-writable. On macOS, the registry PID start time is compared in UTC; other platforms do not assume an unverified process match is closed. A terminal opened between the final registry check and spawn remains a narrow upstream concurrency limitation.
+Closed local sessions can resume and expose native controls in the existing mobile/Web interface. Unknown original permissions, unavailable original configuration or uncertain writer evidence remain non-writable. On macOS and Linux, the registry PID start time is compared in UTC/C locale; Linux additionally binds the machine ID and PID namespace. A terminal opened between the final registry check and spawn remains a narrow upstream concurrency limitation.
+
+For a selected managed API profile, authentication checks and CLI launch omit ambient `ANTHROPIC_*` values and the documented Claude provider-routing variables. The native profile's settings remain the source of the selected credentials and provider.
+
+The Linux local guard was verified with focused process-domain and PID-start fixtures against the native 2.1.287 format. No native Linux Claude process or paid turn was run in this change; Windows native process identity remains fail closed pending platform evidence.
 
 An actual synthetic API request verified the selected existing authentication; an isolated capture verified project CLAUDE.md inheritance. Claude Code 2.1.287 with a loopback model service verified model selection, effective permission mode, allow/deny tool effects, interrupt of a running turn, and active-writer rejection followed by closed-session admission. Browser 390px English fixtures verified history-only, Continue, model/permissions, approvals and Stop presentation. These are macOS/native and browser checks, not Windows/Linux or physical-phone execution claims.
 

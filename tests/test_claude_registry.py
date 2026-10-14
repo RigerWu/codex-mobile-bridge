@@ -5,6 +5,7 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
 
+from bridge.clients.claude import session_registry
 from bridge.clients.claude.session_registry import assert_profile_idle, assert_session_closed
 from bridge.clients.errors import BridgeUnavailable
 
@@ -62,6 +63,30 @@ class ClaudeRegistryTests(unittest.TestCase):
         with patch('bridge.clients.claude.session_registry.sys.platform', 'darwin'), \
              patch('bridge.clients.claude.session_registry.os.kill', side_effect=ProcessLookupError):
             assert_profile_idle(self.config)
+
+    def test_linux_native_domain_and_start_time_guard(self):
+        domain = 'darwin:machine-id:pid:[123]'
+        self.entry(pidDomain=domain)
+        with patch.object(session_registry.sys, 'platform', 'linux'), \
+             patch.object(session_registry.Path, 'read_text', return_value='machine-id\n'), \
+             patch.object(session_registry.os, 'readlink', return_value='pid:[123]'):
+            self.assertEqual(session_registry._pid_domain(), domain)
+        with patch.object(session_registry, '_pid_domain', return_value=domain), \
+             patch.object(session_registry.os, 'kill'), \
+             patch.object(session_registry.subprocess, 'run', return_value=SimpleNamespace(
+                 returncode=0, stdout=self.start+'\n')) as run:
+            with self.assertRaisesRegex(BridgeUnavailable, '仍在其他终端运行'):
+                assert_session_closed(self.config, self.session_id)
+            self.assertEqual(run.call_args.kwargs['env']['LC_ALL'], 'C')
+            self.assertEqual(run.call_args.kwargs['env']['TZ'], 'UTC')
+        with patch.object(session_registry, '_pid_domain', return_value=domain), \
+             patch.object(session_registry.os, 'kill'), \
+             patch.object(session_registry.subprocess, 'run', return_value=SimpleNamespace(
+                 returncode=0, stdout='Wed Oct 14 01:00:00 2026\n')):
+            assert_session_closed(self.config, self.session_id)
+        with patch.object(session_registry, '_pid_domain', return_value='darwin:other:pid:[123]'):
+            with self.assertRaises(BridgeUnavailable):
+                assert_session_closed(self.config, self.session_id)
 
     def test_fresh_profile_without_registry_is_idle_but_symlink_is_unknown(self):
         self.registry.rmdir()

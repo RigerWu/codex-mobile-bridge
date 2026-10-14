@@ -433,6 +433,7 @@ def ready_clients(http):
         require(time.monotonic() < deadline, 'GET /api/clients exceeded the 45-second discovery window')
         require(type(value.get('pending')) is bool and isinstance(value.get('clients'), list),
                 'Client status response has no pending state or client list')
+        require(not value.get('refreshError'), 'Client status refresh failed')
         if value['pending'] is False:
             return value['clients']
         time.sleep(.25)

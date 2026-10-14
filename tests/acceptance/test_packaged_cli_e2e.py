@@ -119,6 +119,14 @@ class HttpTraceTests(unittest.TestCase):
         with self.assertRaisesRegex(AssertionError, 'pending state'):
             ready_clients(client)
 
+    def test_failed_refresh_does_not_accept_old_complete_snapshot(self):
+        client = SimpleNamespace(trace=[], checked=lambda method, route: (
+            client.trace.append({'durationMs': 4}) or
+            {'pending': False, 'refreshError': 'scan failed',
+             'clients': [{'id': 'claude', 'cliAuthReady': True}]}))
+        with self.assertRaisesRegex(AssertionError, 'refresh failed'):
+            ready_clients(client)
+
     def test_ready_after_discovery_window_still_fails(self):
         client = SimpleNamespace(trace=[], checked=lambda method, route: (
             client.trace.append({'durationMs': 4}) or {'pending': False, 'clients': []}))

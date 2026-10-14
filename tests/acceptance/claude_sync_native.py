@@ -17,16 +17,15 @@ ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT))
 from bridge.features.accounts.accounts import private_json
 from bridge.features.accounts.cli_sync import LocalCliSync
+from bridge.clients.claude.cli_session import managed_api_env
 
 
 class MockAPI(BaseHTTPRequestHandler):
-    calls = []
-
     def log_message(self, *_):
         pass
 
     def do_CONNECT(self):
-        self.calls.append(('external', self.path, '', ''))
+        self.server.calls.append(('external', self.path, '', ''))
         self.send_error(403)
 
     def do_GET(self):
@@ -37,8 +36,8 @@ class MockAPI(BaseHTTPRequestHandler):
 
     def do_POST(self):
         body = json.loads(self.rfile.read(int(self.headers.get('Content-Length', 0))))
-        self.calls.append(('model', self.path, self.headers.get('x-api-key') or
-                           self.headers.get('Authorization'), body.get('model')))
+        self.server.calls.append(('model', self.path, self.headers.get('x-api-key') or
+                                  self.headers.get('Authorization'), body.get('model')))
         response = {'id': 'msg_fixture', 'type': 'message', 'role': 'assistant',
                     'content': [{'type': 'text', 'text': 'Fixture reply.'}], 'model': body.get('model'),
                     'stop_reason': 'end_turn', 'stop_sequence': None,
@@ -62,6 +61,19 @@ class MockAPI(BaseHTTPRequestHandler):
         self.wfile.flush()
 
 
+def native_turn(binary, root, profile, server, credential):
+    before = len(server.calls)
+    run_env = managed_api_env()
+    result = subprocess.run([binary, '-p', 'Synthetic local fixture only.', '--output-format', 'json',
+                             '--max-turns', '1', '--no-session-persistence'],
+                            cwd=root, env=run_env, capture_output=True, text=True, timeout=35)
+    assert any(kind == 'model' and path.split('?', 1)[0] == '/v1/messages'
+               and actual == credential and model == profile['model']
+               for kind, path, actual, model in server.calls[before:]), [
+        (kind, path, model) for kind, path, _, model in server.calls[before:]]
+    assert result.returncode == 0, 'Native CLI rejected mock response'
+
+
 def main():
     binary = shutil.which('claude')
     if not binary:
@@ -77,57 +89,76 @@ def main():
                             'ANTHROPIC_API_KEY': 'native-fixture-key',
                             'ANTHROPIC_MODEL': 'native-fixture-model'}}
         private_json(native/'settings.json', original)
-        server = ThreadingHTTPServer(('127.0.0.1', 0), MockAPI)
-        threading.Thread(target=server.serve_forever, daemon=True).start()
-        origin = f'http://127.0.0.1:{server.server_port}'
+        servers = [ThreadingHTTPServer(('127.0.0.1', 0), MockAPI) for _ in range(2)]
+        for server in servers:
+            server.calls = []
+            threading.Thread(target=server.serve_forever, daemon=True).start()
+        origins = [f'http://127.0.0.1:{server.server_port}' for server in servers]
         env = {'HOME': str(root), 'CLAUDE_CONFIG_DIR': str(native), 'ANTHROPIC_API_KEY': 'ambient-wrong',
                'ANTHROPIC_BASE_URL': 'https://ambient.invalid', 'ANTHROPIC_MODEL': 'ambient-wrong-model',
-               'HTTP_PROXY': origin, 'HTTPS_PROXY': origin, 'ALL_PROXY': origin,
-               'http_proxy': origin, 'https_proxy': origin, 'all_proxy': origin,
+               'HTTP_PROXY': origins[0], 'HTTPS_PROXY': origins[0], 'ALL_PROXY': origins[0],
+               'http_proxy': origins[0], 'https_proxy': origins[0], 'all_proxy': origins[0],
                'NO_PROXY': '127.0.0.1,localhost', 'no_proxy': '127.0.0.1,localhost'}
         bridge = SimpleNamespace(data_dir=root)
         sync = LocalCliSync(bridge)
         rows = []
-        for name in ('A', 'B'):
+        for name, origin in zip(('A', 'B'), origins):
             identifier = (name.lower()*32)
             path = root/'cli-access'/'claude'/identifier/'api.json'
             private_json(path, {'key': f'fixture-key-{name}'})
             rows.append({'id': identifier, 'kind': 'api', 'directory': str(native),
-                         'secretPath': str(path), 'baseUrl': origin+f'/{name.lower()}',
+                         'secretPath': str(path), 'baseUrl': origin,
                          'model': f'fixture-model-{name}',
                          'authScheme': 'bearer' if name == 'B' else 'x-api-key'})
         try:
             with patch.dict(os.environ, env):
                 assert sync.preflight('claude')['sharedWithDesktop'] is False
+                owned = SimpleNamespace(process=SimpleNamespace(poll=lambda: None),
+                                        condition=threading.Condition(), active=True, pending={})
+                busy_cli = SimpleNamespace(lock=threading.RLock(), owned={'fixture': owned})
+                bridge.desktop_sessions = SimpleNamespace(adapters={'claude': SimpleNamespace(cli=busy_cli)})
+                try:
+                    sync.preflight('claude')
+                except ValueError:
+                    pass
+                else:
+                    raise AssertionError('Active gateway-owned Claude session did not block switching')
+                del bridge.desktop_sessions
                 assert sync.apply('claude', rows[0])['status'] == 'applied'
                 assert sync.verify('claude', rows[0])['status'] == 'configured'
                 assert json.loads((native/'settings.json').read_text())['hooks'] == original['hooks']
+                native_turn(binary, root, rows[0], servers[0], 'fixture-key-A')
                 before = (native/'settings.json').read_bytes()
+                assert sync.apply('claude', rows[1])['status'] == 'applied'
+                with patch.object(sync, '_claude_auth', side_effect=ValueError('fixture verification failure')):
+                    try:
+                        sync.verify('claude', rows[1])
+                    except ValueError as error:
+                        assert str(error) == 'fixture verification failure'
+                    else:
+                        raise AssertionError('Expected injected verification failure')
+                sync.restore('claude', {})
+                assert (native/'settings.json').read_bytes() == before
+                assert sync.verify('claude', rows[0])['status'] == 'configured'
+                native_turn(binary, root, rows[0], servers[0], 'fixture-key-A')
                 assert sync.apply('claude', rows[1])['status'] == 'applied'
                 assert sync.verify('claude', rows[1])['status'] == 'configured'
                 selected = json.loads((native/'settings.json').read_text())
                 assert selected['env']['UNRELATED_FIXTURE'] == 'preserved'
                 assert selected['permissions'] == original['permissions']
                 assert selected['hooks'] == original['hooks']
-                run_env = {key: value for key, value in os.environ.items()
-                           if not key.startswith('ANTHROPIC_')}
-                result = subprocess.run([binary, '-p', 'Synthetic local fixture only.', '--output-format', 'json',
-                                         '--model', rows[1]['model'], '--max-turns', '1', '--no-session-persistence'],
-                                        cwd=root, env=run_env, capture_output=True, text=True, timeout=35)
-                assert any(kind == 'model' and path.split('?', 1)[0] == '/b/v1/messages'
-                           and credential == 'Bearer fixture-key-B' and model == 'fixture-model-B'
-                           for kind, path, credential, model in MockAPI.calls), [
-                    (kind, path, model) for kind, path, _, model in MockAPI.calls]
-                assert result.returncode == 0, 'Native CLI rejected mock response'
-                sync.restore('claude', {})
-                assert (native/'settings.json').read_bytes() == before
+                native_turn(binary, root, rows[1], servers[1], 'Bearer fixture-key-B')
                 assert sync.apply('claude', {'kind': 'native', 'directory': str(native)})['status'] == 'selected'
-                assert sync.verify('claude', {'kind': 'native', 'directory': str(native)})['status'] == 'configured'
+                with patch.dict(os.environ, managed_api_env(), clear=True):
+                    assert sync.verify('claude', {'kind': 'native', 'directory': str(native)})['status'] == 'configured'
                 assert json.loads((native/'settings.json').read_text()) == original
-                print('PASS: A to B native Claude settings; ambient variables excluded; B endpoint, bearer credential and model; rollback and native switch-back preserve settings')
+                blocked = sum(kind == 'external' for server in servers for kind, *_ in server.calls)
+                print('PASS: native A/B endpoints, credentials and default models; injected B verification rollback restores native A turn; native switch-back preserves settings; '
+                      f'{blocked} external CONNECT attempts denied')
         finally:
-            server.shutdown()
-            server.server_close()
+            for server in servers:
+                server.shutdown()
+                server.server_close()
 
 
 if __name__ == '__main__':

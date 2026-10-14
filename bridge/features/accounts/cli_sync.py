@@ -3,6 +3,7 @@
 import hashlib
 import json
 import subprocess
+import tempfile
 from pathlib import Path
 
 from bridge.clients.desktop_app import DesktopApp
@@ -110,11 +111,28 @@ class LocalCliSync:
             raise ValueError('Claude Code CLI 认证状态无法核验') from exc
         if not isinstance(status, dict):
             raise ValueError('Claude Code CLI 认证状态无法核验')
-        config_dir = status.get('configDirectory')
         if (result.returncode or status.get('loggedIn') is not True
-                or not isinstance(config_dir, str) or Path(config_dir).resolve() != directory.resolve()
                 or expected and status.get('authMethod') != expected):
             raise ValueError('Claude Code CLI 未识别所选认证方式')
+        if 'configDirectory' not in status:
+            # Older Claude Code versions omit the directory in auth status.
+            # Require a negative control to prove this invocation uses the
+            # selected CLAUDE_CONFIG_DIR rather than another local profile.
+            try:
+                with tempfile.TemporaryDirectory(prefix='.cmb-claude-auth-', dir=directory.parent) as control_dir:
+                    control_env = {**env, 'CLAUDE_CONFIG_DIR': control_dir}
+                    control = subprocess.run([profile['binary'], 'auth', 'status', '--json'],
+                                             env=control_env, capture_output=True, text=True, timeout=10)
+                    control_status = json.loads(control.stdout)
+            except (OSError, subprocess.SubprocessError, ValueError) as exc:
+                raise ValueError('Claude Code CLI 认证状态无法核验') from exc
+            if (not isinstance(control_status, dict) or control_status.get('loggedIn') is not False
+                    or control_status.get('authMethod') != 'none'):
+                raise ValueError('Claude Code CLI 配置目录无法核验')
+        else:
+            config_dir = status['configDirectory']
+            if not isinstance(config_dir, str) or Path(config_dir).resolve() != directory.resolve():
+                raise ValueError('Claude Code CLI 配置目录无法核验')
         return status
 
     def preflight(self, provider):

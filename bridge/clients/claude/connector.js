@@ -184,15 +184,24 @@
     if (method === 'getAll' && Array.isArray(result)) return result.map(publicSession);
     if (method === 'getSession') return publicSession(result);
     if (method === 'getTranscript' && Array.isArray(result)) return result
-      .filter(row => ['user', 'assistant', 'result'].includes(row.type || row.message?.role))
+      .filter(row => ['user', 'assistant', 'result'].includes(row.type || row.message?.role) ||
+        row.type==='system'&&row.subtype==='compact_boundary')
       .map(row => {
-        if(row.type==='result')return Object.fromEntries(
+        if(row.type==='system')return {type:'system',subtype:'compact_boundary'};
+        if(row.type==='result'){
+          const modelUsage=row.modelUsage&&typeof row.modelUsage==='object'&&!Array.isArray(row.modelUsage)
+            ? Object.fromEntries(Object.entries(row.modelUsage).filter(([model,usage])=>
+              model&&usage&&typeof usage==='object'&&Number.isSafeInteger(usage.contextWindow)&&usage.contextWindow>0)
+              .map(([model,usage])=>[model,{contextWindow:usage.contextWindow}])) : {};
+          return Object.fromEntries(
           ['type','uuid','subtype'].filter(k=>typeof row[k]==='string').map(k=>[k,row[k]])
           .concat(['is_error','isSidechain','isSyntheticResult','isSynthetic','isMeta','isCompactSummary']
             .filter(k=>typeof row[k]==='boolean').map(k=>[k,row[k]]),
             typeof row.num_turns==='number'&&Number.isFinite(row.num_turns)?[['num_turns',row.num_turns]]:[],
             'parent_tool_use_id' in row?[['parent_tool_use_id',row.parent_tool_use_id==null?null:
-              typeof row.parent_tool_use_id==='string'?row.parent_tool_use_id:'nested']]:[]));
+              typeof row.parent_tool_use_id==='string'?row.parent_tool_use_id:'nested']]:[],
+            Object.keys(modelUsage).length?[['modelUsage',modelUsage]]:[]));
+        }
         const source = row.message || row;
         let content = typeof source.content === 'string' ? source.content :
           (Array.isArray(source.content) ? source.content : []).filter(b =>
@@ -210,9 +219,16 @@
             else if (!tool) content.push({type:'tool_result',content:detail});
           }
         }
-        return {type:row.type,uuid:row.uuid,isSynthetic:row.isSynthetic === true,isMeta:row.isMeta === true,
+        const usage=source.usage&&typeof source.usage==='object'?Object.fromEntries(
+          ['input_tokens','cache_creation_input_tokens','cache_read_input_tokens','context_window']
+            .filter(key=>Number.isSafeInteger(source.usage[key])&&source.usage[key]>=0)
+            .map(key=>[key,source.usage[key]])):null;
+        return {type:row.type||source.role,uuid:row.uuid,isSynthetic:row.isSynthetic === true,isMeta:row.isMeta === true,
+          isSidechain:row.isSidechain === true,
+          ...(typeof row.parent_tool_use_id==='string'?{parent_tool_use_id:row.parent_tool_use_id}:{}),
           message:{id:source.id,role:source.role || row.type,content,
             ...(typeof source.model==='string'?{model:source.model}:{}),
+            ...(usage&&Object.keys(usage).length?{usage}:{}),
             ...(typeof source.effort==='string'?{effort:source.effort}:{})}};
       });
     return result ?? null;

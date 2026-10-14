@@ -25,7 +25,7 @@ class CliAccessTests(unittest.TestCase):
                         'origin': 'default:'+str(self.native)+':none'}
         self.accounts = SimpleNamespace(public=Mock(return_value={
             'accounts': [], 'activeId': None, 'activeVerified': False,
-            'switch': {}, 'blockers': []}), gate=threading.RLock(), check_ready=Mock())
+            'switch': {}, 'blockers': []}), gate=threading.RLock(), lock=threading.RLock(), check_ready=Mock())
         self.bridge = SimpleNamespace(data_dir=self.root, accounts=self.accounts,
                                       account=SimpleNamespace(lock=threading.RLock()))
         self.profile_patch = patch('bridge.features.accounts.cli_access._profile', return_value=self.profile)
@@ -64,6 +64,43 @@ class CliAccessTests(unittest.TestCase):
         self.assertFalse(self.native.exists(), 'saving API access must not initialize native settings')
         self.assertEqual(self.manager.index['claude'][0]['directory'], str(self.native))
         self.assertTrue((self.root/'cli-access'/'claude'/identifier/'api.json').is_file())
+
+    def test_claude_models_probe_uses_saved_key_without_switching(self):
+        identifier = self.save_api()
+        with patch('bridge.features.accounts.cli_access.model_ids', return_value=['claude-a']) as models:
+            result = self.manager.change({'provider': 'claude', 'action': 'models', 'id': identifier})
+        models.assert_called_once_with('https://fixture.invalid/v1', 'private-fixture-key', headers={
+            'Authorization': 'Bearer private-fixture-key', 'anthropic-version': '2023-06-01'})
+        self.assertEqual(result['probe'], {'provider': 'claude', 'id': identifier,
+                         'status': 'reachable', 'scope': 'models', 'models': ['claude-a'], 'modelCount': 1})
+        self.assertIsNone(result['claude']['activeId'])
+        self.assertNotIn('private-fixture-key', json.dumps(result))
+        with patch('bridge.features.accounts.cli_access.model_ids', return_value=['claude-a']) as models:
+            result = self.manager.change({'provider': 'claude', 'action': 'test', 'id': identifier})
+        self.assertIsNone(result['probe']['models'])
+        self.assertEqual(result['probe']['modelCount'], 1)
+        models.assert_called_once()
+
+    def test_codex_models_probe_reuses_saved_credentials_without_switching(self):
+        row = {'id': 'a'*32, 'kind': 'api', 'baseUrl': 'https://codex.invalid/v1'}
+        self.accounts.row = Mock(return_value=row)
+        self.accounts.api_credentials = Mock(return_value=(row['baseUrl'], 'saved-private-key'))
+        with patch('bridge.features.accounts.cli_access.model_ids', return_value=['codex-a']) as models:
+            result = self.manager.change({'provider': 'codex', 'action': 'models', 'id': row['id']})
+        self.accounts.api_credentials.assert_called_once()
+        models.assert_called_once_with(row['baseUrl'], 'saved-private-key')
+        self.assertEqual(result['probe']['models'], ['codex-a'])
+        self.assertNotIn('saved-private-key', json.dumps(result))
+        self.assertFalse(self.manager.codex_switch)
+
+    def test_probe_rejects_native_and_extra_request_fields(self):
+        identifier = self.save_api()
+        with self.assertRaisesRegex(ValueError, '请求无效'):
+            self.manager.change({'provider': 'claude', 'action': 'models', 'id': identifier,
+                                 'apiKey': 'untrusted'})
+        self.manager.index['claude'][0]['kind'] = 'native'
+        with self.assertRaisesRegex(ValueError, '已保存的 API'):
+            self.manager.change({'provider': 'claude', 'action': 'models', 'id': identifier})
 
     def test_missing_explicit_native_directory_cannot_be_initialized(self):
         self.native.rmdir()

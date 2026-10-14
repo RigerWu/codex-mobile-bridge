@@ -56,4 +56,5 @@
 .accounts-panel .accounts-import-name{max-width:320px}
 .accounts-client-editor{margin-top:18px;padding:18px;border:1px solid var(--line,#dfe3eb);border-radius:12px}.accounts-client-editor label{display:grid;gap:6px;margin:12px 0}.accounts-client-editor input,.accounts-client-editor textarea,.accounts-client-editor select{box-sizing:border-box;width:100%;font:inherit}.accounts-client-editor textarea{resize:vertical;min-height:80px}.accounts-client-editor>button{margin-right:8px}
 
-.picker .cli-access-panel>h2{display:none}
+.picker .cli-access-panel>h2,.account-compact .cli-access-panel>h2{display:none}
+.cli-access-model-hint{grid-column:1/-1;margin:0}.cli-access-probe{font-size:12px;max-height:220px;overflow:auto;overflow-wrap:anywhere}

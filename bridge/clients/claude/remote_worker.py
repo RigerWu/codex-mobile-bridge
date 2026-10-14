@@ -241,6 +241,9 @@ def command(request):
     operation = request.get('operation')
     if operation == 'list':
         return {'profile': found, 'sessions': sessions(found) if found else []}
+    if operation == 'projects':
+        return {'profile': found, 'sessions': sessions(found) if found else [],
+                'authReady': auth_ready(found) if found else False}
     if not found or found['origin'] != request.get('origin'):
         raise ValueError('原 Claude Code 配置已变化或不可用')
     if operation == 'detail':
@@ -281,19 +284,42 @@ def resume(request):
     env = os.environ.copy()
     env['CLAUDE_CONFIG_DIR'] = found['directory']
     os.chdir(cwd)
-    print(json.dumps({'type': 'bridge_preflight', 'status': 'ready'}), flush=True)
+    print(json.dumps({'type': 'bridge_preflight', 'status': 'ready', 'cwd': str(cwd)}), flush=True)
+    os.execvpe(found['binary'], arguments, env)
+
+
+def create(request):
+    found = profile()
+    if not found or found['origin'] != request.get('origin') or not auth_ready(found):
+        raise ValueError('原 Claude Code 账号配置已变化或不可用')
+    native = str(uuid.UUID(request['native']))
+    cwd = Path(request['cwd']).resolve(strict=True)
+    if not cwd.is_dir():
+        raise ValueError('原项目目录不可用')
+    directory = upload_root(found, request['scope'])
+    if profile() != found:
+        raise ValueError('原 Claude Code 配置已变化或不可用')
+    arguments = [found['binary'], '-p', '--session-id', native, '--input-format', 'stream-json',
+                 '--output-format', 'stream-json', '--verbose', '--replay-user-messages',
+                 '--setting-sources', 'user,project,local', '--permission-prompt-tool', 'stdio',
+                 '--permission-prompts', 'host', '--allow-dangerously-skip-permissions',
+                 '--add-dir', str(directory)]
+    env = os.environ.copy()
+    env['CLAUDE_CONFIG_DIR'] = found['directory']
+    os.chdir(cwd)
+    print(json.dumps({'type': 'bridge_preflight', 'status': 'ready', 'cwd': str(cwd)}), flush=True)
     os.execvpe(found['binary'], arguments, env)
 
 
 if __name__ == '__main__':
     try:
         request = json.loads(sys.stdin.readline())
-        if request.get('operation') == 'resume':
-            resume(request)
+        if request.get('operation') in ('resume', 'create'):
+            (resume if request['operation'] == 'resume' else create)(request)
         else:
             print(json.dumps({'ok': True, 'value': command(request)}, ensure_ascii=False), flush=True)
     except Exception as exc:
-        if 'request' in locals() and request.get('operation') == 'resume':
+        if 'request' in locals() and request.get('operation') in ('resume', 'create'):
             value = {'type': 'bridge_preflight', 'status': 'blocked', 'message': str(exc)[:300]}
         else:
             value = {'ok': False, 'message': str(exc)[:300]}

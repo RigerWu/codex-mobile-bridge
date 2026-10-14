@@ -14,6 +14,8 @@ A CLI-only Codex switch with Desktop stopped uses the existing account preparati
 
 Claude Desktop synchronization accepts only the currently effective, fingerprint-matched saved API profile. It creates a managed Claude Code profile and selects it after Desktop succeeds. Native OAuth/cookie profiles remain separate and are selected read-only. Claude Code API settings use its documented base URL, authentication and model environment variables. No model request is used for verification.
 
+The local CLI access controls are shown inside each provider's account management view in the web, mobile and gateway desktop interfaces. Codex and Claude Code have separate fixed-provider panels. A saved API access can explicitly query its upstream model-list endpoint or test that endpoint using its private saved credential without selecting the access or sending a conversation request. This test confirms model-list endpoint connectivity and authorization only; users can still enter a model ID manually when the endpoint is unavailable.
+
 ## Verification
 
 Targeted Python fixtures cover Codex rollback, live-daemon blocking, managed Claude API settings, Desktop API import, and separate Desktop/CLI outcomes. UI fixtures cover opt-in checkbox submission. An isolated native Codex acceptance fixture with a loopback model server confirmed that a fresh CLI turn uses its selected model and endpoint, with external connection attempts blocked. That fixture did not exercise an account switch. Real account changes, paid model calls, existing daemon reload, and SSH configuration changes were not run.

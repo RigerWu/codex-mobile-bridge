@@ -133,10 +133,36 @@ class StoreTests(unittest.TestCase):
             ])
         rows = self.store.list()
         self.assertEqual({r['id']: r['origin'] for r in rows}, {'desktop': 'desktop', 'cli': 'cli'})
+        self.assertEqual(self.store.available_sources(), ['cli', 'desktop'])
+        self.assertEqual([r['id'] for r in self.store.list(source='desktop')], ['desktop'])
         for row in rows:
             self.assertEqual(self.store.get(row['id'])['origin'], row['origin'])
         self.assertEqual({r['id'] for r in self.store.notification_changes()}, {'desktop', 'cli'})
         self.assertEqual(self.store.discovery_diagnostics('cli')['target']['origin'], 'cli')
+
+    def test_inventory_tolerates_schema_without_source_columns(self):
+        self.path.unlink()
+        with sqlite3.connect(self.path) as db:
+            db.execute('CREATE TABLE threads(id TEXT, title TEXT, updated_at INT, archived INT)')
+        self.assertEqual(self.store.available_sources(), [])
+        self.assertEqual(self.store.list(), [])
+
+    def test_source_filter_precedes_pagination_and_inventory_ignores_search_archive_and_page(self):
+        with sqlite3.connect(self.path) as db:
+            db.executemany('INSERT INTO threads VALUES (?,?,?,?,?,?,?)',
+                           [(f'app-{i}', 'App', '/fixture', 200 + i, 0, 'Codex Desktop', 'vscode') for i in range(120)])
+            db.executemany('INSERT INTO threads VALUES (?,?,?,?,?,?,?)', [
+                ('cli-deep', 'Find me', '/fixture', 2, 0, 'codex_cli_rs', 'cli'),
+                ('cli-archived', 'Older', '/fixture', 3, 1, 'codex_cli_rs', 'cli'),
+                ('legacy-desktop', 'Legacy App', '/fixture', 4, 0, None, 'vscode'),
+            ])
+        self.assertEqual(self.store.available_sources(), ['cli', 'desktop'])
+        self.assertEqual([row['id'] for row in self.store.list(source='cli', limit=100)], ['cli-deep'])
+        self.assertEqual([row['id'] for row in self.store.list(source='cli', query='Find', offset=0)], ['cli-deep'])
+        self.assertEqual([row['id'] for row in self.store.list(source='cli', archived=True)], ['cli-archived'])
+        self.assertEqual(len(self.store.list(source='desktop', limit=100)), 100)
+        self.assertEqual(len(self.store.list(source='desktop', limit=100, offset=100)), 22)
+        self.assertIn('legacy-desktop', {row['id'] for row in self.store.list(source='desktop', offset=100)})
 
 
 class RecentHistoryTests(unittest.TestCase):

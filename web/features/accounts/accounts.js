@@ -1,7 +1,7 @@
 /* Shared account selector; enrollment controls exist only in the desktop host. */
 class AccountsPanel {
-  constructor({root,read,request,desktop=false,toolbar=null,onChanged=()=>{},onUpdate=()=>{},onReset=null}){
-    Object.assign(this,{root,read,request,desktop,toolbar,onChanged,onUpdate,onReset});this.value=null;this.busy=false;this.timer=null;this.generation=0;this.operationError=false;this.expandedModels=new Set();this.syncLocalCliIds=new Set();
+  constructor({root,read,request,desktop=false,toolbar=null,onChanged=()=>{},onUpdate=()=>{}}){
+    Object.assign(this,{root,read,request,desktop,toolbar,onChanged,onUpdate});this.value=null;this.busy=false;this.timer=null;this.generation=0;this.operationError=false;this.expandedModels=new Set();this.syncLocalCliIds=new Set();
     this.build();
   }
   text(value){return typeof BridgeI18n==='undefined'?value:BridgeI18n.t(value);}
@@ -17,8 +17,7 @@ class AccountsPanel {
     this.status=this.node('p',undefined,'account-muted');this.status.setAttribute('role','status');
     this.error=this.node('p',undefined,'error');this.error.setAttribute('role','alert');
     this.rows=this.node('div',undefined,'accounts-list');
-    this.currentReset=this.button('查看并使用重置卡',()=>this.onReset?.());this.currentReset.hidden=true;
-    this.current=this.node('p',undefined,'accounts-current');this.blocked=this.node('div',undefined,'account-muted');this.root.append(this.current,this.status,this.error,this.currentReset,this.blocked,this.rows);
+    this.current=this.node('p',undefined,'accounts-current');this.blocked=this.node('div',undefined,'account-muted');this.root.append(this.current,this.status,this.error,this.blocked,this.rows);
     this.management=this.node('div',undefined,'accounts-management');this.root.append(this.management);
     this.tools=this.node('details');this.tools.append(this.node('summary','提醒与 Codex Desktop 更新'));
     this.reminders=this.node('div');this.updates=this.node('section');this.tools.append(this.reminders,this.updates);this.management.append(this.tools);
@@ -204,7 +203,6 @@ class AccountsPanel {
     else if(value.switch?.cliSync?.status==='shared-config-unverified')this.status.textContent+=' · '+this.text('共享配置已变更，本机 CLI 尚未核验');
     this.status.hidden=phase==='idle'&&value.current?.status==='ready';
     const current=value.current;this.current.textContent=this.text('当前接入：')+(current?.status==='ready'?(current.kind==='signedOut'?this.text('Codex 未登录'):current.name+(current.id?'':this.text('（未保存到列表）'))):this.text(current?.status==='checking'?'正在识别…':'暂未识别'));
-    this.currentReset.hidden=!this.onReset||current?.kind!=='chatgpt'||!!value.activeId;this.currentReset.disabled=this.busy||switching;
     this.blocked.replaceChildren();for(const row of value.blockers||[]){const line=this.node('p');line.textContent=this.text(({approval:'待确认',running:'运行中',queued:'排队中',unknown:'发送结果未确认'})[row.reason]||'运行中')+' · '+row.title;if(row.reason==='unknown'&&row.submissionId){
       const ignore=this.button('忽略',()=>{if(window.confirm(this.text('忽略只会移除未确认提示，不会撤回或重发消息。请先检查聊天记录。')))return this.perform({action:'ignoreSubmission',threadId:row.id,submissionId:row.submissionId,host:row.host||'local'});});
       ignore.disabled=this.busy||switching;line.append(ignore);
@@ -221,10 +219,8 @@ class AccountsPanel {
         if(row.details?.usage?.planType||row.planType)title.append(this.node('span',row.details?.usage?.planType||row.planType,'accounts-plan'));
         const usage=row.details?.usage;
         const count=usage?.resetCredits?.availableCount;
-        if(this.onReset){
-          const reset=this.button('使用重置卡',()=>this.openReset(row));reset.classList.add('accounts-reset');reset.disabled=this.busy||switching;
-          reset.setAttribute('aria-label',this.text('查看并使用所选账号的重置卡'));title.append(reset);
-        }
+        const reset=this.button('使用重置卡',()=>this.openReset(row));reset.classList.add('accounts-reset');reset.disabled=this.busy||switching;
+        reset.setAttribute('aria-label',this.text('查看并使用所选账号的重置卡'));title.append(reset);
         if(usage?.resetCredits)title.append(this.node('span',this.text('重置卡')+' · '+(count??this.text('暂未提供')),'accounts-credit'));
       }
       name.append(title,this.node('p',row.kind==='chatgpt'?(row.email||this.text('官方 ChatGPT 账号')):(row.baseUrl+' · '+row.model),'account-muted'));

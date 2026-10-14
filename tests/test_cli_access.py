@@ -54,6 +54,20 @@ class CliAccessTests(unittest.TestCase):
         self.assertEqual(json.loads((directory/'api.json').read_text())['key'], 'private-fixture-key')
         self.assertEqual(self.manager.index['claude'][0]['directory'], str(self.native))
 
+    def test_api_can_be_saved_before_default_native_directory_exists(self):
+        self.native.rmdir()
+        identifier = self.save_api()
+        self.assertFalse(self.native.exists(), 'saving API access must not initialize native settings')
+        self.assertEqual(self.manager.index['claude'][0]['directory'], str(self.native))
+        self.assertTrue((self.root/'cli-access'/'claude'/identifier/'api.json').is_file())
+
+    def test_missing_explicit_native_directory_cannot_be_initialized(self):
+        self.native.rmdir()
+        self.profile['origin'] = 'environment:'+str(self.native)+':none'
+        with self.assertRaisesRegex(ValueError, '配置目录不可用'):
+            self.save_api()
+        self.assertFalse(self.native.exists())
+
     def test_switch_keeps_native_directory_and_requires_verification(self):
         identifier = self.save_api()
         sync = Mock()

@@ -20,6 +20,7 @@ contextBridge.exposeInMainWorld('bridgeDesktop',{
   readCredentials:value=>ipcRenderer.invoke('bridge:read-credentials',value),
   snapshot:()=>ipcRenderer.invoke('bridge:snapshot'),
   accounts:value=>ipcRenderer.invoke('bridge:accounts',value),
+  cliAccess:value=>ipcRenderer.invoke('bridge:cli-access',value),
   desktopSessions:value=>ipcRenderer.invoke('bridge:desktop-sessions',value),
   harness:value=>ipcRenderer.invoke('bridge:harness',value),
   account:value=>ipcRenderer.invoke('bridge:account',value),

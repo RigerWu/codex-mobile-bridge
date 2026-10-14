@@ -3,6 +3,7 @@
 import hashlib
 import json
 import os
+import re
 import shutil
 import subprocess
 import threading
@@ -13,9 +14,33 @@ from pathlib import Path
 from bridge.clients.claude import model
 from bridge.clients.claude.session_registry import assert_session_closed
 from bridge.clients.errors import BridgeUnavailable
+from bridge.clients.uploads import DesktopUploads
 
 
 MODES = {'default', 'acceptEdits', 'plan', 'dontAsk', 'auto', 'bypassPermissions'}
+PERMISSION_OPTIONS = (
+    ('default', '默认权限', '需要时请求确认'),
+    ('acceptEdits', '允许文件编辑', '文件编辑自动允许，其他操作仍按规则确认'),
+    ('plan', '计划模式', '先制定计划'),
+    ('dontAsk', '不询问', '无法自动允许的操作直接拒绝'),
+    ('auto', '自动模式', '由 Claude 判断可自动执行的操作'),
+    ('bypassPermissions', '完全访问', '跳过权限确认'),
+)
+
+
+def _skill_catalog(catalog):
+    """Use commands loaded by the native CLI with this profile and project."""
+    rows = {}
+    for item in catalog.get('commands') or []:
+        if not isinstance(item, dict) or item.get('builtin'):
+            continue
+        name = item.get('name')
+        if not isinstance(name, str) or not re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9_:/-]{0,127}', name):
+            continue
+        rows[name] = {'id': name, 'name': name, 'description': item.get('description') or '',
+                      'kind': 'skill', 'selectable': True}
+    return sorted(rows.values(), key=lambda row: row['id'])
+IMAGE_URL = re.compile(r'data:(image/(?:png|jpeg|gif|webp));base64,([A-Za-z0-9+/]+={0,2})\Z')
 
 
 class ResumePreflightBlocked(BridgeUnavailable):
@@ -59,6 +84,8 @@ def _profile():
 
 def _auth_ready(profile):
     env = os.environ.copy()
+    if profile.get('managedApi'):
+        env = {key: value for key, value in env.items() if not key.startswith('ANTHROPIC_')}
     env['CLAUDE_CONFIG_DIR'] = str(profile['directory'])
     try:
         process = subprocess.run([profile['binary'], 'auth', 'status', '--json'],
@@ -90,6 +117,31 @@ def _text(content):
         return '\n'.join(item.get('text', '') for item in content
                          if isinstance(item, dict) and item.get('type') == 'text')
     return ''
+
+
+def _message_content(body):
+    """Build the CLI's native stream-json user content from server-resolved uploads."""
+    images = body.get('resolvedImages') or []
+    files = body.get('resolvedFiles') or []
+    if not images and not files:
+        return body['text']
+    text = body['text']
+    if files:
+        references = []
+        for item in files:
+            if not isinstance(item, dict) or not isinstance(item.get('path'), str) or not Path(item['path']).is_absolute() or not isinstance(item.get('name'), str):
+                raise ValueError('文件附件格式无效')
+            references.append({'name': item['name'], 'path': item['path']})
+        text += ('\n\n' if text.strip() else '') + '请读取并参考这些已上传的本机文件：\n' + json.dumps(references, ensure_ascii=False)
+    # Claude parses slash invocations from a single text block. Keep file
+    # references with that text so adding an attachment preserves the Skill.
+    blocks = [{'type': 'text', 'text': text}] if text.strip() else []
+    for image in images:
+        match = IMAGE_URL.fullmatch(image.get('url', '')) if isinstance(image, dict) else None
+        if not match:
+            raise ValueError('图片附件格式无效')
+        blocks.append({'type': 'image', 'source': {'type': 'base64', 'media_type': match[1], 'data': match[2]}})
+    return blocks
 
 
 def _saved(path, origin):
@@ -169,6 +221,9 @@ class _Owned:
                             self.process.terminate()
                         self.model = event.get('model') or self.model
                         self.permission = event.get('permissionMode') or self.permission
+                    elif kind == 'system' and event.get('subtype') == 'status':
+                        if event.get('permissionMode') in MODES:
+                            self.permission = event['permissionMode']
                     elif kind == 'result':
                         self.active = False
                         self.pending.clear()
@@ -214,8 +269,10 @@ class _Owned:
 
 
 class ClaudeCli:
-    def __init__(self):
+    def __init__(self, upload_root=None, profile_resolver=None):
+        self.profile_resolver = profile_resolver or (lambda: _profile())
         self.lock = threading.RLock()
+        self.upload_root = Path(upload_root) if upload_root is not None else None
         self.owned = {}
         self.index = {}
         self.auth_cache = None
@@ -237,7 +294,7 @@ class ClaudeCli:
     def status(self):
         if self.closed:
             return {'cliAvailable': False, 'cliAuthReady': False}
-        profile = _profile()
+        profile = self.profile_resolver()
         return {'cliAvailable': bool(profile), 'cliAuthReady': self._ready(profile)}
 
     def busy(self):
@@ -250,7 +307,7 @@ class ClaudeCli:
             return False
 
     def listing(self):
-        profile = _profile()
+        profile = self.profile_resolver()
         if not profile:
             return {'connected': False, 'sessions': []}
         rows = {}
@@ -293,7 +350,7 @@ class ClaudeCli:
         return value
 
     def _get(self, sid):
-        profile = _profile()
+        profile = self.profile_resolver()
         with self.lock:
             cached = self.index.get(sid)
         row = None
@@ -311,7 +368,7 @@ class ClaudeCli:
         return row
 
     def contains(self, sid):
-        profile = _profile()
+        profile = self.profile_resolver()
         with self.lock:
             row = self.index.get(sid)
         if row and profile and row['origin'] == profile['origin'] and not row['path'].is_symlink() and row['path'].is_file():
@@ -346,7 +403,7 @@ class ClaudeCli:
                     events = row['events']
                 messages = model.transcript(events)
                 unique = {item['id']: item for item in messages}
-                can_resume = (not live and row['permissionKnown'] and self._ready(_profile())
+                can_resume = (not live and row['permissionKnown'] and self._ready(self.profile_resolver())
                               and Path(row['cwd']).is_dir())
                 return {'connected': True, 'session': public, 'messages': list(unique.values()),
                         'turns': model.turns(events),
@@ -355,7 +412,7 @@ class ClaudeCli:
                             'resume': can_resume,
                             'send': live and public['connectionState'] == 'ready',
                             'models': live, 'permissions': live, 'stop': live,
-                            'attachments': False, 'queue': False, 'steer': False, 'skills': False}}
+                            'attachments': True, 'queue': False, 'steer': False, 'skills': live}}
             if action == 'catalog':
                 if not live:
                     return {'models': [], 'capabilities': {'models': False}, 'notice': '请先继续这条 Claude Code 会话'}
@@ -363,16 +420,18 @@ class ClaudeCli:
                 return {'models': [{'id': item.get('value') or item.get('id'),
                                     'name': item.get('displayName') or item.get('name') or item.get('value') or item.get('id'),
                                     'efforts': []} for item in models if isinstance(item, dict) and (item.get('value') or item.get('id'))],
-                        'currentModel': public['model'], 'currentEffort': '', 'capabilities': {'models': True, 'effort': False},
-                        'skills': []}
+                        'currentModel': public['model'], 'currentEffort': '', 'capabilities': {'models': True, 'effort': False,
+                                                                                             'skills': True},
+                        'skills': _skill_catalog(owned.catalog)}
             if action == 'access' and 'mode' not in body:
-                options = [{'value': mode, 'label': label} for mode, label in
-                           (('default', '默认权限'), ('acceptEdits', '允许文件编辑'), ('plan', '计划模式'))]
-                return {'status': 'accepted', 'mode': public['permissionMode'], 'options': options if live else []}
+                options = [{'value': mode, 'label': label, 'description': description}
+                           for mode, label, description in PERMISSION_OPTIONS]
+                return {'status': 'accepted', 'mode': public['permissionMode'],
+                        'options': options if live else []}
             if action == 'resume':
                 if live:
                     return {'status': 'ready'}
-                profile = _profile()
+                profile = self.profile_resolver()
                 if not profile or profile['origin'] != row['origin'] or not self._ready(profile, fresh=True):
                     raise ResumePreflightBlocked('原 Claude Code 账号配置已变化或不可用')
                 if not row['permissionKnown'] or row['permissionMode'] not in MODES:
@@ -382,11 +441,20 @@ class ClaudeCli:
                 except OSError as exc:
                     raise ResumePreflightBlocked('原项目目录不可用，请在电脑端检查') from exc
                 env = os.environ.copy()
+                if profile.get('managedApi'):
+                    env = {key: value for key, value in env.items() if not key.startswith('ANTHROPIC_')}
                 env['CLAUDE_CONFIG_DIR'] = str(profile['directory'])
                 command = [profile['binary'], '-p', '--resume', native, '--input-format', 'stream-json',
                            '--output-format', 'stream-json', '--verbose', '--replay-user-messages',
                            '--setting-sources', 'user,project,local', '--permission-mode', row['permissionMode'],
-                           '--permission-prompt-tool', 'stdio', '--permission-prompts', 'host']
+                           '--permission-prompt-tool', 'stdio', '--permission-prompts', 'host',
+                           '--allow-dangerously-skip-permissions']
+                if self.upload_root is not None:
+                    upload_dir = self.upload_root/DesktopUploads.scope('claude', sid)
+                    upload_dir.mkdir(parents=True, exist_ok=True, mode=0o700)
+                    if self.upload_root.is_symlink() or upload_dir.is_symlink():
+                        raise ResumePreflightBlocked('Claude Code 附件目录无效')
+                    command.extend(('--add-dir', str(upload_dir.resolve())))
                 if row['model']:
                     command.extend(('--model', row['model']))
                 try:
@@ -411,13 +479,25 @@ class ClaudeCli:
             if not live:
                 raise BridgeUnavailable('请先继续这条 Claude Code 会话')
             if action == 'send':
-                if body.get('resolvedImages') or body.get('plugins') or body.get('mode') in ('queue', 'steer'):
+                if body.get('mode') in ('queue', 'steer'):
                     raise ValueError('Claude Code CLI 暂不支持此发送选项')
+                selected = body.get('plugins') or []
+                if not isinstance(selected, list) or len(selected) > 1:
+                    raise ValueError('Claude Code CLI 每条消息只能调用一个 Skill')
+                if selected:
+                    offered = {skill['id'] for skill in _skill_catalog(owned.catalog)
+                               if skill['selectable']}
+                    if selected[0] not in offered:
+                        raise ValueError('技能已不可用，请刷新后选择')
+                    message = '/' + selected[0] + (' ' + body['text'] if body['text'].strip() else '')
+                else:
+                    message = body['text']
+                content = _message_content({**body, 'text': message})
                 with owned.condition:
                     if owned.active or owned.pending:
                         raise BridgeUnavailable('请等待当前 Claude Code 任务结束后再发送')
                     owned.active = True
-                    owned.write({'type': 'user', 'message': {'role': 'user', 'content': body['text']}})
+                    owned.write({'type': 'user', 'message': {'role': 'user', 'content': content}})
             elif action == 'stop':
                 owned.control({'subtype': 'interrupt'})
             elif action == 'settings':
@@ -429,12 +509,19 @@ class ClaudeCli:
                 owned.model = selection
             elif action == 'access':
                 mode = body.get('mode')
-                if mode not in ('default', 'acceptEdits', 'plan'):
+                if mode not in MODES:
                     raise ValueError('请选择 Claude Code 提供的权限模式')
+                if mode == 'bypassPermissions' and body.get('confirmed') is not True:
+                    raise ValueError('完全访问需要明确确认')
                 result = owned.control({'subtype': 'set_permission_mode', 'mode': mode})
                 if result.get('mode') != mode:
                     raise BridgeUnavailable('Claude Code 未确认权限模式')
-                owned.permission = mode
+                with owned.condition:
+                    deadline = time.monotonic() + 5
+                    while owned.permission != mode and owned.process.poll() is None and time.monotonic() < deadline:
+                        owned.condition.wait(max(0, deadline-time.monotonic()))
+                    if owned.permission != mode:
+                        raise BridgeUnavailable('Claude Code 尚未报告生效的权限模式，请刷新检查')
             elif action == 'respond':
                 rid = body.get('requestId')
                 with owned.condition:

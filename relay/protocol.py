@@ -60,6 +60,8 @@ def validate(method, path, size=0):
         return
     if p.path == '/api/clients/claude/reconnect' and method == 'POST':
         return
+    if p.path == '/api/cli-access' and not p.query:
+        return
     desktop = DESKTOP.fullmatch(p.path)
     if desktop:
         if desktop[1] in (DESKTOP_READ if method == 'GET' else DESKTOP_WRITE):

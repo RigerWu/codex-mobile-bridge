@@ -206,7 +206,7 @@ $('search').oninput=()=>{clearTimeout(loadList.timer);loadList.timer=setTimeout(
 let sessionDiagnosticsText='';
 const diagnosticsPath='/api/sessions/diagnostics';
 function diagnosticsSummary(value){
-  const lines=[t('连接诊断')];
+  const lines=[t('SSH 连接诊断')];
   for(const host of value.hosts||[]){
     const location=host.host==='local'?t('此电脑'):t('远端电脑')+' '+(String(host.host).match(/^remote-\d+$/)?.[0].slice(7)||'?'),status=host.status==='ok'?t('可用'):t('不可用');
     lines.push(location+' · '+status+' · '+t(host.phase==='ssh'?'SSH 连接':host.phase==='store'?'历史读取':'会话发现'));
@@ -219,7 +219,7 @@ function diagnosticsSummary(value){
 }
 async function loadSessionDiagnostics(){
   const status=$('session-diagnostics-status'),summary=$('session-diagnostics-summary'),error=$('session-diagnostics-error');
-  status.textContent=t('正在读取连接诊断…');summary.textContent='';error.textContent='';sessionDiagnosticsText='';
+  status.textContent=t('正在读取 SSH 连接诊断…');summary.textContent='';error.textContent='';sessionDiagnosticsText='';
   $('session-diagnostics-copy').disabled=true;
   try{
     const value=await api(diagnosticsPath);
@@ -840,6 +840,8 @@ async function notificationChannelAction(test){
 $('pushplus-form').onsubmit=event=>{event.preventDefault();return notificationChannelAction(false);};
 $('pushplus-test').onclick=()=>notificationChannelAction(true);
 
+const cliAccessPanel=typeof CliAccessPanel==='undefined'?null:new CliAccessPanel({root:$('cli-access-content'),read:()=>api('/api/cli-access'),request:value=>api('/api/cli-access',value)});
+if(cliAccessPanel)$('open-cli-access').onclick=()=>{$('appearance-dialog').close();$('cli-access-dialog').showModal();cliAccessPanel.refresh();};
 const accountsPanel=window.BridgeSharedRelay||typeof AccountsPanel==='undefined'?null:new AccountsPanel({root:$('accounts-content'),toolbar:$('accounts-heading'),read:()=>api('/api/accounts'),request:({action,...value})=>action==='ignoreSubmission'?ignoreSubmission(value):api(action==='account'?'/api/accounts/account':action==='details'?'/api/accounts/details':action==='reminders'?'/api/accounts/reminders':action==='checkDesktopUpdate'||action==='requestDesktopUpdate'?'/api/accounts/desktop-update':'/api/accounts/switch',action==='checkDesktopUpdate'||action==='requestDesktopUpdate'?{action,...value}:value),onReset:async()=>{$('account-details').open=true;await accountPanel.refresh();$('account-content').querySelector('.account-cards')?.scrollIntoView({block:'nearest'});},onChanged:()=>{accountPanel.clear();resetModelCatalog();},onUpdate:value=>{accountPanel.schedule();const official=value.current?.kind==='chatgpt';$('account-button').hidden=!official;if(!official)$('account-details').open=false;const label='账号管理';$('accounts-button').setAttribute('data-i18n',label);$('accounts-button').textContent=t(label);}});
 function openCurrentAccounts(){
   const provider=clientNavigation.provider;

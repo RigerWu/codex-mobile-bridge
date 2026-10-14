@@ -1,4 +1,5 @@
 import json
+import os
 import tempfile
 import threading
 import unittest
@@ -7,9 +8,10 @@ from pathlib import Path
 from unittest.mock import Mock, patch
 
 from bridge.clients.claude import model
-from bridge.clients.claude.cli_session import ClaudeCli, ResumePreflightBlocked, _Owned
+from bridge.clients.claude.cli_session import ClaudeCli, ResumePreflightBlocked, _Owned, _skill_catalog, _auth_ready
 from bridge.clients.errors import BridgeUnavailable
 from bridge.clients.manager import DesktopSessions
+from bridge.clients.uploads import DesktopUploads
 
 
 class ClaudeCliContract(unittest.TestCase):
@@ -37,7 +39,7 @@ class ClaudeCliContract(unittest.TestCase):
         self.auth_patch = patch('bridge.clients.claude.cli_session._auth_ready', return_value=True)
         self.profile_patch.start(); self.auth_patch.start()
         self.addCleanup(self.profile_patch.stop); self.addCleanup(self.auth_patch.stop)
-        self.cli = ClaudeCli()
+        self.cli = ClaudeCli(self.root/'uploads')
 
     def test_saved_list_and_detail_are_passive_and_closed(self):
         with patch('bridge.clients.claude.cli_session.subprocess.Popen') as popen:
@@ -92,8 +94,40 @@ class ClaudeCliContract(unittest.TestCase):
             self.assertEqual(args[0][args[0].index('--permission-mode') + 1], 'plan')
             self.assertEqual(args[0][args[0].index('--model') + 1], 'fixture-model')
             self.assertIn('--resume', args[0])
+            scope = str((self.root/'uploads'/DesktopUploads.scope('claude', self.sid)).resolve())
+            self.assertEqual(args[0][args[0].index('--add-dir') + 1], scope)
             self.assertNotIn('Fixture request', args[0])
             self.assertEqual(popen.call_count, 1)
+
+    def test_managed_api_ignores_ambient_anthropic_overrides(self):
+        self.profile['managedApi'] = True
+        with patch.dict(os.environ, {'ANTHROPIC_API_KEY': 'wrong', 'ANTHROPIC_BASE_URL': 'https://wrong.invalid',
+                                     'ANTHROPIC_AUTH_TOKEN': 'wrong', 'KEEP_ME': 'yes'}), \
+             patch('bridge.clients.claude.cli_session.subprocess.run') as run:
+            run.return_value.returncode = 0
+            run.return_value.stdout = '{"loggedIn": true}'
+            self.assertTrue(_auth_ready(self.profile))
+            environment = run.call_args.kwargs['env']
+            self.assertNotIn('ANTHROPIC_API_KEY', environment)
+            self.assertNotIn('ANTHROPIC_BASE_URL', environment)
+            self.assertNotIn('ANTHROPIC_AUTH_TOKEN', environment)
+            self.assertEqual(environment['CLAUDE_CONFIG_DIR'], str(self.config))
+            self.assertEqual(environment['KEEP_ME'], 'yes')
+            process = Mock();process.poll.return_value = None;process.stdout = iter(())
+            with patch('bridge.clients.claude.cli_session.subprocess.Popen', return_value=process) as popen, \
+                 patch('bridge.clients.claude.cli_session._Owned') as owner_type:
+                owner = owner_type.return_value
+                owner.origin = self.profile['origin'];owner.process = process
+                owner.catalog = {'current_permission_mode': 'plan'}
+                owner.pending = {};owner.active = False;owner.error = None
+                owner.control.return_value = {'current_permission_mode': 'plan'}
+                self.cli.call('resume', self.sid, {})
+                environment = popen.call_args.kwargs['env']
+                self.assertNotIn('ANTHROPIC_API_KEY', environment)
+                self.assertNotIn('ANTHROPIC_BASE_URL', environment)
+                self.assertNotIn('ANTHROPIC_AUTH_TOKEN', environment)
+                self.assertEqual(environment['CLAUDE_CONFIG_DIR'], str(self.config))
+                self.assertEqual(environment['KEEP_ME'], 'yes')
 
     def test_external_writer_guard_blocks_before_spawning(self):
         with patch('bridge.clients.claude.cli_session.assert_session_closed',
@@ -132,6 +166,18 @@ class ClaudeCliContract(unittest.TestCase):
         self.assertEqual(manager.call('claude', 'resume', self.sid, body)['status'], 'ready')
         self.assertEqual(manager.call('claude', 'resume', self.sid, body)['status'], 'ready')
         adapter.call.assert_called_once_with('resume', self.sid, body)
+
+    def test_file_only_send_uses_receipt_and_does_not_replay(self):
+        manager = DesktopSessions(self.root/'gateway')
+        self.addCleanup(manager.close)
+        adapter = Mock()
+        adapter.call.return_value = {'status': 'accepted'}
+        manager.adapters['claude'] = adapter
+        body = {'id': str(uuid.uuid4()), 'text': '',
+                'resolvedFiles': [{'name': 'note.txt', 'path': str(self.root/'note.txt')}]}
+        self.assertEqual(manager.call('claude', 'send', self.sid, body)['status'], 'accepted')
+        self.assertEqual(manager.call('claude', 'send', self.sid, body)['status'], 'accepted')
+        adapter.call.assert_called_once_with('send', self.sid, body)
 
     def test_preflight_block_can_retry_with_new_receipt_after_session_closes(self):
         manager = DesktopSessions(self.root/'gateway')
@@ -177,6 +223,7 @@ class ClaudeCliContract(unittest.TestCase):
         owner.condition = threading.Condition()
         owner.error = None
         owner.control.return_value = {'mode': 'default'}
+        owner.control.side_effect = lambda request: (setattr(owner, 'permission', request['mode']) or {'mode': request['mode']}) if request['subtype'] == 'set_permission_mode' else {}
         self.cli.owned[self.native] = owner
         self.assertEqual(self.cli.call('send', self.sid, {'text': 'new fixture message'})['status'], 'accepted')
         self.assertTrue(self.cli.busy())
@@ -196,6 +243,66 @@ class ClaudeCliContract(unittest.TestCase):
                                                                              'message': '用户拒绝了本次操作'}}})
         self.cli.call('stop', self.sid, {})
         owner.control.assert_called_with({'subtype': 'interrupt'})
+
+    def test_catalog_uses_only_native_loaded_user_project_and_plugin_commands(self):
+        catalog = {'commands': [{'name': 'review', 'description': 'User skill'},
+                    {'name': 'sample:check', 'description': 'Enabled plugin skill'},
+                    {'name': 'compact', 'builtin': True}, {'name': 'invalid name'}]}
+        names = {row['id']: row for row in _skill_catalog(catalog)}
+        self.assertEqual(set(names), {'review', 'sample:check'})
+        process = Mock()
+        process.poll.return_value = None
+        owner = Mock(origin=self.profile['origin'], process=process, active=False,
+                     model=None, permission='plan', events=[])
+        owner.pending = {}
+        owner.catalog = catalog
+        owner.condition = threading.Condition()
+        owner.error = None
+        self.cli.owned[self.native] = owner
+        self.assertTrue(self.cli.call('detail', self.sid, {})['capabilities']['skills'])
+        self.assertEqual({row['id'] for row in self.cli.call('catalog', self.sid, {})['skills']}, set(names))
+        with self.assertRaisesRegex(ValueError, '不可用'):
+            self.cli.call('send', self.sid, {'text': 'try', 'plugins': ['private']})
+        self.cli.call('send', self.sid, {'text': 'review this', 'plugins': ['sample:check']})
+        owner.write.assert_called_with({'type': 'user', 'message': {'role': 'user',
+                                       'content': '/sample:check review this'}})
+
+    def test_native_permission_choices_require_explicit_bypass_selection(self):
+        process = Mock()
+        process.poll.return_value = None
+        owner = Mock(origin=self.profile['origin'], process=process, active=False,
+                     model=None, permission='plan', events=[])
+        owner.pending = {}
+        owner.catalog = {}
+        owner.condition = threading.Condition()
+        owner.error = None
+        owner.control.side_effect = lambda request: (setattr(owner, 'permission', request['mode']) or {'mode': request['mode']})
+        self.cli.owned[self.native] = owner
+        options = self.cli.call('access', self.sid, {})['options']
+        self.assertEqual({option['value'] for option in options},
+                         {'default', 'acceptEdits', 'plan', 'dontAsk', 'auto', 'bypassPermissions'})
+        with self.assertRaisesRegex(ValueError, '明确确认'):
+            self.cli.call('access', self.sid, {'mode': 'bypassPermissions'})
+        owner.control.assert_not_called()
+        self.cli.call('access', self.sid, {'mode': 'bypassPermissions', 'confirmed': True})
+        self.assertEqual(self.cli.call('access', self.sid, {})['mode'], 'bypassPermissions')
+
+    def test_attachment_only_send_uses_native_image_block_and_local_file_reference(self):
+        process = Mock(); process.poll.return_value = None
+        owner = Mock(origin=self.profile['origin'], process=process, active=False,
+                     model=None, permission='plan', events=[])
+        owner.pending = {}; owner.condition = threading.Condition(); owner.error = None
+        self.cli.owned[self.native] = owner
+        self.assertTrue(self.cli.call('detail', self.sid, {})['capabilities']['attachments'])
+        file = self.root/'private note.txt'; file.write_text('fixture bytes')
+        self.cli.call('send', self.sid, {'text': '', 'resolvedImages': [
+            {'name': 'photo.png', 'url': 'data:image/png;base64,aGVsbG8='}],
+            'resolvedFiles': [{'name': file.name, 'path': str(file)}]})
+        content = owner.write.call_args.args[0]['message']['content']
+        self.assertEqual(content[1], {'type': 'image', 'source': {
+            'type': 'base64', 'media_type': 'image/png', 'data': 'aGVsbG8='}})
+        self.assertIn(str(file), content[0]['text'])
+        self.assertNotIn('fixture bytes', json.dumps(content))
 
     def test_question_approval_forwards_answers_to_owned_tool(self):
         process = Mock()

@@ -24,6 +24,7 @@
   "/account.js": "features/accounts/account.js",
   "/accounts.js": "features/accounts/accounts.js",
   "/client-accounts.js": "features/accounts/client-accounts.js",
+  "/cli-access.js": "features/accounts/cli-access.js",
   "/client-lifecycle.css": "features/clients/client-lifecycle.css",
   "/client-navigation.css": [
     "features/clients/client-navigation.css",

@@ -474,7 +474,15 @@ class Handler(BaseHTTPRequestHandler):
                 if write and parts[3] == 'send' and 'attachments' in body:
                     if self.server.desktop_uploads is None:
                         return self.output(503, {'error': '桌面会话接入不可用'})
-                    body['resolvedImages'] = self.server.desktop_uploads.resolve(parts[2], sid, body.pop('attachments'))
+                    detail = manager.call(parts[2], 'detail', sid)
+                    session = detail.get('session') or {}
+                    local_cli = (parts[2] == 'claude' and session.get('backend') == 'cli'
+                                 and session.get('host') == 'local')
+                    images, files = self.server.desktop_uploads.resolve(
+                        parts[2], sid, body.pop('attachments'), local_claude_cli=local_cli)
+                    body['resolvedImages'] = images
+                    if files:
+                        body['resolvedFiles'] = files
                 feed = self.server.notifications.mobile.checkpoint() if parts[3] == 'list' and self.server.notifications else None
                 result = manager.list_with_activity(parts[2]) if parts[3] == 'list' else manager.call(parts[2], parts[3], sid, body)
                 if feed is not None:
@@ -515,6 +523,17 @@ class Handler(BaseHTTPRequestHandler):
                 self.read_json()
                 self.server.auth.logout(self.token())
                 return self.output(200, {"ok": True}, cookie=self.cookie("", clear=True))
+            if path == '/api/cli-access':
+                if query:
+                    raise ValueError('CLI 接入请求包含不支持的参数')
+                manager = self.server.bridge.cli_access
+                if manager is None:
+                    return self.output(503, {'error': '本机 CLI 接入不可用'})
+                if write:
+                    if self.server.auth.config.get('mode') == 'none':
+                        raise PermissionError('免密访问不能修改 CLI 接入')
+                    return self.output(200, manager.change(self.read_json()))
+                return self.output(200, manager.public())
             if not write and path == '/api/accounts':
                 result = self.server.bridge.accounts.public()
                 result['canSwitch'] = self.server.auth.config.get('mode') != 'none'

@@ -57,6 +57,9 @@ class DesktopSessions:
         self.config = json.loads(self.config_path.read_text()) if self.config_path.exists() else {}
         self.adapters = {'deepseek': DeepSeek(self.directory/'deepseek', self.config.get('deepseekHome')),
                          'claude': Claude(self.directory/'claude', auto_connect=False)}
+        if bridge is not None and getattr(bridge, 'cli_access', None) is not None:
+            bridge.desktop_sessions = self
+            self.adapters['claude'].cli.profile_resolver = bridge.cli_access.claude_profile
         self.deepseek_restore_error = None
         if self.config.get('deepseekAdapterDirectory'):
             try:
@@ -228,7 +231,7 @@ class DesktopSessions:
             return self._read(provider, action, sid, body)
         rid = str(uuid.UUID(body.get('id', '')))
         if action == 'send' and (not isinstance(body.get('text'), str) or
-                                 not body['text'].strip() and not body.get('resolvedImages') or len(body['text']) > 100000):
+                                 not body['text'].strip() and not (body.get('resolvedImages') or body.get('resolvedFiles')) or len(body['text']) > 100000):
             raise ValueError('请输入 1–100000 字的消息')
         if action == 'create' and (not isinstance(body.get('title', ''), str) or len(body.get('title', '')) > 120):
             raise ValueError('聊天名称不能超过 120 字')

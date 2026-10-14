@@ -158,10 +158,11 @@ class CodexAppServer:
             if self.check_socket and not Path(self.socket_path).exists():
                 raise AppServerUnavailable('Codex app-server control socket is unavailable')
             try:
+                options = {'creationflags': subprocess.CREATE_NO_WINDOW} if os.name == 'nt' else {}
                 process = self.process_factory(
                     self.command,
                     stdin=subprocess.PIPE, stdout=subprocess.PIPE,
-                    stderr=subprocess.DEVNULL)
+                    stderr=subprocess.DEVNULL, **options)
             except OSError as exc:
                 raise AppServerUnavailable('Could not connect to the existing Codex runtime') from exc
             self.process = process

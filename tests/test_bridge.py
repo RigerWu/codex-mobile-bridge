@@ -224,6 +224,18 @@ class IntegrationTests(unittest.TestCase):
             with self.assertRaises(KeyError):
                 store.get(tid)
 
+    def test_codex_list_filters_original_cli_source_before_merged_pagination(self):
+        cli = str(uuid.uuid4())
+        with closing(sqlite3.connect(str(self.root / 'state_5.sqlite'))) as db, db:
+            db.executemany('INSERT INTO threads VALUES(?,?,?,?,?,?,?,?)',
+                           [(str(uuid.uuid4()), 'App', '/workspace', 200 + i, 0, 'Codex Desktop', 'vscode', 'unused') for i in range(120)])
+            db.execute('INSERT INTO threads VALUES(?,?,?,?,?,?,?,?)',
+                       (cli, 'CLI', '/workspace', 2, 0, 'codex_cli_rs', 'cli', 'unused'))
+        rows, sources = self.bridge.list(source='cli', include_sources=True)
+        self.assertEqual([row['id'] for row in rows], [cli])
+        self.assertEqual(rows[0]['access']['source'], 'cli')
+        self.assertEqual(sources, ['cli', 'desktop'])
+
     def test_native_free_text_question_null_options_can_be_answered(self):
         self.fixture.state['turns'] = [{'turnId': 'last', 'status': 'completed', 'items': [
             {'id': 'question', 'type': 'agentMessage', 'text': 'Your preference?',
@@ -741,7 +753,8 @@ class HttpTests(unittest.TestCase):
                 return self
             closed = threading.Event()
             def list(self, **kwargs):
-                return []
+                self.last_list = kwargs
+                return ([], ['cli', 'desktop']) if kwargs.get('include_sources') else []
         config = {'auth': {'mode': 'password', 'username': 'admin', **self.record}, 'origins': []}
         self.server = GatewayServer(('127.0.0.1', 0), EmptyBridge(), config, ROOT / 'web')
         self.port = self.server.server_address[1]
@@ -769,6 +782,22 @@ class HttpTests(unittest.TestCase):
         self.assertEqual(status, 200)
         self.assertIn('HttpOnly', headers['Set-Cookie'])
         return {'Cookie': headers['Set-Cookie'].split(';')[0], 'X-CSRF-Token': body['csrf']}
+
+    def test_session_list_source_contract(self):
+        headers = self.login()
+        status, _, body = self.request('GET', '/api/sessions?offset=100', headers=headers)
+        self.assertEqual(status, 200)
+        self.assertEqual(body['availableSources'], ['cli', 'desktop'])
+        self.assertEqual(body['sessions'], [])
+        self.assertEqual(self.server.bridge.last_list['source'], 'all')
+        self.assertEqual(self.server.bridge.last_list['offset'], 100)
+        status, _, body = self.request('GET', '/api/sessions?offset=100&source=cli&q=needle', headers=headers)
+        self.assertEqual(status, 200)
+        self.assertEqual(body['availableSources'], ['cli', 'desktop'])
+        self.assertEqual(self.server.bridge.last_list['source'], 'cli')
+        self.assertEqual(self.server.bridge.last_list['query'], 'needle')
+        status, _, _ = self.request('GET', '/api/sessions?source=unknown', headers=headers)
+        self.assertEqual(status, 400)
 
     def test_gateway_language_updates_without_restart_and_before_login(self):
         with tempfile.TemporaryDirectory(dir=ROOT / '.tmp') as folder:

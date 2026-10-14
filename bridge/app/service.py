@@ -962,14 +962,15 @@ class Bridge:
         return {'schemaVersion': 1, 'generatedAt': int(time.time()),
                 'remoteHostCount': len(sources) - 1, 'hosts': reports}
 
-    def list(self, query="", limit=100, offset=0, archived=False):
+    def list(self, query="", limit=100, offset=0, archived=False, source='all', include_sources=False):
         sources = [(self, "此电脑")]
         if self.host == 'local':
             sources.extend((self.for_host(host), info.get('displayName') or info['alias']) for host, info in self.hosts.hosts().items())
-        def read(source):
-            bridge, label = source
+        def read(host_source):
+            bridge, label = host_source
             try:
-                rows = bridge.store.list(limit=limit + offset, archived=archived, query=query)
+                available = bridge.store.available_sources() if include_sources else []
+                rows = bridge.store.list(limit=limit + offset, archived=archived, query=query, source=source)
                 rows = self.hosts.decorate(rows, bridge.host, label)
                 with bridge.lock:
                     bridge.listed.update(row['id'] for row in rows)
@@ -979,15 +980,16 @@ class Bridge:
                         row['connected'] = bool(session and session.connected)
                         row['access'] = bridge._access(row.get('origin', 'desktop'), session)
                         row['title'] = row.get('name') or row.get('title') or '未命名聊天'
-                return rows, None
+                return rows, None, available
             except (RemoteUnavailable, StoreUnavailable) as exc:
-                return [], {'host': bridge.host, 'label': label, 'error': str(exc)}
+                return [], {'host': bridge.host, 'label': label, 'error': str(exc)}, []
         with ThreadPoolExecutor(max_workers=min(4, len(sources))) as pool:
             results = list(pool.map(read, sources))
-        self.host_errors = [error for _, error in results if error]
-        rows = [row for group, _ in results for row in group]
+        self.host_errors = [error for _, error, _ in results if error]
+        rows = [row for group, _, _ in results for row in group]
         rows.sort(key=lambda row: (row['recency'], row['id'], row['host']), reverse=True)
-        return rows[offset:offset + limit]
+        page = rows[offset:offset + limit]
+        return (page, sorted({source for _, _, available in results for source in available})) if include_sources else page
 
     def activity(self, identifiers):
         if not isinstance(identifiers, list) or len(identifiers) > 500 or any(not isinstance(v, str) for v in identifiers):

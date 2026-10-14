@@ -10,7 +10,8 @@ let initialPairingToken=takePairingToken();
 const $ = id => document.getElementById(id),t=BridgeI18n.t;
 let csrf='', currentId=null, state=null, listOffset=0, listQuery='', approvalStamp='', sending=false;
 let claudeCliAccessPanel=null;
-let currentHost='local', listRows=[], listGeneration=0, listHasMore=false, listArchived=false, listRenderStamp='';
+let currentHost='local', listRows=[], listGeneration=0, listHasMore=false, listArchived=false, listSource='all', availableSources=[], listRenderStamp='';
+let sourceFilterStamp='';
 let chatTimeline=null,reconnectFailure=null;
 const dismissedHostFaults=new Map();
 const submittedRequestIds=new Set();
@@ -129,6 +130,23 @@ $('logout').onclick=async()=>{await api('/api/logout',{});document.dispatchEvent
 function dateText(value){if(!value)return '';return new Date(value*1000).toLocaleDateString(BridgeI18n.locale(),{month:'numeric',day:'numeric'});}
 $('list-mode').value=localStorage.getItem('list-mode')||'recent';
 $('list-mode').onchange=()=>{localStorage.setItem('list-mode',$('list-mode').value);renderList();};
+listSource=localStorage.getItem('codex-source-filter')||'all';
+if(!['all','desktop','cli'].includes(listSource))listSource='all';
+$('source-filter').onchange=()=>{listSource=$('source-filter').value;localStorage.setItem('codex-source-filter',listSource);loadList(true).catch(e=>toast(e.message));};
+function renderSourceFilter(){
+  const sources=['desktop','cli'].filter(source=>availableSources.includes(source));
+  const visible=sources.length>1;
+  $('source-filter-label').hidden=!visible;
+  if(listSource!=='all'&&(!visible||!sources.includes(listSource))){listSource='all';localStorage.setItem('codex-source-filter','all');return false;}
+  const stamp=JSON.stringify([sources,BridgeI18n.locale()]);
+  if(stamp!==sourceFilterStamp){
+    const options=[['all',t('全部会话')],...sources.map(source=>[source,source==='desktop'?'APP':source.toUpperCase()])];
+    $('source-filter').replaceChildren(...options.map(([value,label])=>{const option=el('option','',label);option.value=value;return option;}));
+    sourceFilterStamp=stamp;
+  }
+  if($('source-filter').value!==listSource)$('source-filter').value=listSource;
+  return true;
+}
 if(typeof bindChatListToolbar==='function')bindChatListToolbar(document.querySelector('#sidebar .chat-list-toolbar'));
 function sessionAccess(access){
   if(!access)return {source:'desktop',runtime:'desktop',canSend:true,canInterrupt:true,canApprove:true,canReconnect:true,canConfigure:true,canChangePermissions:true,canChangeModel:true,canSelectSkills:true,canUseModes:true,canUseGoal:true,canUseSideChat:true,canEditMessages:true,readOnly:false};
@@ -140,12 +158,12 @@ function sessionAccess(access){
 function currentAccess(){return sessionAccess(state?.access||listRows.find(row=>row.id===currentId&&row.host===currentHost)?.access);}
 function sourceLabel(access){return access?.source==='cli'?'CLI':access?.source==='ide'?'IDE':access?.source==='unknown'?t('其他来源'):'';}
 function renderList(){
-  const stamp=JSON.stringify([$('list-mode').value,currentId,currentHost,BridgeI18n.locale(),listRows.map(row=>[row.id,row.host,row.title,row.projectKey,row.projectName,row.hostLabel,row.recency,row.access])]);
+  const stamp=JSON.stringify([$('list-mode').value,currentId,currentHost,BridgeI18n.locale(),availableSources,listRows.map(row=>[row.id,row.host,row.title,row.projectKey,row.projectName,row.hostLabel,row.recency,row.access])]);
   if(stamp===listRenderStamp&&$('sessions').children.length){renderActivity();return;}
   listRenderStamp=stamp;
   const scrollTop=$('sessions').scrollTop;
   $('sessions').replaceChildren();
-  const grouped=$('list-mode').value==='project', groups=new Map();
+  const grouped=$('list-mode').value==='project', groups=new Map(),showSources=availableSources.includes('desktop')&&availableSources.includes('cli');
   for(const chat of listRows){
     let parent=$('sessions');
     if(grouped){
@@ -161,7 +179,11 @@ function renderList(){
     const button=el('button','session'+(chat.id===currentId&&chat.host===currentHost?' selected':''));
     button.dataset.id=chat.id;button.dataset.host=chat.host;
     button.append(el('strong','',chat.title));
-    const meta=el('small'),source=sourceLabel(chat.access);meta.append(el('span','',chat.projectName+' · '+(chat.host==='local'?t('此电脑'):chat.hostLabel)+(source?' · '+source:'')),el('time','',dateText(chat.recency/1000)));
+    if(showSources){
+      const source=chat.access?.source;
+      if(['desktop','cli'].includes(source))button.append(el('span','session-source',source==='desktop'?'APP':'CLI'));
+    }
+    const meta=el('small');meta.append(el('span','',chat.projectName+' · '+(chat.host==='local'?t('此电脑'):chat.hostLabel)),el('time','',dateText(chat.recency/1000)));
     button.append(meta);button.onclick=()=>openChat(chat.id,chat.host).catch(e=>toast(e.message));parent.append(button);
   }
   if(!listRows.length)$('sessions').append(el('p','muted',t('没有找到聊天。')));renderActivity();$('sessions').scrollTop=scrollTop;
@@ -169,11 +191,13 @@ function renderList(){
 async function loadList(reset=false){
   if(!reset&&(listLoading||!listHasMore))return;
   const generation=++listGeneration,offset=reset?0:listOffset;
-  const query=$('search').value,archived=$('archived').checked;
+  const query=$('search').value,archived=$('archived').checked,source=listSource;
   let result;listLoading++;
-  try{result=await api('/api/sessions?q='+encodeURIComponent(query)+'&offset='+offset+'&archived='+archived);}
+  try{result=await api('/api/sessions?q='+encodeURIComponent(query)+'&offset='+offset+'&archived='+archived+'&source='+source);}
   finally{listLoading--;}
   if(generation!==listGeneration)return;
+  availableSources=result.availableSources||[];
+  if(!renderSourceFilter()){loadList(true).catch(e=>toast(e.message));return;}
   if(reset&&(query!==listQuery||archived!==listArchived))$('sessions').scrollTop=0;
   listQuery=query;listArchived=archived;
   const rows=new Map((reset?[]:listRows).map(row=>[chatKey(row.id,row.host),row]));
@@ -678,7 +702,7 @@ $('phone-language').value=BridgeI18n.language();
 $('phone-language').onchange=()=>{
   if(approvalBusy||creatingChat)return;
   const replies=[...$('approvals').querySelectorAll('input,textarea,select')].map(node=>({value:node.value,checked:node.checked}));
-  BridgeI18n.setLanguage($('phone-language').value);BridgeI18n.apply();if(typeof accountsPanel!=="undefined")accountsPanel?.render();renderList();
+  BridgeI18n.setLanguage($('phone-language').value);BridgeI18n.apply();if(typeof accountsPanel!=="undefined")accountsPanel?.render();renderSourceFilter();renderList();
   if(!$('new-chat-title').dataset.edited)$('new-chat-title').value=t('新聊天');
   $('new-chat-help').textContent=t($('new-chat-type').value==='cli'?'选择已有 CLI 项目目录，在此创建聊天。':'选择已有项目，或不选择项目创建独立聊天。电脑会打开这条聊天。');
   $('new-chat-submit').textContent=t($('new-chat-type').value==='cli'?'创建聊天':'创建并打开');

@@ -76,6 +76,7 @@ class RemoteStore:
         self.alias = alias
         self.home = None  # Never map remote paths onto the local filesystem.
         self.cache = {}
+        self.sources_cache = None
         self.kind_caches = {}
         self.lock = threading.Lock()
 
@@ -97,6 +98,14 @@ class RemoteStore:
             rows = self.call('list', kwargs)
             self.cache[key] = (time.monotonic(), rows)
             return rows
+
+    def available_sources(self):
+        with self.lock:
+            if self.sources_cache and time.monotonic() - self.sources_cache[0] < 15:
+                return list(self.sources_cache[1])
+            sources = self.call('available_sources', {})
+            self.sources_cache = (time.monotonic(), sources)
+            return list(sources)
 
     def notification_changes(self, since=0):
         return self.call('notification_changes', {'since': since})

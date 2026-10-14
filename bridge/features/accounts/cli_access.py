@@ -109,7 +109,10 @@ class CliAccess:
         if native is None:
             raise ValueError('未找到 Claude Code CLI')
         directory = Path(existing['directory']) if existing else native['directory']
-        if not directory.is_dir():
+        fresh_default = (not directory.exists() and not directory.is_symlink()
+                         and native['origin'].startswith('default:')
+                         and directory == native['directory'])
+        if not directory.is_dir() and not fresh_default:
             raise ValueError('Claude Code 配置目录不可用')
         private_dir = self.root/'claude'/identifier
         if private_dir.is_symlink():

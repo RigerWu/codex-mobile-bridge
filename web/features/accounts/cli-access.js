@@ -1,7 +1,7 @@
 'use strict';
 class CliAccessPanel {
   constructor({root,read,request}){
-    Object.assign(this,{root,read,request});this.value=null;this.busy=false;
+    Object.assign(this,{root,read,request});this.value=null;this.busy=false;this.generation=0;
     this.build();
   }
   t(key){return BridgeI18n.t(key);}
@@ -22,7 +22,7 @@ class CliAccessPanel {
     this.error=this.node('p',null,'error');this.error.setAttribute('role','alert');
     this.rows=this.node('div',null,'cli-access-rows');
     this.provider=this.node('select');for(const [id,name] of [['codex','Codex CLI'],['claude','Claude Code CLI']]){const option=this.node('option');option.value=id;option.textContent=name;this.provider.append(option);}
-    this.provider.onchange=()=>{this.resetForm();this.render();};
+    this.provider.onchange=()=>{this.generation++;this.setBusy(false);this.resetForm();};
     this.name=this.field('名称');this.baseUrl=this.field('API 地址','url');this.model=this.field('模型 ID');this.key=this.field('API Key','password');this.key.input.autocomplete='new-password';
     this.scheme=this.node('select');for(const [id,name] of [['x-api-key','x-api-key'],['bearer','Bearer']]){const option=this.node('option');option.value=id;option.textContent=name;this.scheme.append(option);}
     this.schemeRow=this.node('label');this.schemeRow.append(this.node('span','认证方式'),this.scheme);
@@ -34,20 +34,36 @@ class CliAccessPanel {
     this.root.append(heading,refresh,this.status,this.error,this.rows,this.form,this.native);
     document.addEventListener('bridge-language',()=>this.render());
   }
+  setBusy(busy){
+    this.busy=busy;
+    this.root.querySelectorAll('button,input,select').forEach(control=>{control.disabled=busy;});
+  }
+  clear(){
+    this.generation++;
+    this.value=null;
+    this.setBusy(false);
+    this.form.reset();
+    this.key.input.value='';
+    this.editId=null;this.editKind=null;this.cancel.hidden=true;
+    this.status.textContent='';this.error.textContent='';
+    this.render();
+  }
   resetForm(){const provider=this.provider.value;this.editId=null;this.editKind=null;this.form.reset();this.provider.value=provider;this.key.input.value='';this.cancel.hidden=true;this.render();}
   async refresh(){
     if(this.busy)return;
-    this.busy=true;this.status.textContent=this.t('正在读取…');this.error.textContent='';
-    try{this.value=await this.read();this.render();}
-    catch(error){this.error.textContent=error.message;this.status.textContent='';}
-    finally{this.busy=false;}
+    const generation=++this.generation;
+    this.setBusy(true);this.status.textContent=this.t('正在读取…');this.error.textContent='';
+    try{const value=await this.read();if(generation===this.generation){this.value=value;this.render();}}
+    catch(error){if(generation===this.generation){this.error.textContent=this.t(error.message);this.status.textContent='';}}
+    finally{if(generation===this.generation)this.setBusy(false);}
   }
   async perform(value){
     if(this.busy)return;
-    this.busy=true;this.error.textContent='';this.status.textContent=this.t('正在保存…');
-    try{this.value=await this.request(value);this.resetForm();this.render();}
-    catch(error){this.error.textContent=error.message;this.status.textContent='';}
-    finally{this.busy=false;}
+    const generation=++this.generation;
+    this.setBusy(true);this.error.textContent='';this.status.textContent=this.t('正在保存…');
+    try{const result=await this.request(value);if(generation===this.generation){this.value=result;this.resetForm();}}
+    catch(error){if(generation===this.generation){this.error.textContent=this.t(error.message);this.status.textContent='';}}
+    finally{if(value.apiKey)value.apiKey='';if(generation===this.generation)this.setBusy(false);}
   }
   render(){
     const provider=this.provider.value||'codex',data=this.value?.[provider];
@@ -56,7 +72,7 @@ class CliAccessPanel {
     this.status.textContent=provider==='codex'?this.t('Codex CLI 与 Desktop 共用本机接入配置。'):this.t('Claude Code CLI 使用所选配置目录。');
     if(provider==='claude'&&data.verification?.status==='configured')this.status.textContent+=' '+this.t((data.accounts||[]).find(row=>row.id===data.activeId)?.kind==='api'?'API 配置已核对；未验证 Key 的远端有效性。':'原生配置已核对。');
     if(data.cliSwitch?.phase==='pending')this.rows.append(this.node('p','正在切换接入…','account-muted'));
-    if(data.cliSwitch?.phase==='failed'){const error=this.node('p',null,'error');error.textContent=data.cliSwitch.error;this.rows.append(error);}
+    if(data.cliSwitch?.phase==='failed'){const error=this.node('p',null,'error');error.textContent=this.t(data.cliSwitch.error);this.rows.append(error);}
     for(const row of data.accounts||[]){
       const card=this.node('section',null,'cli-access-row'),title=this.node('strong');title.textContent=row.name;
       const detail=this.node('small');detail.textContent=[row.kind==='api'?this.t('API 接入'):this.t('原生登录'),row.baseUrl,row.model].filter(Boolean).join(' · ');
@@ -69,6 +85,7 @@ class CliAccessPanel {
       }
       card.append(title,detail,actions);this.rows.append(card);
     }
+    if(this.busy)this.setBusy(true);
   }
   edit(provider,row,rename=false){
     this.provider.value=provider;this.editId=row.id;this.editKind=rename?'rename':'api';this.name.input.value=row.name;

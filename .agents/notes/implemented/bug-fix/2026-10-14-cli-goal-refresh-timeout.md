@@ -8,7 +8,7 @@ The native Goal completion event can arrive while a background `thread/read` ref
 
 ## Decision
 
-Preserve the joined session on `AppServerUnavailable` from a background refresh. Retry that replay-safe read in one worker with bounded backoff so the final turn can converge without another native event, including after more than one timeout. The proxy's actual disconnect callback still clears all joins; an explicit `notLoaded` or identity mismatch still invalidates the affected thread. No write is replayed.
+Preserve the joined session on `AppServerUnavailable` from a background refresh. Retry that replay-safe read in one worker with bounded backoff so the final turn can converge without another native event, including after more than one timeout. Each worker is tied to its original joined process and has a cancellation event. Closing or revoking that join wakes a sleeping worker and prevents it from reading a later connection. The proxy's actual disconnect callback still clears all joins; an explicit `notLoaded` or identity mismatch still invalidates the affected thread. No write is replayed.
 
 ## Evidence and limits
 

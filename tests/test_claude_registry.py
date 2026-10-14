@@ -1,9 +1,10 @@
+import ctypes
 import json
 import tempfile
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 from bridge.clients.claude import session_registry
 from bridge.clients.claude.session_registry import assert_profile_idle, assert_session_closed
@@ -139,6 +140,72 @@ class ClaudeRegistryTests(unittest.TestCase):
             with patch.object(claude_process.subprocess, 'run', return_value=result):
                 with self.assertRaises(OSError):
                     claude_process.process_start_ticks(1234)
+
+    def test_windows_owned_child_termination_checks_creation_on_same_handle(self):
+        kernel = SimpleNamespace(OpenProcess=Mock(return_value=99),
+                                 TerminateProcess=Mock(return_value=1),
+                                 WaitForSingleObject=Mock(side_effect=[0x102, 0]),
+                                 CloseHandle=Mock())
+
+        def times(_handle, created, *_other):
+            ctypes.cast(created, ctypes.POINTER(ctypes.c_uint64))[0] = 12345
+            return 1
+
+        kernel.GetProcessTimes = Mock(side_effect=times)
+        with patch.object(claude_process, '_kernel', return_value=kernel):
+            self.assertEqual(claude_process.process_start_filetime(1234), 12345)
+            self.assertFalse(claude_process.terminate_matching_process(1234, 99999))
+            kernel.TerminateProcess.assert_not_called()
+            self.assertTrue(claude_process.terminate_matching_process(1234, 12345))
+        self.assertEqual(kernel.OpenProcess.call_args.args[0], 0x101001)
+        kernel.TerminateProcess.assert_called_once_with(99, 1)
+
+    def test_windows_owned_child_already_exited_needs_no_termination(self):
+        kernel = SimpleNamespace(OpenProcess=Mock(return_value=99),
+                                 TerminateProcess=Mock(),
+                                 WaitForSingleObject=Mock(return_value=0),
+                                 CloseHandle=Mock())
+
+        def times(_handle, created, *_other):
+            ctypes.cast(created, ctypes.POINTER(ctypes.c_uint64))[0] = 12345
+            return 1
+
+        kernel.GetProcessTimes = Mock(side_effect=times)
+        with patch.object(claude_process, '_kernel', return_value=kernel):
+            self.assertFalse(claude_process.terminate_matching_process(1234, 12345))
+        kernel.TerminateProcess.assert_not_called()
+
+    def test_windows_owned_child_exit_during_termination_is_confirmed(self):
+        kernel = SimpleNamespace(OpenProcess=Mock(return_value=99),
+                                 TerminateProcess=Mock(return_value=0),
+                                 WaitForSingleObject=Mock(side_effect=[0x102, 0]),
+                                 CloseHandle=Mock())
+
+        def times(_handle, created, *_other):
+            ctypes.cast(created, ctypes.POINTER(ctypes.c_uint64))[0] = 12345
+            return 1
+
+        kernel.GetProcessTimes = Mock(side_effect=times)
+        with patch.object(claude_process, '_kernel', return_value=kernel):
+            self.assertFalse(claude_process.terminate_matching_process(1234, 12345))
+        kernel.TerminateProcess.assert_called_once_with(99, 1)
+
+    def test_windows_owned_child_binding_requires_live_shim_ancestry(self):
+        identity = (5555, '638960923680000000', 'claude.exe')
+        with patch.object(claude_process, '_cim_parent_start', side_effect=[identity, identity]) as query, \
+             patch.object(claude_process, 'process_start_filetime', return_value=12345):
+            self.assertEqual(claude_process.owned_child_start_filetime(1234, 5555), 12345)
+        self.assertEqual(query.call_count, 2)
+        with patch.object(claude_process, '_cim_parent_start', return_value=identity), \
+             patch.object(claude_process, 'process_start_filetime') as start:
+            with self.assertRaises(OSError):
+                claude_process.owned_child_start_filetime(1234, 9999)
+        start.assert_not_called()
+        with patch.object(claude_process, '_cim_parent_start', side_effect=[identity,
+             (5555, '638960923680000001', 'claude.exe')]), \
+             patch.object(claude_process, 'process_start_filetime', return_value=12345):
+            with self.assertRaises(OSError):
+                claude_process.owned_child_start_filetime(1234, 5555)
 
     def test_fresh_profile_without_registry_is_idle_but_symlink_is_unknown(self):
         self.registry.rmdir()

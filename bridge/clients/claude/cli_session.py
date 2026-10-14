@@ -6,6 +6,7 @@ import os
 import re
 import shutil
 import subprocess
+import sys
 import threading
 import time
 import uuid
@@ -92,9 +93,9 @@ def _profile():
         origin = 'default:' + str(directory)
         cockpit = Path.home()/'.cockpit_tools'
         try:
-            selected = json.loads((cockpit/'provider_current_accounts.json').read_text())['current_accounts']['claude_code_account']
-            accounts = json.loads((cockpit/'claude_accounts.json').read_text())['accounts']
-            instances = json.loads((cockpit/'claude_instances.json').read_text())['instances']
+            selected = json.loads((cockpit/'provider_current_accounts.json').read_text(encoding='utf-8'))['current_accounts']['claude_code_account']
+            accounts = json.loads((cockpit/'claude_accounts.json').read_text(encoding='utf-8'))['accounts']
+            instances = json.loads((cockpit/'claude_instances.json').read_text(encoding='utf-8'))['instances']
             if any(item.get('id') == selected for item in accounts):
                 instance = next(item for item in instances if item.get('bindAccountId') == selected
                                 and item.get('launchMode') == 'cli')
@@ -126,7 +127,7 @@ def _events(path):
     if path.stat().st_size > 20_000_000:
         raise ValueError('Claude 会话记录过大，无法读取')
     result = []
-    with path.open(errors='replace') as source:
+    with path.open(encoding='utf-8', errors='replace') as source:
         for line in source:
             try:
                 event = json.loads(line)
@@ -223,7 +224,24 @@ class _Owned:
         self.error = None
         self.preflight = None
         self.finished = False
+        self.native_process = None
         threading.Thread(target=self._read, daemon=True, name='claude-cli-reader').start()
+
+    def bind_native_process(self):
+        if sys.platform != 'win32':
+            return
+        from bridge.platforms.windows import claude_process
+        pid = self.catalog.get('pid')
+        try:
+            if self.process.poll() is not None:
+                raise OSError('Claude CLI launcher exited before process binding')
+            start = (claude_process.process_start_filetime(pid) if pid == self.process.pid
+                     else claude_process.owned_child_start_filetime(pid, self.process.pid))
+        except OSError as exc:
+            raise BridgeUnavailable('无法确认 Claude Code 原生进程身份') from exc
+        if start is None:
+            raise BridgeUnavailable('Claude Code 原生进程已关闭')
+        self.native_process = (pid, start)
 
     def _read(self):
         try:
@@ -234,6 +252,7 @@ class _Owned:
                     continue
                 if not isinstance(event, dict):
                     continue
+                mismatched = False
                 with self.condition:
                     kind = event.get('type')
                     if kind == 'bridge_preflight':
@@ -253,7 +272,7 @@ class _Owned:
                     elif kind == 'system' and event.get('subtype') == 'init':
                         if event.get('session_id') != self.native or event.get('cwd') != self.cwd:
                             self.error = 'Claude 会话身份或工作目录不一致'
-                            self.process.terminate()
+                            mismatched = True
                         self.model = event.get('model') or self.model
                         self.permission = event.get('permissionMode') or self.permission
                     elif kind == 'system' and event.get('subtype') == 'status':
@@ -268,6 +287,8 @@ class _Owned:
                     elif kind == 'assistant':
                         self.events.append(event)
                     self.condition.notify_all()
+                if mismatched and (sys.platform != 'win32' or self.native_process is not None):
+                    self.close()
         finally:
             with self.condition:
                 self.finished = True
@@ -296,13 +317,20 @@ class _Owned:
         return response.get('response') or {}
 
     def close(self):
-        if self.process.poll() is None:
-            self.process.terminate()
-            try:
-                self.process.wait(timeout=3)
-            except subprocess.TimeoutExpired:
-                self.process.kill()
-                self.process.wait(timeout=3)
+        try:
+            if self.native_process is not None:
+                from bridge.platforms.windows import claude_process
+                pid, start = self.native_process
+                claude_process.terminate_matching_process(pid, start)
+                self.native_process = None
+        finally:
+            if self.process.poll() is None:
+                self.process.terminate()
+                try:
+                    self.process.wait(timeout=3)
+                except subprocess.TimeoutExpired:
+                    self.process.kill()
+                    self.process.wait(timeout=3)
 
 
 class ClaudeCli:
@@ -444,6 +472,7 @@ class ClaudeCli:
         owned = _Owned(process, origin, native, str(project))
         try:
             owned.catalog = owned.control({'subtype': 'initialize', 'hooks': None}, timeout=30)
+            owned.bind_native_process()
             if owned.error:
                 raise BridgeUnavailable(owned.error)
             owned.permission = owned.catalog.get('current_permission_mode')
@@ -551,17 +580,18 @@ class ClaudeCli:
                     command.extend(('--add-dir', str(upload_dir.resolve())))
                 if row['model']:
                     command.extend(('--model', row['model']))
+                command.extend(_permission_prompt_args(profile['binary'], env))
                 try:
                     assert_session_closed(profile['directory'], native)
                 except BridgeUnavailable as exc:
                     raise ResumePreflightBlocked(str(exc)) from exc
-                command.extend(_permission_prompt_args(profile['binary'], env))
                 process = subprocess.Popen(command, cwd=cwd, env=env, stdin=subprocess.PIPE,
                                            stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True,
                                            encoding='utf-8', errors='replace', bufsize=1)
                 owned = _Owned(process, profile['origin'], native, cwd)
                 try:
                     owned.catalog = owned.control({'subtype': 'initialize', 'hooks': None}, timeout=30)
+                    owned.bind_native_process()
                     if owned.error:
                         raise BridgeUnavailable(owned.error)
                     owned.permission = owned.catalog.get('current_permission_mode') or row['permissionMode']

@@ -77,7 +77,7 @@ def assert_session_closed(config_dir: Path, session_id: str = None):
                 continue
             if path.is_symlink() or not path.is_file() or path.stat().st_size > 65536:
                 raise BridgeUnavailable(_UNKNOWN)
-            entry = json.loads(path.read_text())
+            entry = json.loads(path.read_text(encoding='utf-8'))
             if not isinstance(entry, dict):
                 raise BridgeUnavailable(_UNKNOWN)
             if session_id is not None and entry.get('sessionId') != session_id:

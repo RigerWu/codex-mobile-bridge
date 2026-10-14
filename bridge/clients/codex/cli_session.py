@@ -110,6 +110,7 @@ class CliSessions:
         self.on_disconnect = on_disconnect
         self.lock = threading.RLock()
         self.start_lock = threading.Lock()
+        self.daemon_start_generation = 0
         self.attach_locks = {}
         self.joined = {}
         self.attaching = set()
@@ -145,15 +146,16 @@ class CliSessions:
         if self.alias is None and isinstance(self.client, CodexAppServer):
             executable = _local_cli(self.home, self.configured_cli)
             self.client.command[0] = executable
+        generation = self.daemon_start_generation
         try:
             return self.client.connect()
         except AppServerUnavailable:
             with self.start_lock:
-                try:
+                if self.daemon_start_generation != generation:
                     return self.client.connect()
-                except AppServerUnavailable:
-                    self._start_daemon()
-                    return self.client.connect()
+                self._start_daemon()
+                self.daemon_start_generation += 1
+                return self.client.connect()
 
     def _start_daemon(self):
         if self.alias is None:

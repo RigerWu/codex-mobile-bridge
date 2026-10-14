@@ -24,6 +24,7 @@ DESKTOP_WAIT_STATES = {'needs-screen-saver', 'needs-unlock', 'needs-desktop'}
 class Claude:
     def __init__(self, directory, *, auto_connect=True, hosts=None):
         self.directory = Path(directory)
+        self.hosts = hosts
         self.cli = ClaudeCli(self.directory.parent/'uploads')
         self.remote_cli = RemoteClaudeCli(hosts)
         self.desktop = None
@@ -578,6 +579,35 @@ class Claude:
                 'skills': 'getSupportedCommands' in methods, 'queue': kind == 'code', 'steer': kind == 'code',
                 'contextUsage': any(method in methods for method in ('getContextUsageSummary', 'getContextUsage'))}
 
+    def cli_projects(self, include_remote=True):
+        projects = []
+        profile = self.cli.profile_resolver()
+        if profile and self.cli._ready(profile):
+            self.cli.listing()
+            with self.cli.lock:
+                cwds = {row['cwd'] for row in self.cli.index.values()
+                        if row['origin'] == profile['origin']}
+            if self.hosts is not None:
+                cwds.update(row['cwd'] for row in self.hosts.projects() if row['host'] == 'local')
+            for cwd in sorted(cwds):
+                if Path(cwd).is_dir():
+                    projects.append({'key': model.gateway_id('cli:project:'+profile['origin'], cwd),
+                                     'name': Path(cwd).name+' · Claude Code', 'cwd': cwd,
+                                     'surface': 'cli', 'host': 'local', 'origin': profile['origin'],
+                                     'createRequiresMessage': True})
+        if include_remote:
+            projects.extend(self.remote_cli.projects())
+        return projects
+
+    def create_cli(self, project, body):
+        message = body.get('firstMessage', body.get('text', ''))
+        if not isinstance(message, str) or not message.strip() or len(message) > 100000:
+            raise ValueError('请输入首条消息，Claude 将创建会话并发送此消息')
+        if project['host'] == 'local':
+            return self.cli.create(project['cwd'], project['origin'], message)
+        return self.remote_cli.create(project['host'], project['alias'], project['origin'],
+                                      project['cwd'], message)
+
     async def dispatch(self, action, sid, body):
         if action == 'list':
             cli = await asyncio.to_thread(self.cli.listing)
@@ -598,6 +628,19 @@ class Claude:
             return await asyncio.to_thread(self.remote_cli.call, action, sid, body)
         if sid and await asyncio.to_thread(self.cli.contains, sid):
             return await asyncio.to_thread(self.cli.call, action, sid, body)
+        if action == 'projects' or (action == 'create' and not str(body.get('projectKey', '')).startswith(('code:', 'cowork:'))):
+            cli_projects = await asyncio.to_thread(self.cli_projects, action == 'projects')
+            if action == 'create':
+                selected = next((row for row in cli_projects if row['key'] == body.get('projectKey')), None)
+                if selected is None:
+                    remote_projects = await asyncio.to_thread(self.remote_cli.projects)
+                    selected = next((row for row in remote_projects if row['key'] == body.get('projectKey')), None)
+                if selected:
+                    return await asyncio.to_thread(self.create_cli, selected, body)
+            elif not self.status()['connected']:
+                return {'projects': [{key: value for key, value in row.items()
+                                      if key not in ('origin', 'alias')} for row in cli_projects],
+                        'createRequiresMessage': True}
         if not self.status()['connected']:
             raise BridgeUnavailable(self.status()['reason'])
         if action == 'account':
@@ -614,7 +657,9 @@ class Claude:
                 projects[key] = {'key': key, 'cwd': root, 'folders': roots, 'surface': kind,
                                  'name': Path(root).name+' · '+kind, 'createRequiresMessage': True}
             if action == 'projects':
-                return {'projects': list(projects.values()), 'createRequiresMessage': True}
+                public_cli = [{key: value for key, value in row.items()
+                               if key not in ('origin', 'alias')} for row in cli_projects]
+                return {'projects': list(projects.values()) + public_cli, 'createRequiresMessage': True}
             project = projects.get(body.get('projectKey'))
             if not project:
                 raise ValueError('请选择桌面已有项目')
@@ -752,6 +797,19 @@ class Claude:
                 return self.remote_cli.call(action, sid, body or {})
             if sid and self.cli.contains(sid):
                 return self.cli.call(action, sid, body or {})
+            if action in ('projects', 'create'):
+                cli_projects = self.cli_projects(action == 'projects')
+                if action == 'projects':
+                    return {'projects': [{key: value for key, value in row.items()
+                                          if key not in ('origin', 'alias')} for row in cli_projects],
+                            'createRequiresMessage': True}
+                selected = next((row for row in cli_projects
+                                 if row['key'] == (body or {}).get('projectKey')), None)
+                if selected is None:
+                    selected = next((row for row in self.remote_cli.projects()
+                                     if row['key'] == (body or {}).get('projectKey')), None)
+                if selected:
+                    return self.create_cli(selected, body or {})
             raise BridgeUnavailable(self.status()['reason'])
         future = self._submit_call(lambda: self.dispatch(action, sid, body or {}))
         try:

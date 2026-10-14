@@ -213,6 +213,8 @@ class _Owned:
                     if kind == 'bridge_preflight':
                         if self.preflight is None:
                             self.preflight = event
+                        if isinstance(event.get('cwd'), str):
+                            self.cwd = event['cwd']
                         if event.get('status') == 'blocked':
                             self.error = event.get('message') or 'Claude Code 远端恢复前核验失败'
                     elif kind == 'control_response':
@@ -385,6 +387,65 @@ class ClaudeCli:
             return True
         self.listing()
         return sid in self.index
+
+    def create(self, cwd, origin, message):
+        profile = self.profile_resolver()
+        if not profile or profile['origin'] != origin or not self._ready(profile, fresh=True):
+            raise BridgeUnavailable('原 Claude Code 账号配置已变化或不可用')
+        project = Path(cwd).resolve(strict=True)
+        if not project.is_dir():
+            raise ValueError('原项目目录不可用')
+        native = str(uuid.uuid4())
+        sid = model.gateway_id('cli:' + origin, native)
+        env = os.environ.copy()
+        if profile.get('managedApi'):
+            env = {key: value for key, value in env.items() if not key.startswith('ANTHROPIC_')}
+        env['CLAUDE_CONFIG_DIR'] = str(profile['directory'])
+        command = [profile['binary'], '-p', '--session-id', native, '--input-format', 'stream-json',
+                   '--output-format', 'stream-json', '--verbose', '--replay-user-messages',
+                   '--setting-sources', 'user,project,local', '--permission-prompt-tool', 'stdio',
+                   '--permission-prompts', 'host', '--allow-dangerously-skip-permissions']
+        if self.upload_root is not None:
+            upload_dir = self.upload_root/DesktopUploads.scope('claude', sid)
+            upload_dir.mkdir(parents=True, exist_ok=True, mode=0o700)
+            if self.upload_root.is_symlink() or upload_dir.is_symlink():
+                raise ValueError('Claude Code 附件目录无效')
+            command.extend(('--add-dir', str(upload_dir.resolve())))
+        fresh = self.profile_resolver()
+        if not fresh or fresh['origin'] != origin:
+            raise BridgeUnavailable('原 Claude Code 账号配置已变化或不可用')
+        process = subprocess.Popen(command, cwd=str(project), env=env, stdin=subprocess.PIPE,
+                                   stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True, bufsize=1)
+        owned = _Owned(process, origin, native, str(project))
+        try:
+            owned.catalog = owned.control({'subtype': 'initialize', 'hooks': None}, timeout=30)
+            if owned.error:
+                raise BridgeUnavailable(owned.error)
+            owned.permission = owned.catalog.get('current_permission_mode')
+            with self.lock:
+                self.owned[native] = owned
+            message_id = str(uuid.uuid4())
+            with owned.condition:
+                owned.active = True
+                owned.write({'type': 'user', 'uuid': message_id,
+                             'message': {'role': 'user', 'content': message}})
+                acknowledged = owned.condition.wait_for(
+                    lambda: message_id in owned.user_acks or owned.finished or owned.error,
+                    timeout=20)
+                if not acknowledged or message_id not in owned.user_acks:
+                    raise BridgeUnavailable('Claude Code 新建消息结果不明，请检查会话列表')
+            deadline = time.monotonic() + 10
+            while time.monotonic() < deadline:
+                self.listing()
+                with self.lock:
+                    if sid in self.index:
+                        return {'status': 'ready', 'result': {'id': sid}}
+                time.sleep(.1)
+            raise BridgeUnavailable('Claude Code 新建记录尚未出现，请检查会话列表')
+        except Exception:
+            if native not in self.owned:
+                owned.close()
+            raise
 
     def call(self, action, sid, body):
         try:

@@ -9,6 +9,7 @@ import time
 from pathlib import Path
 
 import bridge.clients.claude.model as model
+from bridge.clients.claude.context import context_fields
 from bridge.clients.claude.setup import inspect_installation, console_source, developer_mode_enabled, native_action, running_app, claude_data_home, background_running_app
 from bridge.clients.errors import BridgeUnavailable
 from bridge.clients.claude.mailbox import FileDesktop, MAX_REQUEST, CONNECTOR_REVISION
@@ -640,14 +641,21 @@ class Claude:
         if row['id'] != sid:
             raise BridgeUnavailable('桌面返回的会话标识不一致')
         if action == 'detail':
+            raw = detail['transcript'] if detail is not None else await self.desktop.call(kind, 'getTranscript', native)
             row['contextUsage'] = detail.get('contextUsage') if detail is not None else None
             usage_status = detail.get('contextUsageStatus') if detail is not None else None
             row['contextUsageStatus'] = (usage_status if usage_status in ('available', 'unavailable', 'unsupported') else
                                          'available' if row['contextUsage'] is not None else
                                          'unavailable' if self.session_capabilities(kind)['contextUsage'] else 'unsupported')
-            raw = detail['transcript'] if detail is not None else await self.desktop.call(kind, 'getTranscript', native)
+            if row['contextUsage'] is None:
+                observed = context_fields(raw)
+                if observed['contextUsage'] is not None:
+                    row.update(observed)
+            capabilities = self.session_capabilities(kind)
+            if row['contextUsage'] is not None:
+                capabilities = {**capabilities, 'contextUsage': True}
             return {'connected': True, 'session': row, 'messages': model.transcript(raw), 'turns': model.turns(raw), 'notice': model.transcript_notice(raw),
-                    'capabilities': self.session_capabilities(kind), 'maxRequestBytes': MAX_REQUEST}
+                    'capabilities': capabilities, 'maxRequestBytes': MAX_REQUEST}
         if action == 'catalog':
             value = await self.desktop.call(kind, 'mobileCatalog', native)
             value.update(currentModel=row.get('model'), currentEffort=row.get('effort'))

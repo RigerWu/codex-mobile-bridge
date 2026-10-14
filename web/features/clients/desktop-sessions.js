@@ -189,15 +189,18 @@ class DesktopSessionsView {
     const usage=this.state?.contextUsage,used=usage?.usedTokens,limit=usage?.contextWindow;
     const known=Number.isFinite(used)&&used>=0&&Number.isFinite(limit)&&limit>0,percent=known?Math.round(used/limit*100):null;
     this.contextButton.hidden=!this.state;this.contextRing.style.setProperty('--context-percent',known?Math.min(100,percent)+'%':'0%');this.contextRing.classList.toggle('unknown',!known);
-    this.contextLabel.textContent=known?percent+'%':BridgeI18n.t('上下文');
-    this.contextButton.title=BridgeI18n.t('上下文使用量')+' · '+(known?percent+'%':BridgeI18n.t('暂未提供'));this.contextButton.setAttribute('aria-label',this.contextButton.title);
+    this.contextLabel.textContent=known?percent+'%':Number.isFinite(used)?used.toLocaleString(BridgeI18n.locale()):BridgeI18n.t('上下文');
+    this.contextButton.title=BridgeI18n.t('上下文使用量')+' · '+(known?percent+'%':Number.isFinite(used)?BridgeI18n.t('最近一次模型输入')+' '+used.toLocaleString(BridgeI18n.locale()):BridgeI18n.t('暂未提供'));this.contextButton.setAttribute('aria-label',this.contextButton.title);
   }
   contextDetails(){
     if(!this.state)return;const dialog=this.dialog('上下文使用量'),usage=this.state.contextUsage;
     const number=value=>Number.isFinite(value)&&value>=0?value.toLocaleString(BridgeI18n.locale()):BridgeI18n.t('暂未提供');
     if(!usage)dialog.append(this.translated('p',this.state.contextUsageStatus==='unsupported'?'当前客户端或会话模式未提供上下文用量接口。':this.state.contextUsageStatus==='unavailable'?'当前会话尚未提供上下文用量；有可用数据时会自动更新。':'当前客户端尚未提供此会话的上下文用量。','muted'));
-    else {for(const [label,key] of [['已用 Token','usedTokens'],['上下文容量','contextWindow']])dialog.append(this.node('p','',BridgeI18n.t(label)+' · '+number(usage[key])));
+    else {for(const [label,key] of [[usage.measurement==='lastPrompt'?'最近一次模型输入':'已用 Token','usedTokens'],['上下文容量','contextWindow']])dialog.append(this.node('p','',BridgeI18n.t(label)+' · '+number(usage[key])));
       if(usage.contextWindow>0&&Number.isFinite(usage.usedTokens))dialog.append(this.node('p','',BridgeI18n.t('使用占比')+' · '+(usage.usedTokens/usage.contextWindow*100).toFixed(1)+'%'));
+      if(usage.model)dialog.append(this.node('p','',BridgeI18n.t('模型')+' · '+usage.model));
+      if(usage.compacted)dialog.append(this.translated('p','最近一次压缩后统计。','muted'));
+      if(usage.measurement==='lastPrompt')dialog.append(this.translated('p','统计最近一次请求的输入与缓存 Token；不包含尚未发送的内容。','muted'));
       if(usage.estimated)dialog.append(this.translated('p','包含客户端对尚未发送内容的估算。','muted'));
       if(!this.freshDetail)dialog.append(this.translated('p','当前为缓存数据，连接恢复后更新。','muted'));
     }dialog.showModal();

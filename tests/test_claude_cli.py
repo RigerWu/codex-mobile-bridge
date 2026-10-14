@@ -5,6 +5,7 @@ import threading
 import unittest
 import uuid
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import Mock, patch
 
 from bridge.clients.claude import model
@@ -52,6 +53,32 @@ class ClaudeCliContract(unittest.TestCase):
         self.assertEqual(detail['session']['permissionMode'], 'plan')
         self.assertTrue(detail['capabilities']['resume'])
         self.assertFalse(detail['capabilities']['send'])
+
+    def test_saved_context_uses_latest_native_assistant_reading(self):
+        event = {'type': 'assistant', 'cwd': str(self.cwd), 'message': {'id': 'last', 'role': 'assistant',
+                 'model': 'fixture-model', 'usage': {'input_tokens': 12,
+                 'cache_creation_input_tokens': 30, 'cache_read_input_tokens': 40}}}
+        with self.path.open('a') as target:
+            target.write(json.dumps(event)+'\n')
+        listed = self.cli.listing()['sessions'][0]
+        self.assertEqual(listed['contextUsage']['usedTokens'], 82)
+        self.assertIsNone(listed['contextUsage']['contextWindow'])
+        self.assertEqual(self.cli.call('detail', self.sid, {})['session']['contextUsage']['usedTokens'], 82)
+
+    def test_live_context_supersedes_saved_reading_and_compaction_clears_it(self):
+        self.cli.listing()
+        owner = SimpleNamespace(origin=self.profile['origin'], process=Mock(), error=None,
+                                condition=threading.Condition(), pending={}, active=True,
+                                events=[{'type': 'assistant', 'message': {'id': 'live',
+                                         'usage': {'input_tokens': 7, 'cache_read_input_tokens': 11}}}],
+                                model=None, permission=None)
+        owner.process.poll.return_value = None
+        self.cli.owned[self.native] = owner
+        self.assertEqual(self.cli.call('detail', self.sid, {})['session']['contextUsage']['usedTokens'], 18)
+        owner.events.append({'type': 'system', 'subtype': 'compact_boundary'})
+        result = self.cli.call('detail', self.sid, {})['session']
+        self.assertIsNone(result['contextUsage'])
+        self.assertEqual(result['contextUsageStatus'], 'unavailable')
 
     def test_closed_adapter_status_never_queries_auth(self):
         self.cli.close()

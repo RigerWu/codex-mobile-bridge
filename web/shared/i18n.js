@@ -40,6 +40,7 @@ const en={
 "远端读取失败":"Remote read failed",
 "本机历史读取失败":"Local history read failed",
 "正在读取连接诊断…":"Loading connection diagnostics…",
+"正在读取 SSH 连接诊断…":"Loading SSH connection diagnostics…",
 "诊断已更新":"Diagnostics updated",
 "此版本 App 不支持导出文件，请复制摘要或更新 App。":"This app version cannot export files. Copy the summary or update the app.",
 "继续会话":"Continue chat",

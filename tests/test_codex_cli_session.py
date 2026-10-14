@@ -7,6 +7,7 @@ import threading
 import time
 import unittest
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import Mock, patch
 
 from bridge.clients.codex.app_server import AppServerError, AppServerUnavailable, AppServerUnsupported, AppServerUnknownResult
@@ -40,7 +41,7 @@ class FakeClient:
             return {'thread': self.thread.copy()}
         if method == 'thread/resume':
             return {'thread': self.thread.copy(), 'modelProvider': 'original-provider',
-                    'cwd': '/original/project', 'model': 'original-model'}
+                    'cwd': self.thread['cwd'], 'model': 'original-model'}
         if method == 'turn/start':
             return {'turn': {'id': 'turn-1'}}
         if method == 'model/list':
@@ -128,6 +129,70 @@ class CliSessionTests(unittest.TestCase):
         with patch.object(self.sessions.store, 'get', return_value=saved):
             with self.assertRaises(AppServerUnsupported):
                 self.sessions.attach('thread-a', explicit=True)
+        self.assertFalse(any(method == 'thread/resume' for method, _ in self.fake.sent))
+
+    def test_local_windows_cold_resume_accepts_same_directory_extended_path(self):
+        self.fake.loaded = False
+        self.fake.thread['cwd'] = r'C:\project'
+        saved = {'id': 'thread-a', 'origin': 'cli',
+                 'cwd': r'\\?\C:\project', 'model_provider': 'original-provider'}
+        samefile = Mock(return_value=True)
+        windows = SimpleNamespace(name='nt', path=SimpleNamespace(samefile=samefile))
+        with patch.object(self.sessions.store, 'get', return_value=saved), \
+                patch('bridge.clients.codex.cli_session.os', windows):
+            state = self.sessions.attach('thread-a', explicit=True)
+        self.assertEqual(state['id'], 'thread-a')
+        samefile.assert_called_once_with(r'\\?\C:\project', r'C:\project')
+
+    def test_local_windows_cold_resume_rejects_different_directory(self):
+        self.fake.loaded = False
+        self.fake.thread['cwd'] = r'C:\project'
+        saved = {'id': 'thread-a', 'origin': 'cli',
+                 'cwd': r'\\?\C:\other', 'model_provider': 'original-provider'}
+        windows = SimpleNamespace(name='nt', path=SimpleNamespace(samefile=Mock(return_value=False)))
+        with patch.object(self.sessions.store, 'get', return_value=saved), \
+                patch('bridge.clients.codex.cli_session.os', windows):
+            with self.assertRaises(AppServerUnsupported):
+                self.sessions.attach('thread-a', explicit=True)
+        self.assertFalse(any(method == 'thread/resume' for method, _ in self.fake.sent))
+
+    def test_local_windows_cold_resume_rejects_unverifiable_directory(self):
+        self.fake.loaded = False
+        saved = {'id': 'thread-a', 'origin': 'cli',
+                 'cwd': r'\\?\C:\project', 'model_provider': 'original-provider'}
+        windows = SimpleNamespace(name='nt', path=SimpleNamespace(
+            samefile=Mock(side_effect=OSError('inaccessible'))))
+        with patch.object(self.sessions.store, 'get', return_value=saved), \
+                patch('bridge.clients.codex.cli_session.os', windows):
+            with self.assertRaises(AppServerUnsupported):
+                self.sessions.attach('thread-a', explicit=True)
+        self.assertFalse(any(method == 'thread/resume' for method, _ in self.fake.sent))
+
+    def test_local_posix_cold_resume_keeps_strict_path_identity(self):
+        self.fake.loaded = False
+        saved = {'id': 'thread-a', 'origin': 'cli',
+                 'cwd': '/other/project', 'model_provider': 'original-provider'}
+        samefile = Mock(return_value=True)
+        posix = SimpleNamespace(name='posix', path=SimpleNamespace(samefile=samefile))
+        with patch.object(self.sessions.store, 'get', return_value=saved), \
+                patch('bridge.clients.codex.cli_session.os', posix):
+            with self.assertRaises(AppServerUnsupported):
+                self.sessions.attach('thread-a', explicit=True)
+        samefile.assert_not_called()
+        self.assertFalse(any(method == 'thread/resume' for method, _ in self.fake.sent))
+
+    def test_ssh_cold_resume_does_not_use_local_windows_path_identity(self):
+        self.sessions.alias = '88server'
+        self.fake.loaded = False
+        saved = {'id': 'thread-a', 'origin': 'cli',
+                 'cwd': r'\\?\C:\project', 'model_provider': 'original-provider'}
+        samefile = Mock(return_value=True)
+        windows = SimpleNamespace(name='nt', path=SimpleNamespace(samefile=samefile))
+        with patch.object(self.sessions.store, 'get', return_value=saved), \
+                patch('bridge.clients.codex.cli_session.os', windows):
+            with self.assertRaises(AppServerUnsupported):
+                self.sessions.attach('thread-a', explicit=True)
+        samefile.assert_not_called()
         self.assertFalse(any(method == 'thread/resume' for method, _ in self.fake.sent))
 
     def test_resume_response_identity_mismatch_is_not_joined(self):

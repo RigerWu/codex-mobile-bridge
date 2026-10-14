@@ -458,6 +458,41 @@ class ClientLifecycleTests(unittest.TestCase):
         self.assertTrue(result['canSwitch'])
         store.commit.assert_called_once_with('transaction')
 
+    def test_optional_claude_cli_sync_reports_partial_failure_after_desktop_verified(self):
+        store = Mock()
+        store.restore.return_value = 'transaction'
+        store.public.return_value = {'accounts': [{'id': 'other', 'kind': 'api', 'saved': True}],
+                                     'activeId': 'other'}
+        self.manager._account_store = Mock(return_value=store)
+        self.bridge.cli_access = Mock()
+        self.bridge.cli_access.change.side_effect = ValueError('CLI profile rejected')
+        with patch('bridge.features.accounts.cli_sync.LocalCliSync.preflight',
+                   return_value={'sharedWithDesktop': False}):
+            result = self.manager.client_accounts('claude', {'operation': 'switch', 'id': 'other',
+                                                              'syncLocalCli': True})
+        self.assertEqual(result['activeId'], 'other')
+        self.assertEqual(result['cliSync']['status'], 'failed')
+        self.assertEqual(result['cliSync']['desktopStatus'], 'verified')
+        store.rollback.assert_not_called()
+        store.commit.assert_called_once_with('transaction')
+
+    def test_optional_claude_cli_sync_reports_both_targets_verified(self):
+        store = Mock()
+        store.restore.return_value = 'transaction'
+        store.public.return_value = {'accounts': [{'id': 'other', 'kind': 'api', 'saved': True}],
+                                     'activeId': 'other'}
+        self.manager._account_store = Mock(return_value=store)
+        self.bridge.cli_access = Mock()
+        self.bridge.cli_access.change.side_effect = [
+            {'savedId': 'cli-profile'}, {'claude': {'activeId': 'cli-profile'}}]
+        with patch('bridge.features.accounts.cli_sync.LocalCliSync.preflight',
+                   return_value={'sharedWithDesktop': False}):
+            result = self.manager.client_accounts('claude', {'operation': 'switch', 'id': 'other',
+                                                              'syncLocalCli': True})
+        self.assertEqual(result['activeId'], 'other')
+        self.assertEqual(result['cliSync']['status'], 'verified')
+        self.assertEqual(self.bridge.cli_access.change.call_args_list[1].args[0]['id'], 'cli-profile')
+
     def test_failed_account_launch_restores_previous_profile(self):
         store = Mock()
         store.restore.return_value = 'transaction'

@@ -28,75 +28,17 @@ PERMISSION_OPTIONS = (
 )
 
 
-def _skill_metadata(path):
-    try:
-        if path.is_symlink() or path.stat().st_size > 100_000:
-            return None
-        source = path.read_text(encoding='utf-8')
-    except (OSError, UnicodeError):
-        return None
-    if not source.startswith('---\n'):
-        return None
-    end = source.find('\n---', 4)
-    if end < 0:
-        return None
-    fields = {}
-    for line in source[4:end].splitlines():
-        match = re.fullmatch(r'([A-Za-z][A-Za-z-]*):\s*(.*?)\s*', line)
-        if match:
-            fields[match[1]] = match[2].strip('"\'')
-    name = fields.get('name') or path.parent.name
-    if not re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9_-]{0,63}', name):
-        return None
-    return {'name': name, 'description': fields.get('description', ''),
-            'selectable': fields.get('user-invocable', 'true').lower() != 'false'}
-
-
-def _skill_catalog(profile, cwd):
-    """Expose installed SKILL.md files from the same profile and cwd as the owned CLI."""
-    directory = profile['directory']
-    roots = [(directory/'skills', '')]
-    project = Path(cwd)
-    enabled_plugins = {}
-    for settings in (directory/'settings.json', *(parent/'.claude'/'settings.json' for parent in
-                                                    reversed((project, *project.parents))),
-                     project/'.claude'/'settings.local.json'):
-        try:
-            values = json.loads(settings.read_text()).get('enabledPlugins', {})
-            if isinstance(values, dict):
-                enabled_plugins.update(values)
-        except (OSError, ValueError, AttributeError):
-            pass
-    for parent in reversed((project, *project.parents)):
-        roots.append((parent/'.claude'/'skills', ''))
-    registry = directory/'plugins'/'installed_plugins.json'
-    try:
-        plugins = json.loads(registry.read_text()).get('plugins', {})
-    except (OSError, ValueError, AttributeError):
-        plugins = {}
-    if isinstance(plugins, dict):
-        for key, entries in plugins.items():
-            if not isinstance(key, str) or not re.fullmatch(r'[A-Za-z0-9_-]+@[A-Za-z0-9_.-]+', key):
-                continue
-            if enabled_plugins.get(key) is False:
-                continue
-            for entry in entries if isinstance(entries, list) else [entries]:
-                if isinstance(entry, dict) and isinstance(entry.get('installPath'), str):
-                    root = Path(entry['installPath'])
-                    if root.is_dir() and not root.is_symlink():
-                        roots.append((root/'skills', key.split('@', 1)[0] + ':'))
+def _skill_catalog(catalog):
+    """Use commands loaded by the native CLI with this profile and project."""
     rows = {}
-    for root, namespace in roots:
-        if not root.is_dir() or root.is_symlink():
+    for item in catalog.get('commands') or []:
+        if not isinstance(item, dict) or item.get('builtin'):
             continue
-        for path in root.glob('*/SKILL.md'):
-            if path.parent.is_symlink():
-                continue
-            metadata = _skill_metadata(path)
-            if metadata:
-                name = namespace + metadata['name']
-                rows[name] = {'id': name, 'name': name, 'description': metadata['description'],
-                              'kind': 'skill', 'selectable': metadata['selectable']}
+        name = item.get('name')
+        if not isinstance(name, str) or not re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9_:/-]{0,127}', name):
+            continue
+        rows[name] = {'id': name, 'name': name, 'description': item.get('description') or '',
+                      'kind': 'skill', 'selectable': True}
     return sorted(rows.values(), key=lambda row: row['id'])
 IMAGE_URL = re.compile(r'data:(image/(?:png|jpeg|gif|webp));base64,([A-Za-z0-9+/]+={0,2})\Z')
 
@@ -181,21 +123,22 @@ def _message_content(body):
     files = body.get('resolvedFiles') or []
     if not images and not files:
         return body['text']
-    blocks = []
-    if body['text'].strip():
-        blocks.append({'type': 'text', 'text': body['text']})
-    for image in images:
-        match = IMAGE_URL.fullmatch(image.get('url', '')) if isinstance(image, dict) else None
-        if not match:
-            raise ValueError('图片附件格式无效')
-        blocks.append({'type': 'image', 'source': {'type': 'base64', 'media_type': match[1], 'data': match[2]}})
+    text = body['text']
     if files:
         references = []
         for item in files:
             if not isinstance(item, dict) or not isinstance(item.get('path'), str) or not Path(item['path']).is_absolute() or not isinstance(item.get('name'), str):
                 raise ValueError('文件附件格式无效')
             references.append({'name': item['name'], 'path': item['path']})
-        blocks.append({'type': 'text', 'text': '请读取并参考这些已上传的本机文件：\n'+json.dumps(references, ensure_ascii=False)})
+        text += ('\n\n' if text.strip() else '') + '请读取并参考这些已上传的本机文件：\n' + json.dumps(references, ensure_ascii=False)
+    # Claude parses slash invocations from a single text block. Keep file
+    # references with that text so adding an attachment preserves the Skill.
+    blocks = [{'type': 'text', 'text': text}] if text.strip() else []
+    for image in images:
+        match = IMAGE_URL.fullmatch(image.get('url', '')) if isinstance(image, dict) else None
+        if not match:
+            raise ValueError('图片附件格式无效')
+        blocks.append({'type': 'image', 'source': {'type': 'base64', 'media_type': match[1], 'data': match[2]}})
     return blocks
 
 
@@ -481,7 +424,7 @@ class ClaudeCli:
                                     'efforts': []} for item in models if isinstance(item, dict) and (item.get('value') or item.get('id'))],
                         'currentModel': public['model'], 'currentEffort': '', 'capabilities': {'models': True, 'effort': False,
                                                                                              'skills': True},
-                        'skills': _skill_catalog(_profile(), row['cwd'])}
+                        'skills': _skill_catalog(owned.catalog)}
             if action == 'access' and 'mode' not in body:
                 options = [{'value': mode, 'label': label, 'description': description}
                            for mode, label, description in PERMISSION_OPTIONS]
@@ -542,7 +485,7 @@ class ClaudeCli:
                 if not isinstance(selected, list) or len(selected) > 1:
                     raise ValueError('Claude Code CLI 每条消息只能调用一个 Skill')
                 if selected:
-                    offered = {skill['id'] for skill in _skill_catalog(_profile(), row['cwd'])
+                    offered = {skill['id'] for skill in _skill_catalog(owned.catalog)
                                if skill['selectable']}
                     if selected[0] not in offered:
                         raise ValueError('技能已不可用，请刷新后选择')

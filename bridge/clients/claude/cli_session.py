@@ -189,11 +189,13 @@ class _Owned:
         self.responses = {}
         self.pending = {}
         self.events = []
+        self.user_acks = set()
         self.active = False
         self.model = None
         self.permission = None
         self.catalog = {}
         self.error = None
+        self.preflight = None
         self.finished = False
         threading.Thread(target=self._read, daemon=True, name='claude-cli-reader').start()
 
@@ -208,7 +210,12 @@ class _Owned:
                     continue
                 with self.condition:
                     kind = event.get('type')
-                    if kind == 'control_response':
+                    if kind == 'bridge_preflight':
+                        if self.preflight is None:
+                            self.preflight = event
+                        if event.get('status') == 'blocked':
+                            self.error = event.get('message') or 'Claude Code 远端恢复前核验失败'
+                    elif kind == 'control_response':
                         response = event.get('response') or {}
                         self.responses[response.get('request_id')] = response
                     elif kind == 'control_request' and (event.get('request') or {}).get('subtype') == 'can_use_tool':
@@ -228,6 +235,9 @@ class _Owned:
                         self.active = False
                         self.pending.clear()
                         self.events.append(event)
+                    elif kind == 'user':
+                        if event.get('isReplay') is True and isinstance(event.get('uuid'), str):
+                            self.user_acks.add(event['uuid'])
                     elif kind == 'assistant':
                         self.events.append(event)
                     self.condition.notify_all()

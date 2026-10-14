@@ -22,5 +22,5 @@ class DesktopUploads:
             raise ValueError('此应用的消息附件仅支持图片；其他文件请使用文件传输。')
         images = [{'url': 'data:'+row['image']+';base64,'+base64.b64encode(Path(row['localPath']).read_bytes()).decode('ascii'),
                    'name': row['name']} for row in rows if row.get('image')]
-        files = [{'path': row['localPath'], 'name': row['name']} for row in rows if not row.get('image')]
+        files = [{'id': row['id'], 'path': row['localPath'], 'name': row['name']} for row in rows if not row.get('image')]
         return images, files

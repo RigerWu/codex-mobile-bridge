@@ -476,8 +476,7 @@ class Handler(BaseHTTPRequestHandler):
                         return self.output(503, {'error': '桌面会话接入不可用'})
                     detail = manager.call(parts[2], 'detail', sid)
                     session = detail.get('session') or {}
-                    local_cli = (parts[2] == 'claude' and session.get('backend') == 'cli'
-                                 and session.get('host') == 'local')
+                    local_cli = parts[2] == 'claude' and session.get('backend') == 'cli'
                     images, files = self.server.desktop_uploads.resolve(
                         parts[2], sid, body.pop('attachments'), local_claude_cli=local_cli)
                     body['resolvedImages'] = images

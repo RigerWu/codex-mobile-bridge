@@ -116,6 +116,28 @@ class LocalCliSyncTests(unittest.TestCase):
         self.assertFalse(cli.owned)
         self.assertIsNone(cli.auth_cache)
 
+    def test_first_api_switch_creates_missing_default_profile_then_rolls_back(self):
+        identifier = 'b'*32
+        directory = self.root/'.claude'
+        secret = self.root/'cli-access'/'claude'/identifier/'api.json'
+        private_json(secret, {'key': 'fixture-key'})
+        row = {'id': identifier, 'kind': 'api', 'directory': str(directory),
+               'secretPath': str(secret), 'baseUrl': 'https://fixture.invalid',
+               'model': 'fixture-model', 'authScheme': 'x-api-key'}
+        native = {'directory': directory, 'origin': 'default:'+str(directory)+':none',
+                  'binary': '/fixture/claude'}
+        with patch('bridge.features.accounts.cli_sync.Path.home', return_value=self.root), \
+             patch('bridge.clients.claude.cli_session._profile', return_value=native), \
+             patch.object(self.sync, '_claude_auth', return_value={'loggedIn': True}):
+            self.assertEqual(self.sync.apply('claude', row)['status'], 'applied')
+            self.assertTrue((directory/'settings.json').is_file())
+            self.assertEqual(self.sync.verify('claude', row)['status'], 'configured')
+            self.sync.restore('claude', {})
+        self.assertFalse(directory.exists())
+        row['directory'] = str(self.root/'different-missing')
+        with self.assertRaisesRegex(ValueError, '配置目录不可用'):
+            self.sync.apply('claude', row)
+
     def test_desktop_claude_import_requires_active_verified_api_snapshot(self):
         directory = self.root/'desktop-profile'
         directory.mkdir()

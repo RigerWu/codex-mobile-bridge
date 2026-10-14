@@ -9,6 +9,7 @@ from types import SimpleNamespace
 from unittest.mock import Mock, patch
 
 from bridge.features.accounts.cli_access import CliAccess
+from bridge.clients.claude.cli_session import ClaudeCli, ResumePreflightBlocked
 
 
 class CliAccessTests(unittest.TestCase):
@@ -108,6 +109,107 @@ class CliAccessTests(unittest.TestCase):
                                  'id': identifier, 'confirmed': True})
         self.assertIsNone(self.manager.public()['claude']['activeId'])
         sync.snapshot.assert_not_called()
+
+    def test_claude_switch_does_not_invert_cli_and_profile_locks(self):
+        identifier = self.save_api()
+        cli = ClaudeCli(profile_resolver=self.manager.claude_profile)
+        self.bridge.desktop_sessions = SimpleNamespace(adapters={'claude': SimpleNamespace(cli=cli)})
+        class ObservedLock:
+            def __init__(self):
+                self.inner = threading.RLock()
+                self.switch_attempted = threading.Event()
+            def __enter__(self):
+                if threading.current_thread().name == 'switch':
+                    self.switch_attempted.set()
+                self.inner.acquire()
+                return self
+            def __exit__(self, *_):
+                self.inner.release()
+        cli.lock = ObservedLock()
+        holding = threading.Event()
+        release = threading.Event()
+        poll_done = threading.Event()
+        switch_done = threading.Event()
+        failures = []
+        sync = Mock()
+        sync.preflight.return_value = {'desktopRunning': False}
+        sync.verify.return_value = {'status': 'configured'}
+        def poll():
+            try:
+                with cli.lock:
+                    holding.set()
+                    assert release.wait(2)
+                    self.manager.claude_profile()
+            except Exception as error:
+                failures.append(error)
+            finally:
+                poll_done.set()
+        def switch():
+            try:
+                self.manager.change({'provider': 'claude', 'action': 'switch',
+                                     'id': identifier, 'confirmed': True})
+            except Exception as error:
+                failures.append(error)
+            finally:
+                switch_done.set()
+        with self.sync_patch(sync):
+            poll_thread = threading.Thread(target=poll, daemon=True)
+            switch_thread = threading.Thread(target=switch, name='switch', daemon=True)
+            poll_thread.start()
+            self.assertTrue(holding.wait(2))
+            switch_thread.start()
+            self.assertTrue(cli.lock.switch_attempted.wait(2))
+            release.set()
+            self.assertTrue(poll_done.wait(2), 'poll deadlocked resolving profile')
+            self.assertTrue(switch_done.wait(2), 'switch deadlocked behind CLI lock')
+        self.assertFalse(failures)
+
+    def test_resume_waits_until_claude_switch_transaction_finishes(self):
+        identifier = self.save_api()
+        cli = ClaudeCli(profile_resolver=self.manager.claude_profile)
+        self.bridge.desktop_sessions = SimpleNamespace(adapters={'claude': SimpleNamespace(cli=cli)})
+        applying = threading.Event()
+        finish_apply = threading.Event()
+        switch_done = threading.Event()
+        resume_done = threading.Event()
+        failures = []
+        sync = Mock()
+        sync.preflight.return_value = {'desktopRunning': False}
+        sync.verify.return_value = {'status': 'configured'}
+        def apply(*_):
+            applying.set()
+            assert finish_apply.wait(2)
+        sync.apply.side_effect = apply
+        def switch():
+            try:
+                self.manager.change({'provider': 'claude', 'action': 'switch',
+                                     'id': identifier, 'confirmed': True})
+            except Exception as error:
+                failures.append(error)
+            finally:
+                switch_done.set()
+        def resume():
+            try:
+                cli.call('resume', 'old-session', {})
+            except ResumePreflightBlocked:
+                pass  # The old origin is stale after the completed switch.
+            except Exception as error:
+                failures.append(error)
+            finally:
+                resume_done.set()
+        with self.sync_patch(sync), patch.object(cli, '_get', return_value={
+                'nativeId': 'old-session', 'origin': 'old-origin'}), \
+                patch.object(cli, '_public', return_value={'permissionMode': 'default'}):
+            switch_thread = threading.Thread(target=switch, daemon=True)
+            switch_thread.start()
+            self.assertTrue(applying.wait(2))
+            resume_thread = threading.Thread(target=resume, daemon=True)
+            resume_thread.start()
+            self.assertFalse(resume_done.wait(.1), 'resume crossed in-progress settings write')
+            finish_apply.set()
+            self.assertTrue(switch_done.wait(2))
+            self.assertTrue(resume_done.wait(2))
+        self.assertFalse(failures)
 
     def test_codex_stopped_desktop_uses_same_saved_row_and_verifies(self):
         row = {'id': 'saved', 'kind': 'api', 'name': 'Codex API'}

@@ -9,6 +9,7 @@ from types import SimpleNamespace
 from unittest.mock import Mock, patch
 
 from bridge.clients.claude import model
+from bridge.clients.claude.adapter import Claude
 from bridge.clients.claude.cli_session import ClaudeCli, ResumePreflightBlocked, _Owned, _skill_catalog, _auth_ready
 from bridge.clients.errors import BridgeUnavailable
 from bridge.clients.manager import DesktopSessions
@@ -193,6 +194,34 @@ class ClaudeCliContract(unittest.TestCase):
         self.assertEqual(manager.call('claude', 'resume', self.sid, body)['status'], 'ready')
         self.assertEqual(manager.call('claude', 'resume', self.sid, body)['status'], 'ready')
         adapter.call.assert_called_once_with('resume', self.sid, body)
+
+    def test_uncertain_create_is_not_replayed_with_same_receipt(self):
+        manager = DesktopSessions(self.root/'gateway')
+        self.addCleanup(manager.close)
+        adapter = Mock()
+        adapter.call.side_effect = BridgeUnavailable('create result uncertain')
+        manager.adapters['claude'] = adapter
+        body = {'id': str(uuid.uuid4()), 'projectKey': 'cli:fixture', 'firstMessage': 'First request'}
+        self.assertEqual(manager.call('claude', 'create', None, body)['status'], 'unknown')
+        self.assertEqual(manager.call('claude', 'create', None, body)['status'], 'unknown')
+        adapter.call.assert_called_once_with('create', None, body)
+
+    def test_cli_create_routes_selected_project_without_desktop_connection(self):
+        hosts = Mock()
+        hosts.hosts.return_value = {}
+        hosts.projects.return_value = [{'host': 'local', 'cwd': str(self.cwd)}]
+        adapter = Claude(self.root/'adapter', auto_connect=False, hosts=hosts)
+        self.addCleanup(adapter.close)
+        adapter.cli.profile_resolver = lambda: self.profile
+        with patch.object(adapter.cli, '_ready', return_value=True), \
+             patch.object(adapter.remote_cli, 'projects', return_value=[]), \
+             patch.object(adapter.cli, 'create', return_value={'status': 'ready', 'result': {'id': 'created'}}) as create:
+            projects = adapter.call('projects')['projects']
+            project = next(row for row in projects if row['surface'] == 'cli')
+            self.assertNotIn('origin', project)
+            self.assertEqual(adapter.call('create', body={
+                'projectKey': project['key'], 'firstMessage': 'Native first request'})['result']['id'], 'created')
+        create.assert_called_once_with(str(self.cwd), self.profile['origin'], 'Native first request')
 
     def test_file_only_send_uses_receipt_and_does_not_replay(self):
         manager = DesktopSessions(self.root/'gateway')

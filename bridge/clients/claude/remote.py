@@ -144,6 +144,40 @@ class RemoteClaudeCli:
         with self.lock:
             return sid in self.index
 
+    def projects(self):
+        if self.closed or self.hosts is None:
+            return []
+        configured = self.hosts.hosts()
+        known = self.hosts.projects()
+        rows = []
+        def discover(host_id, host):
+            cwds = {item['cwd'] for item in known if item.get('host') == host_id}
+            try:
+                result = _remote(host['alias'], {'operation': 'list'}, timeout=12)
+                found = result.get('profile')
+                if not found or not _remote(host['alias'], {'operation': 'auth',
+                        'origin': found['origin']}, timeout=12)['ready']:
+                    return []
+            except BridgeUnavailable:
+                return []
+            cwds.update(item['cwd'] for item in result.get('sessions') or []
+                    if isinstance(item, dict) and isinstance(item.get('cwd'), str))
+            discovered = []
+            for cwd in sorted(cwds):
+                if not cwd.startswith('/'):
+                    continue
+                discovered.append({'key': model.gateway_id('cli:project:ssh:'+host_id+':'+found['origin'], cwd),
+                                   'name': Path(cwd).name+' · '+(host.get('displayName') or host['alias']),
+                                   'cwd': cwd, 'surface': 'cli', 'host': host_id,
+                                   'alias': host['alias'], 'origin': found['origin'],
+                                   'createRequiresMessage': True})
+            return discovered
+        with ThreadPoolExecutor(max_workers=min(4, max(1, len(configured)))) as pool:
+            futures = [pool.submit(discover, host_id, host) for host_id, host in configured.items()]
+            for future in as_completed(futures):
+                rows.extend(future.result())
+        return rows
+
     def _get(self, sid, *, events=False):
         with self.lock:
             row = self.index.get(sid)
@@ -204,6 +238,74 @@ class RemoteClaudeCli:
                 'data': base64.b64encode(data).decode('ascii')}, timeout=90)
             result.append({'name': item['name'], 'path': remote['path']})
         return result
+
+    def create(self, host_id, alias, origin, cwd, message):
+        host = self.hosts.hosts().get(host_id) if self.hosts else None
+        if not host or host['alias'] != alias:
+            raise ValueError('原 SSH 主机配置已变化')
+        fresh = _remote(alias, {'operation': 'list'}, timeout=12).get('profile')
+        if not fresh or fresh['origin'] != origin or not _remote(
+                alias, {'operation': 'auth', 'origin': origin}, timeout=12)['ready']:
+            raise BridgeUnavailable('原 SSH Claude Code 账号配置已变化或不可用')
+        native = str(uuid.uuid4())
+        sid = model.gateway_id('cli:ssh:'+host_id+':'+origin, native)
+        process = subprocess.Popen(_command(alias), stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+                                   stderr=subprocess.DEVNULL, text=True, bufsize=1)
+        try:
+            process.stdin.write(json.dumps({'operation': 'create', 'origin': origin,
+                'native': native, 'cwd': cwd, 'scope': DesktopUploads.scope('claude', sid)})+'\n')
+            process.stdin.flush()
+        except OSError:
+            process.terminate()
+            raise BridgeUnavailable('SSH Claude Code 新建结果不明，请检查会话列表') from None
+        owned = _Owned(process, origin, native, cwd)
+        with owned.condition:
+            owned.condition.wait_for(lambda: owned.preflight is not None or owned.finished, timeout=20)
+            blocked = owned.preflight and owned.preflight.get('status') == 'blocked'
+        if blocked:
+            error = owned.error
+            owned.close()
+            raise BridgeUnavailable(error)
+        if owned.preflight is None:
+            owned.close()
+            raise BridgeUnavailable('SSH Claude Code 新建结果不明，请检查会话列表')
+        try:
+            owned.catalog = owned.control({'subtype': 'initialize', 'hooks': None}, timeout=30)
+            if owned.error:
+                raise BridgeUnavailable(owned.error)
+            owned.permission = owned.catalog.get('current_permission_mode')
+            with self.lock:
+                self.owned[sid] = owned
+            message_id = str(uuid.uuid4())
+            with owned.condition:
+                owned.active = True
+                owned.write({'type': 'user', 'uuid': message_id,
+                             'message': {'role': 'user', 'content': message}})
+                acknowledged = owned.condition.wait_for(
+                    lambda: message_id in owned.user_acks or owned.finished or owned.error,
+                    timeout=20)
+                if not acknowledged or message_id not in owned.user_acks:
+                    raise BridgeUnavailable('SSH Claude Code 新建消息结果不明，请检查会话列表')
+            deadline = time.monotonic() + 10
+            while time.monotonic() < deadline:
+                try:
+                    saved = _remote(alias, {'operation': 'detail', 'origin': origin,
+                                            'native': native, 'events': False}, timeout=5)
+                except BridgeUnavailable:
+                    saved = None
+                if saved and saved['cwd'] == owned.cwd and saved['origin'] == origin:
+                    row = self._row(host_id, host, saved)
+                    with self.lock:
+                        self.index[sid] = row
+                    return {'status': 'ready', 'result': {'id': sid}}
+                time.sleep(.2)
+            raise BridgeUnavailable('SSH Claude Code 新建记录尚未出现，请检查会话列表')
+        except Exception:
+            with self.lock:
+                retained = sid in self.owned
+            if not retained:
+                owned.close()
+            raise
 
     def call(self, action, sid, body):
         try:

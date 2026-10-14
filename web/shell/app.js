@@ -206,7 +206,7 @@ $('search').oninput=()=>{clearTimeout(loadList.timer);loadList.timer=setTimeout(
 let sessionDiagnosticsText='';
 const diagnosticsPath='/api/sessions/diagnostics';
 function diagnosticsSummary(value){
-  const lines=[t('连接诊断')];
+  const lines=[t('SSH 连接诊断')];
   for(const host of value.hosts||[]){
     const location=host.host==='local'?t('此电脑'):t('远端电脑')+' '+(String(host.host).match(/^remote-\d+$/)?.[0].slice(7)||'?'),status=host.status==='ok'?t('可用'):t('不可用');
     lines.push(location+' · '+status+' · '+t(host.phase==='ssh'?'SSH 连接':host.phase==='store'?'历史读取':'会话发现'));
@@ -219,7 +219,7 @@ function diagnosticsSummary(value){
 }
 async function loadSessionDiagnostics(){
   const status=$('session-diagnostics-status'),summary=$('session-diagnostics-summary'),error=$('session-diagnostics-error');
-  status.textContent=t('正在读取连接诊断…');summary.textContent='';error.textContent='';sessionDiagnosticsText='';
+  status.textContent=t('正在读取 SSH 连接诊断…');summary.textContent='';error.textContent='';sessionDiagnosticsText='';
   $('session-diagnostics-copy').disabled=true;
   try{
     const value=await api(diagnosticsPath);

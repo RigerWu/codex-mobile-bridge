@@ -68,6 +68,7 @@ class OfflineManagement(unittest.TestCase):
             {'action': 'accounts', 'payload': {'action': 'addApi', 'name': 'Stream fixture',
                 'baseUrl': 'https://upstream.invalid/v1', 'apiKey': 'private-stream-key', 'model': 'fixture'}},
             {'action': 'accounts', 'payload': {'action': 'list'}},
+            {'action': 'cli-access', 'payload': {'action': 'list'}},
         ]
         result = subprocess.run([sys.executable, '-B', str(ROOT/'desktop.py'), 'management-stream',
                                  '--data-dir', str(self.root)],
@@ -75,9 +76,10 @@ class OfflineManagement(unittest.TestCase):
                                 capture_output=True, text=True, timeout=10)
         self.assertEqual(result.returncode, 0, result.stderr)
         responses = [json.loads(line) for line in result.stdout.splitlines()]
-        self.assertEqual(len(responses), 2)
+        self.assertEqual(len(responses), 3)
         self.assertTrue(all(response['ok'] for response in responses), responses)
         self.assertEqual(responses[0]['result']['accounts'], responses[1]['result']['accounts'])
+        self.assertEqual(responses[2]['result']['codex']['accounts'], responses[1]['result']['accounts'])
         self.assertNotIn('private-stream-key', result.stdout)
         self.assertFalse((self.root/'gateway-control.json').exists())
 

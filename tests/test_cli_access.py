@@ -142,6 +142,18 @@ class CliAccessTests(unittest.TestCase):
                                  'id': row['id'], 'confirmed': True})
         self.assertEqual(self.manager.claude_profile(), self.profile)
 
+    def test_native_import_rejects_symlink_before_resolving(self):
+        alias = self.root/'native-alias'
+        try:
+            alias.symlink_to(self.native, target_is_directory=True)
+        except OSError:
+            self.skipTest('Directory symlinks are unavailable on this host')
+        with patch('bridge.features.accounts.cli_access._auth_ready', return_value=True), \
+             self.assertRaisesRegex(ValueError, '配置目录不可用'):
+            self.manager.change({'provider': 'claude', 'action': 'importCurrent',
+                                 'name': 'Alias', 'directory': str(alias)})
+        self.assertFalse(self.manager.index['claude'])
+
     def test_failed_verification_restores_and_keeps_selected_profile(self):
         identifier = self.save_api()
         sync = Mock()

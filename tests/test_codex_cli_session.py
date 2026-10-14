@@ -318,6 +318,30 @@ class CliSessionTests(unittest.TestCase):
         self.assertEqual(self.sessions.states['thread-a']['threadGoal']['status'], 'complete')
         self.assertEqual(self.sessions.states['thread-a']['turns'][-1]['status'], 'completed')
 
+    def test_refresh_retry_stops_on_close_and_cannot_read_new_join(self):
+        self.sessions.attach('thread-a', explicit=True)
+        original = self.fake.request
+        failed = threading.Event()
+        def unavailable(method, params, **kwargs):
+            if method == 'thread/read':
+                failed.set()
+                raise AppServerUnavailable('Codex runtime read timed out')
+            return original(method, params, **kwargs)
+        self.fake.request = unavailable
+        self.sessions._queue_refresh('thread-a')
+        self.assertTrue(failed.wait(2))
+        self.sessions.close()
+        deadline = time.monotonic() + .1
+        while 'thread-a' in self.sessions.refreshing and time.monotonic() < deadline:
+            time.sleep(.005)
+        self.assertNotIn('thread-a', self.sessions.refreshing)
+        self.fake.request = original
+        self.fake.process = object()
+        self.sessions.attach('thread-a', explicit=True)
+        reads = sum(method == 'thread/read' for method, _ in self.fake.sent)
+        time.sleep(.3)
+        self.assertEqual(sum(method == 'thread/read' for method, _ in self.fake.sent), reads)
+
     def test_native_settings_event_survives_thread_refresh(self):
         self.sessions.attach('thread-a', explicit=True)
         self.fake.thread['model'] = 'native-model'

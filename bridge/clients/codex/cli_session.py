@@ -119,6 +119,7 @@ class CliSessions:
         self.consumed_requests = {}
         self.refreshing = set()
         self.refresh_pending = set()
+        self.refresh_cancel = {}
         self.client = CodexAppServer(
             self.home / 'app-server-control/app-server-control.sock', cli=cli,
             on_event=self._event, on_server_request=self._server_request,
@@ -774,21 +775,29 @@ class CliSessions:
                 self.refresh_pending.add(thread_id)
                 return
             self.refreshing.add(thread_id)
+            process = self.joined.get(thread_id)
+            cancel = threading.Event()
+            self.refresh_cancel[thread_id] = cancel
         def run():
             try:
                 read_retry_delay = .25
                 while True:
+                    if cancel.is_set():
+                        return
                     try:
                         self.refresh(thread_id)
                     except AppServerUnavailable:
                         with self.lock:
-                            still_joined = self.joined.get(thread_id) is self.client.process
+                            still_joined = (process is not None and not cancel.is_set() and
+                                            self.joined.get(thread_id) is process and
+                                            self.client.process is process)
                         if not still_joined:
                             raise
                         # The last turn event may need this replay-safe read
                         # to converge. Keep one bounded-backoff worker until
                         # it succeeds or the native join is revoked.
-                        time.sleep(read_retry_delay)
+                        if cancel.wait(read_retry_delay):
+                            return
                         read_retry_delay = min(15, read_retry_delay * 4)
                         continue
                     read_retry_delay = .25
@@ -801,15 +810,22 @@ class CliSessions:
                 # A real proxy disconnect invokes _disconnect independently.
                 pass
             except AppServerError:
-                self._invalidate(thread_id)
+                if not cancel.is_set():
+                    self._invalidate(thread_id)
             finally:
                 with self.lock:
-                    self.refreshing.discard(thread_id)
-                    self.refresh_pending.discard(thread_id)
+                    if self.refresh_cancel.get(thread_id) is cancel:
+                        self.refresh_cancel.pop(thread_id, None)
+                        self.refreshing.discard(thread_id)
+                        self.refresh_pending.discard(thread_id)
         threading.Thread(target=run, daemon=True).start()
 
     def _disconnect(self):
         with self.lock:
+            for cancel in self.refresh_cancel.values():
+                cancel.set()
+            self.refresh_cancel.clear()
+            self.refreshing.clear()
             self.joined.clear()
             self.attaching.clear()
             self.metadata.clear()
@@ -821,6 +837,11 @@ class CliSessions:
 
     def _invalidate(self, thread_id):
         with self.lock:
+            cancel = self.refresh_cancel.pop(thread_id, None)
+            if cancel is not None:
+                cancel.set()
+            self.refreshing.discard(thread_id)
+            self.refresh_pending.discard(thread_id)
             self.joined.pop(thread_id, None)
             self.attaching.discard(thread_id)
             self.metadata.pop(thread_id, None)

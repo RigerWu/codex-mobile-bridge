@@ -296,10 +296,14 @@ class CliSessionTests(unittest.TestCase):
         self.sessions.attach('thread-a', explicit=True)
         self.sessions._event({'method': 'thread/goal/updated', 'params': {
             'threadId': 'thread-a', 'goal': {'objective': 'Build', 'status': 'complete'}}})
+        self.fake.thread['turns'] = [{'id': 'turn-1', 'status': 'completed', 'items': []}]
         original = self.fake.request
         failed = threading.Event()
+        failures = 0
         def request(method, params, **kwargs):
-            if method == 'thread/read':
+            nonlocal failures
+            if method == 'thread/read' and not failures:
+                failures += 1
                 failed.set()
                 raise AppServerUnavailable('Codex runtime read timed out')
             return original(method, params, **kwargs)
@@ -312,8 +316,7 @@ class CliSessionTests(unittest.TestCase):
         self.assertIn('thread-a', self.sessions.joined)
         self.assertEqual(self.disconnections, [])
         self.assertEqual(self.sessions.states['thread-a']['threadGoal']['status'], 'complete')
-        self.fake.request = original
-        self.assertEqual(self.sessions.refresh('thread-a')['threadGoal']['status'], 'complete')
+        self.assertEqual(self.sessions.states['thread-a']['turns'][-1]['status'], 'completed')
 
     def test_native_settings_event_survives_thread_refresh(self):
         self.sessions.attach('thread-a', explicit=True)

@@ -25,7 +25,7 @@ function bumpRecency(id,host,at=Date.now()){
   if(row&&at>row.recency){row.recency=at;listRows.sort((a,b)=>b.recency-a.recency);renderList();}
 }
 let activityBusy=false;
-const fastModeControl=new FastModeControl({root:$('fast-mode-control'),input:$('fast-mode-enabled'),status:$('fast-mode-status')});
+const fastModeControl=new FastModeControl({root:$('fast-mode-control'),input:$('fast-mode-enabled')});
 let modelRequest=0,modelTarget=null,modelSaving=false;
 async function goalAction(action,payload) {
   const id=currentId,host=currentHost;
@@ -41,7 +41,7 @@ function chatKey(id=currentId,host=currentHost){return host+'|'+id;}
 function sessionUrl(id,action='',host=currentHost){const path='/api/sessions/'+id+(action?'/'+action:'')+'?host='+encodeURIComponent(host);return window.BridgeRelayURL?.(path)||path;}
 function hostUrl(path,host=currentHost){const value=/^\/api\/sessions\/[0-9a-f-]{36}/.test(path)&&!/[?&]host=/.test(path)?path+(path.includes('?')?'&':'?')+'host='+encodeURIComponent(host):path;return window.BridgeRelayURL?.(value)||value;}
 let listLoading=0;
-let modelCatalogGeneration=0;let catalogData={models:null,skills:null};let catalogResults={models:null,skills:null};let catalogTasks={models:null,skills:null};let selectedSkills=new Set(),invalidSkills=new Set(),skillIndex=new Map(),skillTotal=0,skillPages=[],skillQuery={q:'',offset:0,limit:200},skillSearchTimer,skillRequest=0;
+let modelCatalogGeneration=0,modelCatalogCheckedAt=0;let catalogData={models:null,skills:null};let catalogResults={models:null,skills:null};let catalogTasks={models:null,skills:null};let selectedSkills=new Set(),invalidSkills=new Set(),skillIndex=new Map(),skillTotal=0,skillPages=[],skillQuery={q:'',offset:0,limit:200},skillSearchTimer,skillRequest=0;
 function el(tag,cls,text){const node=document.createElement(tag);if(cls)node.className=cls;if(text!==undefined)node.textContent=text;return node;}
 function toast(text){text=t(text);$('toast').textContent=text;$('toast').hidden=false;clearTimeout(toast.timer);toast.timer=setTimeout(()=>$('toast').hidden=true,4200);}
 function renderHostErrors(hosts){
@@ -471,7 +471,7 @@ function renderState(view){
   $('chat-title').textContent=view.loadingHistory?t('正在读取聊天…'):view.title;
   const source=sourceLabel(view.access);
   $('chat-meta').textContent=(view.host==='local'?t('此电脑'):view.hostLabel||t('SSH 主机'))+(source?' · '+source:'')+' · '+(view.cwd||t('电脑上的聊天'));
-  $('model-name').textContent=view.model||t('模型');$('model-current').textContent=view.model?t('当前模型：')+view.model:'';$('model-current').hidden=!view.model;
+  $('model-name').textContent=view.model||t('模型');
   $('model-effort').textContent=view.effort?'· '+view.effort:'';$('model-effort').hidden=!view.effort;
   $('model-button').title=[view.model||t('模型'),view.effort].filter(Boolean).join(' · ');$('provider').textContent=[view.model,view.provider].filter(Boolean).join(' · ');
   $('status').textContent=!view.connected?(view.loadingHistory?t('读取历史中'):access.source==='cli'?t('历史记录'):view.activating?t('正在加载桌面聊天…'):view.connecting?t('连接桌面中'):t('历史记录')):view.requests.length?t('等待回应'):view.status==='active'?t('运行中'):t('已连接');
@@ -596,7 +596,7 @@ async function loadCatalogKind(kind,refresh=false){
   if(kind!=='models')throw Error(t('未知目录类型'));
   if(refresh)modelCatalogGeneration++;
   const target=currentId,targetHost=currentHost,generation=modelCatalogGeneration;
-  if(!refresh&&catalogResults[kind])return catalogResults[kind];
+  if(!refresh&&catalogResults[kind]&&Date.now()-modelCatalogCheckedAt<300000)return catalogResults[kind];
   if(!refresh&&catalogTasks[kind])return catalogTasks[kind];
   const request=api('/api/sessions/'+target+'/catalog?kind='+kind+(refresh?'&refresh=true':'')).then(value=>{
     if(currentId!==target||currentHost!==targetHost||generation!==modelCatalogGeneration)throw Error(t('聊天已切换'));
@@ -608,6 +608,7 @@ async function loadCatalogKind(kind,refresh=false){
     catalogData[kind]=payload.map(row=>typeof row==='string'?{id:row,name:row}:row).filter(row=>row&&(row.id||row.model));
     const result={...value,kind,[kind]:catalogData[kind]};
     catalogResults[kind]=result;
+    modelCatalogCheckedAt=Date.now();
     return result;
   }).finally(()=>{if(catalogTasks[kind]===request)catalogTasks[kind]=null;});
   catalogTasks[kind]=request;
@@ -667,38 +668,74 @@ function startCatalog(){
 }
 function resetModelCatalog(){
   modelCatalogGeneration++;catalogData.models=null;catalogResults.models=null;catalogTasks.models=null;
+  modelCatalogCheckedAt=0;
   modelRequest++;modelTarget=null;fastModeControl.reset();$('model-dialog').close();
+}
+function renderModelChoices(){
+  const list=$('model-options');list.replaceChildren();
+  const models=Array.isArray(catalogData?.models)?catalogData.models:[];
+  for(const option of $('model-select').children){
+    if(!option.value)continue;
+    const row=el('label','model-choice'),input=el('input'),name=el('span','model-choice-name'),check=el('span','model-choice-check','✓');
+    input.type='radio';input.name='model-choice';input.value=option.value;input.checked=option.value===$('model-select').value;input.disabled=modelSaving;
+    const baseId=option.value.split('/').at(-1),base=models.find(model=>model.id===baseId),routed=option.value.includes('/')&&!!base;
+    name.textContent=option.textContent.includes('\ufffd')?(base?.name?.includes('\ufffd')?baseId:base?.name||baseId):option.textContent;
+    row.title=option.value==='__custom__'?name.textContent:option.value;
+    check.setAttribute('aria-hidden','true');
+    input.onchange=()=>{if(!input.checked)return;$('model-select').value=input.value;renderEfforts();};
+    row.append(input,name);
+    if(routed)row.append(el('small','model-choice-badge',t('聚合')));
+    row.append(check);list.append(row);
+  }
+  const selected=list.querySelector('input:checked')?.closest('label');
+  if(selected)list.scrollTop=selected.offsetTop-(list.clientHeight-selected.clientHeight)/2;
+}
+function renderEffortChoices(){
+  const list=$('effort-options');list.replaceChildren();
+  const names={none:'无',minimal:'最低',low:'低',medium:'中',high:'高',xhigh:'极高',max:'Max',ultra:'Ultra'};
+  const count=$('effort-select').children.length;
+  list.style.setProperty('--effort-columns',count<=4?Math.max(1,count):count<=6?3:4);
+  for(const option of $('effort-select').children){
+    const row=el('label','effort-choice'),input=el('input'),name=el('span','',t(names[option.value]||option.value));
+    input.type='radio';input.name='effort-choice';input.value=option.value;input.checked=option.value===$('effort-select').value;input.disabled=modelSaving||$('effort-select').disabled;
+    input.onchange=()=>{if(input.checked)$('effort-select').value=input.value;};
+    row.append(input,name);list.append(row);
+  }
 }
 function renderEfforts(){
   const id=$('model-select').value,models=Array.isArray(catalogData?.models)?catalogData.models:[];
   const model=models.find(m=>m.id===(id==='__custom__'?$('custom-model').value.trim():id));
+  for(const input of $('model-options').querySelectorAll('input'))input.checked=input.value===id;
   $('custom-model-label').hidden=id!=='__custom__';$('custom-model').required=id==='__custom__';
   const options=model?.efforts?.length?model.efforts:catalogResults.models?.modelSource==='api'?['none','minimal','low','medium','high','xhigh','max','ultra']:[];
   $('effort-select').replaceChildren(...options.map(value=>new Option(value,value)));
   $('effort-select').value=options.includes(state?.effort)?state.effort:options.includes(model?.defaultEffort)?model.defaultEffort:options[0]||'';
   $('effort-select').disabled=!options.length;
-  $('model-description').textContent=!options.length?t('未能读取此模型的推理能力，请重新打开模型设置'):model?.description||t('自定义模型需要当前 API 服务支持。');
+  renderEffortChoices();
+  const effortError=t('未能读取此模型的推理能力，请重新打开模型设置');
+  if($('model-error').textContent===effortError)$('model-error').textContent='';
+  if(!options.length&&!$('model-error').textContent)$('model-error').textContent=effortError;
   fastModeControl.select(id);$('model-save').disabled=!state?.connected||!id||!options.length;
 }
-$('model-button').onclick=async()=>{
+async function openModelDialog(forceRefresh=false){
   if(modelSaving)return;
   $('model-refresh').disabled=true;
   const request=++modelRequest,target=chatKey();modelTarget=target;fastModeControl.reset();
   $('model-form').querySelectorAll('input,select,button').forEach(n=>n.disabled=false);
-  $('model-error').textContent='';$('model-select').replaceChildren(new Option(t('读取模型列表…'),''));$('model-save').disabled=true;$('model-dialog').showModal();
+  $('model-error').textContent='';$('model-select').replaceChildren(new Option(t('读取模型列表…'),''));$('model-options').textContent=t('读取模型列表…');$('effort-options').replaceChildren();$('model-save').disabled=true;if(!$('model-dialog').open)$('model-dialog').showModal();
   try{
-    const catalog=await loadCatalogKind('models',true);
+    const catalog=await loadCatalogKind('models',forceRefresh);
     if(request!==modelRequest||target!==chatKey())return;
     $('model-select').replaceChildren(...(catalog.modelSource==='api'?[new Option(t('请选择上游模型'),'')]:[]),...(Array.isArray(catalog.models)?catalog.models:[]).map(m=>new Option(m.name,m.id)),new Option(t('自定义模型…'),'__custom__'));
     const current=state?.model||catalog.currentModel,models=Array.isArray(catalog.models)?catalog.models:[],known=models.some(m=>m.id===current);$('model-select').value=known?current:catalog.modelSource==='api'&&models.length?'':'__custom__';$('custom-model').value=current||'';
     $('model-error').textContent=catalog.modelError?t(catalog.modelError):catalog.modelSource==='api'&&!known&&models.length?t('当前聊天模型不在上游列表中，请选择可用模型后应用。'):'';
-    $('model-access').textContent=(catalog.modelAccessName?t('当前接入：')+catalog.modelAccessName:t('聊天接入：')+(state?.provider||''));
     catalog.kind='models';
-    fastModeControl.open(catalog,state,$('model-select').value);renderEfforts();
+    renderModelChoices();fastModeControl.open(catalog,state,$('model-select').value);renderEfforts();
   }catch(e){if(request===modelRequest&&target===chatKey())$('model-error').textContent=t(e.message);}
   finally{if(request===modelRequest)$('model-refresh').disabled=false;}
-};
-$('model-refresh').onclick=()=>$('model-button').onclick();
+}
+$('model-button').onclick=()=>openModelDialog();
+$('model-refresh').onclick=()=>openModelDialog(true);
 $('model-select').onchange=renderEfforts;
 $('custom-model').oninput=renderEfforts;
 $('model-form').onsubmit=async event=>{
@@ -777,6 +814,7 @@ $('phone-language').onchange=()=>{
   for(const id of ['login-error','send-error','model-error','skills-error','new-chat-error','notify-error','rename-error','pushplus-error','toast'])$(id).textContent=t($(id).textContent);
   for(const option of $('new-chat-project').options){const project=newChatProjects.find(p=>p.key===option.value);if(project)option.textContent=project.name+' · '+(project.host==='local'?t('此电脑'):project.hostLabel);}
   if($('model-select').querySelector('[value=__custom__]'))$('model-select').querySelector('[value=__custom__]').textContent=t('自定义模型…');
+  if($('model-dialog').open){renderModelChoices();renderEffortChoices();}
   if(state){approvalStamp='';renderState(state);[...$('approvals').querySelectorAll('input,textarea,select')].forEach((node,i)=>{if(replies[i]){node.value=replies[i].value;node.checked=replies[i].checked;if(node.tagName==='SELECT')node.dispatchEvent(new Event('change'));}});}
   $('notify-button').textContent=t(notificationState.watching?'提醒已开':'提醒');
   if(chatTimeline)chatTimeline.relabel();messageActions.relabel();

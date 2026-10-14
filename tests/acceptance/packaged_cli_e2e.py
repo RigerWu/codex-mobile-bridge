@@ -427,9 +427,11 @@ def verify_codex(http, thread_id, project, server, result):
             'Native Codex model change was not confirmed')
     wait_for(lambda: state_field('model', CODEX_MODEL_ALT), 'changed Codex model')
     options = http.checked('GET', path+'/permissions')
-    alternate = next((row['preset'] for row in options.get('options', [])
-                      if row.get('available') is True and row.get('preset') != initial_permission), None)
-    require(alternate is not None, 'Native Codex offered no alternate permission mode')
+    available = {row.get('preset') for row in options.get('options', [])
+                 if row.get('available') is True}
+    alternate = next((preset for preset in ('ask', 'full-access')
+                      if preset != initial_permission and preset in available), None)
+    require(alternate is not None, 'Native Codex offered no alternate ask/full-access permission mode')
     changed_permission = http.checked('POST', path+'/permissions',
         {'preset': alternate, 'confirmed': alternate == 'full-access', 'expectedRuntime': 'cli'})
     require(changed_permission.get('applied') is True and

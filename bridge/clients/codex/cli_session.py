@@ -100,6 +100,17 @@ def _local_cli(home, configured):
     raise AppServerUnavailable('Codex CLI executable is unavailable')
 
 
+def _same_cwd(saved, runtime, local_windows):
+    if saved == runtime:
+        return True
+    if not local_windows or not isinstance(saved, str) or not isinstance(runtime, str):
+        return False
+    try:
+        return os.path.samefile(saved, runtime)
+    except (OSError, ValueError):
+        return False
+
+
 class CliSessions:
     def __init__(self, home, on_state, on_disconnect, cli='codex', alias=None,
                  process_factory=None):
@@ -274,7 +285,8 @@ class CliSessions:
             except (KeyError, StoreUnavailable, RemoteUnavailable) as exc:
                 raise AppServerUnavailable('Saved CLI thread metadata is unavailable') from exc
             if (saved.get('origin') != 'cli' or not saved.get('cwd') or
-                    saved.get('cwd') != before.get('cwd') or
+                    not _same_cwd(saved.get('cwd'), before.get('cwd'),
+                                  self.alias is None and os.name == 'nt') or
                     saved.get('model_provider') != before.get('modelProvider')):
                 raise AppServerUnsupported('Saved CLI thread identity does not match this runtime')
         # Resume is explicit and sends no model, cwd, provider or permission overrides.

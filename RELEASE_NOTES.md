@@ -21,7 +21,7 @@ PDF 在线预览上限为 **20 MiB**，同时受当前普通点击下载限额�
 
 正式发布后，建议网关与 Android/iOS App 一起更新，以获得完整的文件阅读和原生 HTML 隔离支持；Web 用户更新网关后重新加载页面即可。共享中继部署也需同步更新中继服务。Android 覆盖安装以保留数据；iOS 仍需自行签名。
 
-本节为待发布说明，文件阅读的本地测试已获用户确认；macOS Codex CLI 0.162.1 的运行中接入与冷恢复、发送及流式回复已通过本机联调。真实 Linux SSH 的 Codex/Claude CLI 操作及 Windows/Linux API 账号切换与回滚已通过隔离验收；Windows Claude 2.1.168 的创建、恢复和权限控制已验证。Windows Codex daemon 接续仍待普通桌面会话实测，Windows Claude 完整消息与审批流程、真实付费账号、物理手机及新多平台安装包尚未验收。外部 HTTPS 入口仍需在用户自己的代理和手机网络验收；正式发布构建尚未执行，范围见 [验证记录](VERIFICATION.md)。当前公开下载仍为 v2.0.3。手动额度查询不代表所有 macOS 钥匙串授权场景均已消除。
+本节为待发布说明，文件阅读的本地测试已获用户确认；macOS Codex CLI 0.162.1 的运行中接入与冷恢复、发送及流式回复已通过本机联调。真实 Linux SSH 的 Codex/Claude CLI 操作及 Windows/Linux API 账号切换与回滚已通过隔离验收；Windows Claude 2.1.168 的创建、多轮完整回复、关闭后恢复、权限控制和工具审批允许/拒绝已验证。Windows Codex 0.162.0-alpha.17.2 的接续、权限、新建、Goal 接口和冷恢复也已通过普通用户终端验收，并修复 Windows 长路径写法引起的冷恢复误拒绝。真实付费账号、物理手机及新多平台安装包尚未验收。外部 HTTPS 入口仍需在用户自己的代理和手机网络验收；正式发布构建尚未执行，范围见 [验证记录](VERIFICATION.md)。当前公开下载仍为 v2.0.3。手动额度查询不代表所有 macOS 钥匙串授权场景均已消除。
 
 ### English
 
@@ -44,7 +44,7 @@ PDF previews are limited to **20 MiB** and the configured ordinary-download limi
 
 When released, update both the gateway and Android/iOS apps for the complete feature set and native HTML isolation. Browser users only need to reload after updating the gateway. Shared-relay deployments also require a relay update. Install Android over the existing app; iOS still requires your own signing.
 
-**Unreleased:** file-reading testing has been accepted by the user. Codex CLI warm join and cold resume, including send and streaming replies, passed locally on macOS CLI 0.162.1. Real Linux SSH Codex/Claude controls and Windows/Linux API switching and rollback passed in isolation. Windows Claude 2.1.168 creation, resume and permission controls passed. Windows Codex daemon continuation still requires a normal desktop-user run; complete Windows Claude message/approval flows, real paid credentials, physical phones and new platform packages remain unverified. The external HTTPS entry still requires validation through the user's own proxy and phone network. Release builds are pending. See [verification](VERIFICATION.md). Public downloads remain v2.0.3. Manual Claude quota queries do not eliminate every macOS Keychain authorization scenario.
+**Unreleased:** file-reading testing has been accepted by the user. Codex CLI warm join and cold resume, including send and streaming replies, passed locally on macOS CLI 0.162.1. Real Linux SSH Codex/Claude controls and Windows/Linux API switching and rollback passed in isolation. Windows Claude 2.1.168 creation, complete multi-turn replies, closed-session resume, permission controls and tool approval allow/deny passed. Windows Codex 0.162.0-alpha.17.2 also passed continuation, permission changes, creation, Goal controls and cold resume from a non-elevated user terminal; Windows extended-path spelling no longer incorrectly blocks cold resume. Real paid credentials, physical phones and new platform packages remain unverified. The external HTTPS entry still requires validation through the user's own proxy and phone network. Release builds are pending. See [verification](VERIFICATION.md). Public downloads remain v2.0.3. Manual Claude quota queries do not eliminate every macOS Keychain authorization scenario.
 
 ---
 

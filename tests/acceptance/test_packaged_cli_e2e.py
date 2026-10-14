@@ -5,7 +5,7 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import Mock, patch
 
-from packaged_cli_e2e import GatewayHTTP, MockHandler, ready_clients
+from packaged_cli_e2e import GatewayHTTP, MockHandler, ready_clients, wait_for_history_marker
 
 
 class FixtureTurnSelectionTests(unittest.TestCase):
@@ -133,6 +133,40 @@ class HttpTraceTests(unittest.TestCase):
         with patch('packaged_cli_e2e.time.monotonic', side_effect=[0, 0, 46]):
             with self.assertRaisesRegex(AssertionError, '45-second discovery window'):
                 ready_clients(client)
+
+
+class RestartHistoryTests(unittest.TestCase):
+    def test_empty_initial_history_can_fill_without_another_write(self):
+        request = Mock(side_effect=[
+            (200, {'loadingHistory': True, 'turns': []}, None),
+            (200, {'loadingHistory': False, 'turns': [{'text': 'CODEX_HTTP_REPLY'}]}, None),
+        ])
+        state = wait_for_history_marker(SimpleNamespace(request=request), '/api/sessions/id',
+                                        'CODEX_HTTP_REPLY', 'Codex history', seconds=1)
+        self.assertFalse(state['loadingHistory'])
+        self.assertEqual(request.call_count, 2)
+        self.assertEqual(request.call_args_list[0].args, ('GET', '/api/sessions/id'))
+
+    def test_missing_history_still_fails(self):
+        request = Mock(return_value=(200, {'loadingHistory': False, 'turns': []}, None))
+        with self.assertRaisesRegex(AssertionError, 'Codex history timed out'):
+            wait_for_history_marker(SimpleNamespace(request=request), '/api/sessions/id',
+                                    'CODEX_HTTP_REPLY', 'Codex history', seconds=.01)
+        self.assertGreaterEqual(request.call_count, 1)
+
+    def test_http_error_fails_immediately(self):
+        request = Mock(return_value=(503, {'error': 'unavailable'}, None))
+        with self.assertRaisesRegex(RuntimeError, 'GET /api/sessions/id returned HTTP 503'):
+            wait_for_history_marker(SimpleNamespace(request=request), '/api/sessions/id',
+                                    'CODEX_HTTP_REPLY', 'Codex history', seconds=1)
+        self.assertEqual(request.call_count, 1)
+
+    def test_transport_timeout_fails_immediately(self):
+        request = Mock(side_effect=TimeoutError('read timed out'))
+        with self.assertRaisesRegex(RuntimeError, 'GET /api/sessions/id failed'):
+            wait_for_history_marker(SimpleNamespace(request=request), '/api/sessions/id',
+                                    'CODEX_HTTP_REPLY', 'Codex history', seconds=1)
+        self.assertEqual(request.call_count, 1)
 
 
 if __name__ == '__main__':

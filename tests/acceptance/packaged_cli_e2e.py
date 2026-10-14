@@ -48,6 +48,18 @@ def wait_for(check, description, seconds=35):
     raise AssertionError(description + ' timed out' + (': ' + str(last)[:120] if last else ''))
 
 
+def wait_for_history_marker(http, path, marker, description, seconds=35):
+    def read():
+        try:
+            status, value, _ = http.request('GET', path)
+        except OSError as exc:
+            raise RuntimeError('GET ' + path + ' failed') from exc
+        if status != 200:
+            raise RuntimeError('GET ' + path + ' returned HTTP ' + str(status))
+        return value if marker in json.dumps(value) else None
+    return wait_for(read, description, seconds)
+
+
 class MockServer(ThreadingHTTPServer):
     def __init__(self, kind, address, markers):
         super().__init__(address, MockHandler)
@@ -763,11 +775,10 @@ def main():
         require(any(row.get('id') == codex_id for row in
                     http.checked('GET', '/api/sessions?source=cli')['sessions']),
                 'Codex native thread missing after gateway restart')
-        require('CODEX_HTTP_REPLY' in json.dumps(http.checked('GET', '/api/sessions/'+codex_id)),
-                'Codex native history missing after gateway restart')
-        require('CLAUDE_ALLOWED_REPLY' in json.dumps(http.checked('GET',
-                '/api/desktop-sessions/claude/detail?sessionId='+claude_id)),
-                'Claude native history missing after gateway restart')
+        wait_for_history_marker(http, '/api/sessions/'+codex_id, 'CODEX_HTTP_REPLY',
+                                'Codex native history after gateway restart')
+        wait_for_history_marker(http, '/api/desktop-sessions/claude/detail?sessionId='+claude_id,
+                                'CLAUDE_ALLOWED_REPLY', 'Claude native history after gateway restart')
         result['checks']['persistedNativeHistory'] = True
         require(all(row['path'] == '/v1/responses' and row['keyMatches'] and
                     row['model'] in (CODEX_MODEL, CODEX_MODEL_ALT)

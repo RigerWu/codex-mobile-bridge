@@ -4,17 +4,19 @@
 
 **[v2.0.3 发布页](https://github.com/try2love/codex-mobile-bridge/releases/tag/v2.0.3)** · [完整更新说明](../RELEASE_NOTES.md) · [桌面客户端接入](../docs/deepseek-harness.md)
 
-> 当前正式版为 v2.0.3，下列安装包名称和下载入口仍对应该版本。v2.0.4 文件阅读优化已完成本地测试，尚未发布。
+> **[v2.1.0-preview.1 预览版下载](https://github.com/try2love/codex-mobile-bridge/releases/tag/v2.1.0-preview.1)**：体验 CLI 接入与文件阅读改进。下方保留 v2.0.3 稳定版安装入口；预览版请从此发布页选择同平台文件。
 
-## v2.0.4 待发布：文件阅读
+## v2.1.0-preview.1：CLI 接入与文件阅读
 
+- 在手机与 Web 中发现 Codex / Claude Code CLI 聊天、读取历史并显式继续；原终端可以关闭。支持新建 CLI 聊天及执行端提供的模型、权限、Skill、上传和审批能力；Codex 兼容原生运行时另支持 Goal。SSH 使用服务器自己的配置。
+- Codex 与 Claude 各自账号面板管理 CLI 接入；桌面切换可选择“同时应用到本机 CLI”。SSH 连接诊断、类型筛选和上下文圆环沿用共享界面。
 - 文件目录返回先到上一级，根目录后再回聊天；全屏预览中先退出全屏。
 - 源码增加高亮、行号与复制，可选自动换行以适应屏幕；复制保留原始内容。
 - PDF 支持连续滑动、双指缩放和全屏，混合尺寸页面分别适配宽度；切换标签保留阅读位置，快速缩放与邻页回看减少闪烁。
 - 自包含 HTML 支持内联交互、动画与源码切换，采用隔离预览；全屏进出保留状态，切换文件标签后返回重新加载 HTML。
 - 文件描述与下载、复制、全屏等操作并排，兼顾窄屏中英文显示。Claude 额度改为手动查询，并显示原成功查询时间。
 
-完整能力需更新网关及 Android/iOS App：源码和 PDF 阅读由网关提供，HTML 子页面导航与权限隔离还包含原生壳调整。PDF 在线预览限 20 MiB 且受普通点击下载限额约束；源码与 HTML 限 512 KiB UTF-8 文本。详见[文件阅读说明](../README.md#workspace-reading)和[本地验收范围](../VERIFICATION.md)。
+完整能力需更新网关及 Android/iOS App：源码和 PDF 阅读由网关提供，HTML 子页面导航与权限隔离还包含原生壳调整。PDF 在线预览限 20 MiB 且受普通点击下载限额约束；源码与 HTML 限 512 KiB UTF-8 文本。详见[文件阅读说明](../README.md#workspace-reading)。
 
 ## v2.0.3 更新
 

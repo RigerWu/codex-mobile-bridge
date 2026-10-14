@@ -1,12 +1,18 @@
 # Claude Code CLI 接入可行性核查（2026-10-14）
 
-## 结论
+## v2.1.0 后续实施状态
+
+本页下方保留初始探针的条件和结论，不作为当前功能清单。初始 `--bare` 探针之后，macOS 已另行验证所选认证与项目 `CLAUDE.md` 的隔离继承；这些合成/回环请求不代表真实付费或 OAuth 验收。后续候选已实现本机及 SSH Claude Code 的已关闭会话恢复、新建、发送、模型/权限、Skill、文件上传、审批和中断；账号管理可独立配置 CLI 接入。仍不接管其他终端中的活跃写入者。
+
+Windows 10 x64 / Claude Code 2.1.168 与 Ubuntu 22.04.5 x64 / 2.1.287 已通过独立 Test 包安装、GUI 和已安装网关的 CLI HTTP 验收，包含完整回复、审批允许/拒绝及重启后历史；Linux SSH 控制另有真实服务器验收。以上跨平台运行使用隔离配置和模拟 API，不代表真实付费认证、所有项目配置或手机真机已验收。当前能力与限制以 [CLI 接入说明](codex-cli.md) 和 [验收总览](../VERIFICATION.md#v210-platform-status) 为准。
+
+## 初始探针结论
 
 **可验证的范围是由网关自己启动并持有的 CLI 进程，以及已退出会话的显式恢复。** 本机 Claude Code `2.1.287` 在隔离环境中通过了两轮 `--resume <session-id>` 续接和同一进程内两条 `stream-json` 输入。手机端若要提供实时消息与控制，需要持有该进程的输入/输出通道，或采用官方 Agent SDK 的流式会话接口。现有证据不足以支持“无侵入接管用户正在另一终端运行的任意 Claude Code 进程”。
 
 这个结论只涉及接入机制。未使用用户的 Claude 登录、订阅额度、真实 API Key、真实会话或远程主机。Claude Desktop Code/Cowork 的现有连接器属于另一条执行通路，不能据此推断 CLI 进程可接管。
 
-## 本机实测
+## 初始本机实测
 
 安装的 `/opt/homebrew/bin/claude --version` 返回 `2.1.287 (Claude Code)`。探针位于项目的 `.tmp/cli-expansion-20261014/claude-probe-artifacts/`（`probe.py`、`control_probe.py`、`approval_probe.py`），其结果保留在同目录的独立运行文件夹中，不纳入提交。探针使用临时 `HOME` 与 `CLAUDE_CONFIG_DIR`、`--bare`、假 API Key、仅指向 `127.0.0.1` 的 `ANTHROPIC_BASE_URL`，并禁用非必要流量；本地 HTTP 服务只返回预设文本/工具调用，没有外部模型请求。
 
@@ -35,6 +41,6 @@
 
 [Agent SDK 官方说明](https://code.claude.com/docs/en/agent-sdk/overview)明确表示，未经事先批准，第三方开发者不得在自己的产品中提供 claude.ai 登录或订阅限额，应使用 API Key 认证方式。SDK 能启动同类代理循环，并不意味着可将用户的 Claude 订阅登录移植到本产品。[Remote Control](https://code.claude.com/docs/en/remote-control) 面向 claude.ai/code 与官方 Claude 手机端；它要求合规订阅，API Key、自定义 `ANTHROPIC_BASE_URL` 和第三方上游均不支持该通路。它可作为用户已有的官方远控方案参考，不是本项目可复用的公开接入协议。
 
-## 建议的下一道验证门
+## 初始探针提出的后续验证要求（历史记录）
 
 先以**网关持有的专用 CLI 进程**为候选形态，在明确可用的认证方式下，补验正常配置下的流式多轮、允许/拒绝审批及问题卡、打断后的续用、断线不重发。每项都需保持原 cwd、用户配置和供应商身份，且不能因只读打开聊天而启动进程。接入 SSH 时重新验证选中主机的二进制、配置路径、会话文件与进程归属。未取得合适认证授权和完整控制面证据前，不启用 Claude Code CLI 生产接入。

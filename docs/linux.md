@@ -47,32 +47,13 @@ launch scripts during discovery, and ignores non-executable files and standalone
 `codex` / `claude` CLI binaries. Claude's native Console auto-connection helper
 currently supports macOS and Windows only; Linux reports that limitation.
 
-## CLI validation for the v2.1.0 candidate
+## CLI access in v2.1.0-preview.1
 
-Real Linux x64 SSH acceptance now covers Codex CLI 0.160.0 warm join,
-closed-session resume, new chats, permission changes and Goal controls. Ubuntu
-22.04.5 x64 with Claude Code 2.1.287 covers closed-session resume, new chats,
-send, model/permission controls, Skills, file uploads, approval refusal and
-interrupt. Linux Claude writer checks use its native machine/PID namespace
-and `/proc` process-start token; live or unverifiable writers remain blocked.
+Use Codex CLI and Claude Code locally or through configured SSH hosts. Read saved history, resume closed sessions, create chats in known projects and send replies. Codex supports model/effort, Skills, permissions and Goal controls on compatible native runtimes. Claude Code supports models, permissions, Skills, file uploads, approvals and interrupt.
 
-Both clients passed isolated API profile switching, effective endpoint/model
-checks and rollback after an injected verification failure. These runs used
-native CLIs and loopback mock APIs on real Linux hosts. They did not use paid
-credentials or validate ARM64, Desktop account restart, or physical-phone
-operation. A subsequent x64 Test deb built from local source `9f34ee0` passed
-installation and actual GNOME GUI startup on Ubuntu 22.04.5, including bundled
-gateway start/stop, authentication, language persistence and controller reopen.
-Its installed worker also passed authenticated HTTP checks for both native CLI
-histories, cold resume, replies, model/permission changes, Codex Goal, Claude
-tool approval allow/deny and history after gateway restart, using loopback mock
-APIs. Its three client-status GETs completed in 7/2/2 ms, within the Web
-client's 10-second read deadline. The separately built Test AppImage has not
-been launched independently.
-These Test packages retain `2.0.3` build metadata and are not a v2.1.0 release.
-Claude Desktop Console auto-connection remains
-unavailable on Linux; Claude Code CLI is a separate integration. See
-[verification](../VERIFICATION.md) for the current platform matrix.
+Each CLI has its own account section for API profiles, model listing and connectivity checks. Optional local synchronization reports its result separately from Desktop; remote hosts retain their own configuration. Live or unverifiable Claude writers are protected from takeover.
+
+Claude Desktop Console auto-connection remains available on macOS and Windows only; Claude Code CLI is a separate Linux integration. See the [CLI guide](codex-cli.md) for usage and [verification](../VERIFICATION.md) for development records.
 
 ## Build on the Target Architecture
 

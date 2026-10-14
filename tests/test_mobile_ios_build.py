@@ -76,6 +76,20 @@ class IOSReleaseBuildTests(unittest.TestCase):
             (app/'embedded.mobileprovision').write_bytes(b'private signing profile')
             with self.assertRaisesRegex(RuntimeError, 'unsigned iOS bundle'):
                 builder.verify_app(app, '2.0.0', '27')
+            (app/'embedded.mobileprovision').unlink()
+            for bundle, _ in bundles:
+                info_path = bundle/'Info.plist'
+                info = plistlib.loads(info_path.read_bytes())
+                info.update(CFBundleShortVersionString='2.1.0', CFBundleVersion='31',
+                            BridgeReleaseVersion='2.1.0-preview.1')
+                info_path.write_bytes(plistlib.dumps(info))
+            builder.verify_app(app, '2.1.0-preview.1', '31')
+            info_path = bundles[1][0]/'Info.plist'
+            info = plistlib.loads(info_path.read_bytes())
+            info['CFBundleShortVersionString'] = '2.1.0-preview.1'
+            info_path.write_bytes(plistlib.dumps(info))
+            with self.assertRaisesRegex(RuntimeError, 'identity/version mismatch'):
+                builder.verify_app(app, '2.1.0-preview.1', '31')
 
 
 if __name__ == '__main__':

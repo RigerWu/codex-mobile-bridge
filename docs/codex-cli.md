@@ -1,4 +1,4 @@
-# Codex CLI 会话接入（v2.1.0 待发布）
+# Codex CLI 会话接入（v2.1.0-preview.1）
 
 聊天列表纳入现有 Codex CLI 会话。完整可见库存同时包含 APP 与 CLI 会话时，列表显示来源筛选和行标记；来源取自会话的原始记录，接续后的运行方不改变来源。筛选先于分页，搜索或翻页不会让来源选项消失。打开聊天先读已保存历史，并只读查找已有 Codex App 执行连接；不启动 CLI、不向桌面 App 跳转，也不发送模型请求。Codex App 已配置的有效 SSH 连接会参与发现；远端通过用户登录 shell 读取其 `CODEX_HOME`，未设置时使用 `~/.codex`。
 
@@ -10,13 +10,25 @@
 
 只有点击“继续会话”才会启动托管 daemon 或恢复会话；打开聊天、读取历史和列表刷新都不会触发。网关不会安装 CLI、接受新的 SSH 主机密钥、强行夺取其他进程的写入权，或覆盖原会话身份。原生 daemon 未安装、版本不兼容或身份核验失败时，历史仍可阅读，并显示连接失败原因。
 
-macOS 的 Codex CLI **0.162.1** 已分别验证 daemon 正在运行时接入，以及原终端关闭后的冷恢复；两种情况下发送与流式回复均通过。SSH 使用已有主机配置和密钥校验，不自动接受新主机密钥或安装远端程序。真实 Linux x64 SSH 上的 CLI 0.160.0 已验证接入、冷恢复、新建、发送、权限和 Goal；Windows 0.162.0-alpha.17.2 的隔离 API 账号切换与回滚，以及普通用户终端内的 daemon 接续、发送、权限、新建、Goal 设置/清除和冷恢复均通过；测试使用已安装程序的同字节副本与隔离托管目录。不能据此认定其他版本和所有远端配置均兼容。
+SSH 使用已有主机配置和密钥校验，不自动接受新主机密钥或安装远端程序。
 
 由 Codex App 接续的 CLI 聊天复用现有 App 的模型、Skill 和模式操作；由原生 CLI 执行的聊天从同一个 daemon 读取目录并提交设置、Skill 和计划请求。自定义提供商可手动填写模型 ID，不切换到其他提供商的模型目录。兼容的本机和 SSH 原生 CLI 通过同一 daemon 操作 Goal；SSH 上由 Codex App 接管的聊天尚不支持 Goal，网关不会另起执行方。连接成功后目录自动加载，短暂断线保留已选 Skill 与输入草稿。
 
 CLI 权限可从聊天中的权限按钮切换；原生 CLI 按执行主机的运行时与策略展示可用选项，App 接续的聊天通过原 owner 更新。保存后从后续回合生效，界面以原生确认结果为准；聊天按钮将完全访问权限简写为“完全访问”，确认说明保持完整。消息编辑/分支、重命名和临时侧边聊天暂不开放。网关关闭或手机页面退出只断开网关连接，不停止 CLI 任务。连接中断或写入结果不确定时不自动重发；先查看原会话历史与运行状态，再决定后续操作。
 
-Codex CLI 接入在 Codex 账号管理中保存；Claude CLI 接入在 Claude 账号管理中保存，两者不会混用配置。桌面切换可选择同时应用到本机 CLI，分别核验桌面和 CLI 结果；Codex 共享配置的影响会明确提示，SSH 配置不随本机切换。Claude Code CLI 可从已有本机或 SSH 项目创建聊天，保留所选配置与目录；这不等于接管任意正在另一终端运行的 Claude 进程。Claude Code 2.1.287 已在真实 Ubuntu x64 SSH 链路验证冷恢复、新建、发送、模型与权限、Skill、上传、审批拒绝、中断，以及活跃写入者保护。Windows 2.1.168 已验证创建、多轮完整回复、关闭后恢复、原生权限控制及工具审批的允许和拒绝；未知 Windows 进程登记格式会拒绝恢复，不能将该版本结果推广到全部版本。两平台的 API 账号切换及失败回滚使用隔离接口验收，未使用真实付费账号或手机。已知容量显示蓝色圆环，未知容量保持中性，不从累计计费 Token 猜测上下文占比。
+Codex CLI 接入在 Codex 账号管理中保存；Claude CLI 接入在 Claude 账号管理中保存，两者不会混用配置。桌面切换可选择同时应用到本机 CLI，分别核验桌面和 CLI 结果；Codex 共享配置的影响会明确提示，SSH 配置不随本机切换。Claude Code CLI 可从已有本机或 SSH 项目创建聊天，保留所选配置与目录；这不等于接管任意正在另一终端运行的 Claude 进程。Claude Code 支持关闭后恢复、新建、完整回复、模型与权限、Skill、上传、审批和中断。已知容量显示蓝色圆环，未知容量保持中性，不从累计计费 Token 猜测上下文占比。
+
+## 新建与被动阅读
+
+在 Codex 新建聊天中选择 CLI，可使用已有本机或 SSH CLI 会话记录中的项目目录；新建仅创建会话，不发送第一条消息。读取项目列表不激活会话，提交创建时才连接原生运行时。来源标记保持 CLI，即使之后由桌面 App 接续也不改变。
+
+停留在尚未连接的 Codex CLI 聊天页时，后台会继续读取终端追加的保存历史，不必为了查看新回复先点击“继续会话”。本机与 SSH 的刷新节奏不同，不承诺即时或固定延迟。模型标签按原生回合或保存记录显示；缺少证据时不猜测。后台只读刷新短暂超时不会直接丢弃仍有效的执行连接，真正断开或身份核验失败仍会使连接失效。
+
+## 平台与运行要求
+
+macOS、Windows 与 Linux 支持本机 CLI 接入；SSH 使用服务器上已安装并配置的 CLI。仅安装 Codex MSIX 不等于具备原生 CLI 托管目录。Linux Claude Code CLI 与 Claude Desktop 自动连接是不同能力，后者仍仅适用于 macOS / Windows。
+
+Windows 保存历史读取和冷恢复可识别普通路径与扩展路径指向的同一目录，保持原有文件访问边界。旧版 Claude 进程记录缺少启动标识时，只有确认进程已退出才能恢复；活跃或身份不确定的进程仍不可接管。
 
 ## 会话缺失时
 
@@ -30,10 +42,14 @@ Codex CLI 接入在 Codex 账号管理中保存；Claude CLI 接入在 Claude �
 
 ## English
 
-CLI chats appear with a **CLI** badge. Opening one reads saved history and passively checks for an existing Codex App owner. If App already owns the chat, Bridge verifies and follows that owner. Otherwise, select **Continue chat** to connect to the native CLI daemon or explicitly start its already installed, managed daemon and resume the same chat, even if the terminal has closed. It does not install CLI, bypass SSH host-key checks, change the chat's identity, or seize another runtime's writer lock. Supported actions include send, queue, steer, interrupt, approvals and input requests, plus model/effort selection, Skills and default/plan modes. Compatible joined native CLI runtimes, including SSH hosts, support creating, pausing, editing, resuming and clearing Goals through the same daemon. SSH chats owned by the desktop App do not expose Goal controls.
+When the readable inventory contains both App and CLI origins, type filters and **CLI** badges are shown. Opening one reads saved history and passively checks for an existing Codex App owner. If App already owns the chat, Bridge verifies and follows that owner. Otherwise, select **Continue chat** to connect to the native CLI daemon or explicitly start its already installed, managed daemon and resume the same chat, even if the terminal has closed. It does not install CLI, bypass SSH host-key checks, change the chat's identity, or seize another runtime's writer lock. Supported actions include send, queue, steer, interrupt, approvals and input requests, plus model/effort selection, Skills and default/plan modes. Compatible joined native CLI runtimes, including SSH hosts, support creating, pausing, editing, resuming and clearing Goals through the same daemon. SSH chats owned by the desktop App do not expose Goal controls.
 
 Native CLI controls use the same daemon for catalogs, settings, Skills, modes and Goals. Custom providers accept manually entered model IDs without switching providers. Catalogs load after connection; transient disconnects retain draft text and selected Skills. Permission controls follow the execution runtime and its policy on local and SSH CLI chats; App-owned chats use their existing owner. Changes apply to subsequent turns and require effective runtime confirmation. Editing/forking, rename and side chats remain unavailable for CLI-origin chats.
 
-Codex and Claude CLI access have separate account sections and configurations. Desktop switches offer opt-in local CLI synchronization and separate verification results. Codex shared-configuration effects are stated explicitly; SSH settings remain on their hosts. Claude Code CLI chats can be created from existing local or SSH projects with their selected configuration and directory; this does not claim control of an arbitrary live Claude terminal. Native Claude Code 2.1.287 passed resume, creation, send, model/permission controls, Skills, upload, approval refusal, interrupt and writer guards over real Ubuntu x64 SSH. Windows 2.1.168 passed creation, complete multi-turn replies, closed-session resume, native permission control and tool approval allow/deny; unknown Windows registry formats remain blocked. API switching and rollback passed on both systems with isolated mock endpoints, without real paid credentials or a physical phone. Unknown context capacity remains neutral rather than inferring a percentage from billed tokens.
+Codex and Claude CLI access have separate account sections and configurations. Desktop switches offer opt-in local CLI synchronization and separate verification results. Codex shared-configuration effects are stated explicitly; SSH settings remain on their hosts. Claude Code CLI chats can be created from existing local or SSH projects with their selected configuration and directory; this does not claim control of an arbitrary live Claude terminal. Claude Code supports closed-session resume, creation, replies, model/permission controls, Skills, uploads, approvals and interrupt. Unknown context capacity remains neutral rather than inferring a percentage from billed tokens.
 
-Warm join and cold resume, including send and streaming replies, passed on macOS with CLI 0.162.1; Linux x64 SSH with CLI 0.160.0 also passed resume, creation, send, permission and Goal checks. Windows CLI 0.162.0-alpha.17.2 passed API account switching and rollback, plus continuation, send, permission changes, creation, Goal set/clear and cold resume from a non-elevated user terminal. It used a byte-identical copy of the installed executable and an isolated managed-package layout. These checks do not establish every upstream version or SSH environment as verified. Open **SSH diagnostics** in Settings to read local and remote status and counts, copy the summary, or export a file. Older native apps can read and copy but need an update to export. Diagnostics require login and omit chat text, titles, paths, aliases and credentials. Dismissing an SSH error suppresses the same fault across automatic refreshes until recovery or a changed fault; reloading the page resets that dismissal. Unknown writes are not automatically replayed. The upstream resume API has no atomic identity guard across preflight and resume.
+Open **SSH diagnostics** in Settings to read local and remote status and counts, copy the summary, or export a file. Older native apps can read and copy but need an update to export. Diagnostics require login and omit chat text, titles, paths, aliases and credentials. Dismissing an SSH error suppresses the same fault across automatic refreshes until recovery or a changed fault; reloading the page resets that dismissal. Unknown writes are not automatically replayed. The upstream resume API has no atomic identity guard across preflight and resume.
+
+Local CLI access is available on macOS, Windows and Linux; SSH hosts use their own installed and configured CLI. Windows history and cold resume recognize equivalent extended paths without relaxing file boundaries. Confirmed exited legacy Claude writers can be resumed; active or unverifiable writers remain protected. Linux Claude Code CLI support does not add Claude Desktop automatic connection.
+
+For new Codex chats, choose App or CLI and select a known local/SSH CLI project folder. CLI creation sends no initial message. Passive reading continues to follow saved history appended by a terminal without claiming its writer; local and SSH refresh cadence differs. Per-turn model labels require native or saved evidence, and transient read timeouts do not discard a still-valid execution connection.

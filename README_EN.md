@@ -7,7 +7,7 @@
 
 > **v2.0.3 (stable)**: [Release page](https://github.com/try2love/codex-mobile-bridge/releases/tag/v2.0.3) · [Full release notes](RELEASE_NOTES.md) · [Mobile installation](mobile/README.md). This release adds Android in-app updates with download choices and mobile/Web third-party notification settings, and improves search, landscape layouts and connection recovery.
 
-> **v2.1.0 (unreleased):** adds Codex and Claude CLI access and an externally managed HTTPS entry, with adaptive chat-type filters, context usage, and file-reading improvements. Download links below still point to v2.0.3; see the [upcoming release notes](RELEASE_NOTES.md).
+> **v2.1.0-preview.1 (preview):** [Download the preview](https://github.com/try2love/codex-mobile-bridge/releases/tag/v2.1.0-preview.1) · [What’s new](RELEASE_NOTES.md). Try Codex/Claude CLI access, existing HTTPS tunnels and improved file reading. The stable downloads below remain v2.0.3.
 
 [简体中文](README.md) · [English](README_EN.md)
 
@@ -28,7 +28,7 @@ Tasks run on the original computer, or the original SSH host for Codex remote se
 
 <a id="workspace-reading"></a>
 
-## File reading and previews (v2.1.0, unreleased)
+## File reading and previews (v2.1.0-preview.1)
 
 - **Directory-aware Back:** return to the parent folder first, then to chat from the project root. Back exits fullscreen first.
 - **Source reading:** view common languages with syntax highlighting and line numbers. Select **Wrap lines** to fit long lines to the screen, or restore **Original line width**. Copy preserves the source without line numbers; previews never edit the file. Unknown languages and larger text use plain text.
@@ -36,15 +36,19 @@ Tasks run on the original computer, or the original SSH host for Codex remote se
 - **HTML reading:** switch between **Preview** and **Source code**. Self-contained inline interactions and animations work; external resources, CDN/API requests, popups and form submission are unsupported. Preview content is isolated from gateway sign-in data, the parent page and native mobile interfaces.
 - **Compact actions and fullscreen:** actions sit beside file details, with fullscreen next to Download. Entering or leaving fullscreen preserves PDF position and HTML state. Switching file tabs preserves PDF position but reloads HTML on return.
 
-PDF previews are capped at **20 MiB** and the configured ordinary-download limit, whichever is lower. HTML and source previews accept **UTF-8 text up to 512 KiB**. Download larger or unsupported files to open elsewhere. Update both the gateway and mobile app for the complete feature set; browser users reload after updating the gateway. See [verification](VERIFICATION.md) for release status and platform coverage.
+PDF previews are capped at **20 MiB** and the configured ordinary-download limit, whichever is lower. HTML and source previews accept **UTF-8 text up to 512 KiB**. Download larger or unsupported files to open elsewhere. Update both the gateway and mobile app for the complete feature set; browser users reload after updating the gateway.
 
-## CLI chats (v2.1.0, unreleased)
+## CLI chats (v2.1.0-preview.1)
 
-Saved local and configured SSH CLI chats appear with a **CLI** badge. Opening one reads its history without starting a runtime. Select **Continue chat** to connect to or resume the original CLI chat; its terminal does not need to remain open. This explicit action may start the already installed native managed daemon. Bridge does not install CLI, accept new SSH host keys or switch the chat to Desktop execution.
+Saved local and configured SSH CLI chats are readable without starting a runtime. Chat-type filters and CLI badges appear when the readable inventory contains multiple types. If Codex App already owns a chat, Bridge verifies and follows that connection. Otherwise, select **Continue chat** to connect to or resume the original native CLI chat, even if its terminal has closed. This explicit action may start the already installed managed daemon; Bridge does not install CLI or accept new SSH host keys.
 
-Open **Connection diagnostics** in Settings to inspect local and remote status and counts, copy a sanitized summary, or export a file. Older mobile apps can read and copy but need an update to export. Warm connection and cold resume, including send and streaming replies, passed on macOS CLI 0.162.1; Windows, Linux and other SSH environments need separate validation. See the [CLI guide](docs/codex-cli.md) for supported controls and protocol limits.
+Open **SSH diagnostics** in Settings to inspect local and remote status and counts, copy a sanitized summary, or export a file. Older mobile apps can read and copy but need an update to export. After connection, supported controls include model/effort, Skills, default/plan modes, permissions and Goals on compatible local/SSH native CLI runtimes. See the [CLI guide](docs/codex-cli.md) for limits.
 
-Codex and Claude CLI access are configured under their respective account sections. Local CLI sync is opt-in and verifies the target configuration before switching. Claude can create CLI chats from existing local or SSH projects, preserving the selected configuration and directory. Chat-type filters and badges appear only when the fully readable list contains multiple types; Claude shows a blue context ring for known capacity and a neutral ring when capacity is unknown. Local and loopback SSH Claude CLI creation, history and usage were checked with an isolated mock API; real paid models, physical phones and other remote hosts remain unverified.
+Codex and Claude CLI access are configured in their own account sections. Local CLI sync is opt-in, with separate Desktop and CLI verification results; SSH hosts retain their own configuration. Claude can create CLI chats from existing local or SSH projects with the selected profile and directory. Type filters and labels appear only for a fully readable inventory containing multiple types. Claude uses a blue context ring for known capacity and a neutral ring otherwise.
+
+### Platforms and access
+
+Desktop packages cover macOS, Windows and experimental Linux x64/ARM64. Codex and Claude Code CLI run locally or on configured SSH hosts. Linux Claude Code CLI is separate from Claude Desktop; automatic Desktop connection is available on macOS and Windows. See the [CLI guide](docs/codex-cli.md) and [Linux guide](docs/linux.md).
 
 ## The v2 workbench
 
@@ -128,7 +132,7 @@ The accounts panel follows the selected client. Codex official accounts show rem
 
 Opening the Codex panel queries usage automatically; visible panels update every five minutes. Manual refresh runs immediately and restarts the timer. Failed queries preserve the last successful values and timestamp; unavailable upstream data remains unknown.
 
-In the upcoming v2.1.0 changes, Claude queries usage only when you select **View remaining quota**. Opening, revisiting and periodically refreshing its panel show saved usage with the original successful date and time. Failures preserve that snapshot and indicate it was not updated. This reduces unrequested quota credential reads without claiming to eliminate every Keychain prompt. DSH keeps its existing query behavior.
+In v2.1.0-preview.1, Claude queries usage only when you select **View remaining quota**. Opening, revisiting and periodically refreshing its panel show saved usage with the original successful date and time. Failures preserve that snapshot and indicate it was not updated. This reduces unrequested quota credential reads without claiming to eliminate every Keychain prompt. DSH keeps its existing query behavior.
 
 View remaining percentages, reset times and available usage resets. In v2.0.0, reset credits can be used for the current or another saved official account without switching sign-in or enabling Codex's agent usage-reset setting. Confirm the account and credit expiry, then wait five seconds before using a credit. Interrupted requests retain their original redemption ID for retry. Subscription dates are queried online; blocked or missing results remain unconfirmed rather than being inferred from token expiry or old login records. Account credentials are never sent to the phone.
 

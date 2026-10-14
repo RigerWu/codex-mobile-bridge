@@ -1,50 +1,70 @@
-## v2.1.0（待发布）· CLI 接入、已有 HTTPS 入口与阅读体验
+## v2.1.0-preview.1 · CLI 接入、已有 HTTPS 入口与阅读体验
 
-- **Codex CLI 会话接入**：聊天列表纳入现有 CLI 会话，先读历史，点击“继续会话”后接入或恢复原会话；原终端无需保持打开。仅显式继续时才可能启动该环境中已安装的原生托管 daemon，不安装 CLI。若聊天已由 Codex App 接续，则复用经核验的现有执行连接，避免争抢写入锁。支持发送、排队、补充任务、停止及可识别的审批/问题。
-- **CLI 模型、Skill 与模式**：连接后可选择模型与推理强度、添加 Skill、切换普通/计划模式；兼容的本机和 SSH 原生 CLI 运行时支持 Goal 的创建、暂停、修改、恢复与关闭。原生 CLI 通过同一 daemon 操作，保留原提供商、认证与工作目录；短暂断线保留 Skill 选择与草稿。CLI 权限可按执行端支持的选项切换，生效结果由原生运行时确认；聊天中的“完全访问权限”简写为“完全访问”。SSH 上由 App 接管的聊天仍不支持 Goal；消息编辑/分支等操作暂不开放。
-- **SSH 发现与诊断**：纳入已配置的有效 SSH 主机，通过用户登录 shell 读取远端数据目录；设置中的“SSH 连接诊断”显示本机/远端状态和计数，支持复制摘要及登录后的脱敏文件导出。旧版手机 App 可查看、复制，需更新后才能导出。顶部 SSH 错误可关闭，同一故障在自动刷新时不重现，恢复或故障变化后重新提示。原生版本条件及协议限制见 [CLI 接入说明](docs/codex-cli.md)。
-- **Claude Code 本机与 SSH 会话**：读取历史、继续已关闭的原会话，并支持发送、模型与权限切换、Skill、文件上传、审批和中断；可从已有本机或 SSH 项目创建 CLI 聊天。保留执行端的配置、认证和工作目录，不接管其他终端中仍在运行的 Claude 会话，未知发送结果不自动重发。
-- **CLI 接入归属各自账号**：Codex 与 Claude 分别配置和切换 CLI 接入，不依赖 Cockpit Tools；已保存 API 配置可查询上游模型列表及测试该端点连通性。桌面切换可选“同时应用到本机 CLI”，分别显示桌面与 CLI 核验结果；Codex 共享配置的实际影响会明确提示。SSH 继续使用各服务器自己的配置。
-- **跨平台 CLI 兼容**：核验 Codex 原生 daemon 状态后再切换账号；补齐 Windows Claude CLI 旧版控制协议、UTF-8 中文读取和 Linux 原生进程身份核验。API 接入按所选配置生效，失败时回滚；具体版本与未验收项见验证记录。
-- **聊天类型与上下文更一致**：完整可读列表有多种会话类型时显示类型筛选，将类型放在日期上方；Codex 和 Claude 的列表高度对齐。Claude 上下文沿用 Codex 圆环，已知容量显示蓝色占比，未知容量显示中性圆环，点击查看详情。
-- **已有穿透 / 反向代理**：网络连接方式默认展开。只填写自管入口的 HTTPS 根地址，即可将已有穿透或本机反代接到网关回环端口；不要求开启 LAN，也不管理穿透软件。固定入口检测验证证书和当前网关实例；成功后卡片替换上一次错误，修改入口后丢弃旧检测结果。扫码在地址可达时签发。跨设备 NAS 保留进阶配置与局域网要求；详见[配置说明](docs/external-tunnel.md)。
-- **目录返回符合浏览习惯**：在“文件”标签的子目录中，返回先进入上一级，回到项目根目录后再返回聊天；Codex 顶部返回按钮和手机工作台共用这一规则。全屏预览中先退出全屏，保留原有浮层关闭优先级。
-- **Claude 额度按需查询**：打开、返回或定时刷新账号面板时只显示已保存的额度，点击“查看剩余额度”才发起查询。显示上次成功查询的日期与时间；失败时保留旧结果和原查询时间，并提示未更新，减少非主动查询触发的凭据读取。Codex 与 DeepSeek Harness 的查询方式保持不变。
-- **源码更适合阅读**：常见代码文件增加语法高亮、独立行号和“复制代码”；可切换“自动换行 / 原始行宽”，让长代码适合手机屏幕。软换行不改变原始行号，复制保留原文、不带行号；未知语言及较大文本保留纯文本阅读。
-- **PDF 内置连续阅读**：在工作台直接查看 PDF，手机通过滑动翻阅、双指缩放，电脑浏览器保留翻页与缩放按钮。有文本层的 PDF 支持文字选择，横竖混排页面逐页适配宽度；切换标签、全屏及返回时保留阅读位置。优化快速缩放和邻页回看，保留已显示画面，待新画面完成后替换，减少黑屏和闪烁。
-- **HTML 预览与源码切换**：直接查看自包含 HTML 的内联交互和动画，也可切换到带高亮的只读源码。预览在隔离区域运行，不开放网关登录信息、父页面或手机原生接口，不支持外部联网、表单提交、弹窗及页面跳转。
-- **更多空间留给文件**：文件名与描述在左，下载、复制或预览操作在右；PDF、HTML 和源码可从下载旁的“全屏预览”入口展开。窄屏使用紧凑按钮，全屏进出保持当前 PDF 位置和 HTML 交互状态。
+这是 v2.1.0 的首个预览版，欢迎体验并通过 [Issues](https://github.com/try2love/codex-mobile-bridge/issues) 反馈问题和建议。稳定版继续保留 v2.0.3。
 
-### 使用与升级说明
+### 新增功能
 
-PDF 在线预览上限为 **20 MiB**，同时受当前普通点击下载限额约束；超限文件请下载后打开。HTML 和源码沿用 **512 KiB 的 UTF-8 文本预览范围**。HTML 预览面向自包含文件，多文件站点、外部 CDN 与后端 API 暂不支持；扫描 PDF 不提供 OCR。
+- **Codex CLI 会话**：在手机与 Web 发现和阅读已有 CLI 聊天，原终端关闭后也可点击“继续会话”恢复；支持从已有本机或 SSH 项目目录新建 CLI 聊天。终端后续回复可持续同步阅读，每轮回复按原始记录显示模型。
+- **CLI 完整操作**：Codex CLI 支持模型与推理强度、Skill、普通/计划模式、权限切换、审批与中断；兼容的本机和 SSH 原生 CLI 支持 Goal 的创建、暂停、修改、恢复与关闭。
+- **Claude Code 本机与 SSH 接入**：支持历史阅读、已关闭会话恢复、新建聊天、发送消息、模型与权限切换、Skill、文件上传、审批及中断，沿用执行端的配置与工作目录。
+- **独立 CLI 账号配置**：Codex 与 Claude 在各自账号管理中配置 CLI，支持查询上游模型和测试连通性，不依赖 Cockpit Tools。桌面账号切换可选“同时应用到本机 CLI”，分别显示生效结果；SSH 保留各服务器自己的配置。
+- **已有穿透 / 反向代理入口**：填写已有 HTTPS 根地址即可接入，支持自定义端口；网络连接方式默认展开，并提供固定入口检测和更清晰的配置引导。详见[配置说明](docs/external-tunnel.md)。
+- **文件阅读**：源码增加高亮、行号、复制与自动换行；PDF 支持连续滑动、双指缩放、文字选择和全屏，电脑保留翻页与缩放按钮；自包含 HTML 可预览内联交互、动画并切换源码。
 
-正式发布后，建议网关与 Android/iOS App 一起更新，以获得完整的文件阅读和原生 HTML 隔离支持；Web 用户更新网关后重新加载页面即可。共享中继部署也需同步更新中继服务。Android 覆盖安装以保留数据；iOS 仍需自行签名。
+### 体验优化
 
-本节为待发布说明，文件阅读的本地测试已获用户确认；macOS Codex CLI 0.162.1 的运行中接入与冷恢复、发送及流式回复已通过本机联调。真实 Linux SSH 的 Codex/Claude CLI 操作及 Windows/Linux API 账号切换与回滚已通过隔离验收；Windows Claude 2.1.168 的创建、多轮完整回复、关闭后恢复、权限控制和工具审批允许/拒绝已验证。Windows Codex 0.162.0-alpha.17.2 的接续、权限、新建、Goal 接口和冷恢复也已通过普通用户终端验收，并修复 Windows 长路径写法引起的冷恢复误拒绝。真实付费账号、物理手机及新多平台安装包尚未验收。外部 HTTPS 入口仍需在用户自己的代理和手机网络验收；正式发布构建尚未执行，范围见 [验证记录](VERIFICATION.md)。当前公开下载仍为 v2.0.3。手动额度查询不代表所有 macOS 钥匙串授权场景均已消除。
+- 根据实际会话类型显示筛选与日期上方的类型标签；对齐 Codex 与 Claude 列表高度，Claude 上下文使用可点击查看详情的圆环。
+- 客户端状态在后台更新，保留已有列表；CLI 短暂断线保留草稿与 Skill 选择。
+- 设置中提供“SSH 连接诊断”，支持复制摘要和导出脱敏报告；顶部同一 SSH 故障可关闭。
+- Claude 额度改为主动点击查询，显示上次成功查询时间，查询失败保留原结果。
+- 文件描述与下载、复制、全屏操作并排；目录返回先回上一级，全屏返回先退出预览。PDF 切换标签与全屏时保留阅读位置。
+
+### Bug 修复
+
+- 修复 Windows Codex 保存历史与冷恢复中的长路径识别问题，以及已退出的旧版 Claude Code 会话被误判占用的问题；改善 Windows UTF-8 读取与 Linux 进程识别。
+- 修复 CLI 后台读取短暂超时导致有效连接丢失的问题，改善 Goal 运行后的连接恢复。
+- 修复固定 HTTPS 入口检测成功后仍显示上一次错误的问题；切换入口后清除旧结果。
+- 减少 PDF 快速翻阅、缩放和邻页回看时的黑屏与闪烁，保留已渲染画面直到替换完成。
+
+### 安装与使用
+
+本次提供 macOS Apple Silicon / Intel、Windows x64、Linux x64 / ARM64、Android APK、iOS 未签名 IPA 和源码包。建议网关与手机 App 一起更新，浏览器用户更新网关后刷新页面；共享中继部署也需同步更新中继服务。Android 覆盖安装以保留数据，iOS 需自行签名。下载可用 `SHA256SUMS.txt` 校验。
+
+CLI 需要执行端已安装并配置相应原生程序；不会接管其他终端仍在运行的 Claude 会话。PDF 在线预览上限为 **20 MiB**，同时受当前普通点击下载限额约束；源码与 HTML 预览支持 **512 KiB 以内 UTF-8 文本**，更大文件可下载打开。HTML 预览面向自包含文件，不开放外部网络与网关登录信息。
 
 ### English
 
-- **Codex CLI access:** discover saved CLI chats and read history without activation. **Continue chat** explicitly connects to or resumes the original chat, even after its terminal closes; it may start the already installed, managed daemon but never installs CLI. Chats already owned by Codex App follow the verified existing owner instead of competing for the writer lock. Send, queue, steer, interrupt and supported approval/input requests are available after connection.
-- **CLI models, Skills and modes:** select model/effort, add Skills and switch default/plan modes after connection. Compatible local and SSH native CLI runtimes support creating, pausing, editing, resuming and clearing Goals. Native controls use the same daemon and retain the original provider, authentication and working directory. Transient disconnects preserve selected Skills and drafts. CLI permissions follow the execution runtime and policy, with effective-state confirmation. SSH chats owned by Codex App still do not expose Goals; editing/forking remains unavailable.
-- **SSH discovery diagnostics:** include configured managed SSH hosts and read the remote data home through the user login shell. Open **SSH diagnostics** in Settings for readable status and counts, copy the summary, or export authenticated, sanitized data. Older native apps need an update to export. A dismissed SSH error stays hidden across automatic refreshes until recovery or a changed fault. See [CLI support and protocol limits](docs/codex-cli.md).
-- **Local and SSH Claude Code chats:** read history, resume closed chats, send, select models and permissions, use Skills, upload files, respond to approvals and interrupt. Create CLI chats from existing local or SSH projects with their original configuration, authentication and directory. Live chats in another terminal are not taken over, and uncertain writes are never replayed automatically.
-- **Separate CLI account access:** configure Codex and Claude CLI in their own account sections without Cockpit Tools. Saved API profiles can list models and test that endpoint. Desktop switches can optionally apply to local CLI, reporting Desktop and CLI verification separately; Codex shared-configuration effects are stated explicitly. SSH hosts retain their own configuration.
-- **Cross-platform CLI compatibility:** check native Codex daemon state before switching accounts; support the tested legacy Windows Claude control protocol, UTF-8 text and Linux native process identity. API profiles retain their selected routing and roll back on failed verification. See the verification matrix for tested versions and remaining gaps.
-- **Consistent chat types and context:** show filters and type labels above dates when the readable inventory contains multiple types. Align Codex and Claude list spacing. Claude uses the Codex-style context ring with blue fill for known capacity, a neutral ring otherwise, and details on tap.
-- **Existing tunnel / reverse proxy:** connection settings open by default. Save a trusted HTTPS root URL for a user-managed tunnel or same-computer proxy targeting the gateway loopback port. LAN can stay off; Bridge does not manage the tunnel process. Fixed-entry checks verify TLS and the current instance. A successful check replaces the previous error in the card; changing the entry discards stale results. A proxy on another device still uses advanced NAS setup and LAN reachability. See the [guide](docs/external-tunnel.md).
-- **Directory-aware Back:** move to the parent folder before returning to chat at the project root. The Codex header and mobile workbench use the same rule. Back exits fullscreen previews first and preserves existing overlay handling.
-- **Manual Claude quota queries:** opening, revisiting or periodically refreshing the accounts panel displays saved usage only. Select **View remaining quota** to query. Keep the last successful date, time and values on failure, with a clear stale-data message. Codex and DeepSeek Harness retain their existing query behavior.
-- **Readable source files:** add syntax highlighting, separate line numbers and **Copy code**. Switch between **Wrap lines** and **Original line width**; wrapping keeps source line numbers aligned, and copying preserves the original text without line numbers. Unknown languages and larger text fall back to plain text.
-- **Continuous PDF reading:** scroll and pinch on touch devices; use page and zoom buttons on desktop browsers. Select text when the PDF provides it, fit mixed page sizes individually, and retain the reading position across tabs and fullscreen. Keep completed pages visible until replacements are rendered, reducing flashes during rapid zoom and nearby page navigation.
-- **HTML preview and source:** run inline interactions and animations in self-contained HTML, or inspect highlighted read-only source. The isolated preview cannot access gateway sign-in data, the parent page or native mobile interfaces. External network access, form submission, popups and navigation are blocked.
-- **Compact headers and fullscreen:** place file details on the left and actions on the right. Open PDF, HTML and source in fullscreen beside Download, preserving PDF position and HTML interaction state when entering or leaving fullscreen.
+This is the first v2.1.0 preview. Try the new features and share feedback through [Issues](https://github.com/try2love/codex-mobile-bridge/issues). v2.0.3 remains the stable release.
 
-PDF previews are limited to **20 MiB** and the configured ordinary-download limit, whichever is lower. HTML and source previews retain the **512 KiB UTF-8 text limit**. Download larger files to open them elsewhere. Multi-file HTML sites, external CDN/API dependencies and OCR are outside this release's scope.
+#### New features
 
-When released, update both the gateway and Android/iOS apps for the complete feature set and native HTML isolation. Browser users only need to reload after updating the gateway. Shared-relay deployments also require a relay update. Install Android over the existing app; iOS still requires your own signing.
+- **Codex CLI chats:** discover and read saved CLI chats on mobile and Web, resume after the original terminal closes, and create chats in known local or SSH project folders. Follow later terminal-written replies and show each reply's recorded model.
+- **CLI controls:** model/effort, Skills, default/plan modes, permissions, approvals and interrupt. Compatible local and SSH native Codex CLI runtimes support creating, pausing, editing, resuming and clearing Goals.
+- **Local and SSH Claude Code:** read history, resume closed chats, create chats, send messages, select models and permissions, use Skills, upload files, handle approvals and interrupt, preserving the execution environment's configuration and directory.
+- **Separate CLI account settings:** configure Codex and Claude independently, list upstream models and test connectivity without Cockpit Tools. Desktop account changes can optionally apply to local CLI, with separate results; SSH hosts keep their own configuration.
+- **Existing tunnels / reverse proxies:** enter an existing HTTPS root URL, including a custom port. Connection options open by default, with fixed-entry checks and clearer guidance. See the [setup guide](docs/external-tunnel.md).
+- **File reading:** syntax highlighting, line numbers, copying and wrapping for source; continuous scrolling, pinch zoom, text selection and fullscreen for PDFs, with page/zoom buttons on desktop; inline interactions and source view for self-contained HTML.
 
-**Unreleased:** file-reading testing has been accepted by the user. Codex CLI warm join and cold resume, including send and streaming replies, passed locally on macOS CLI 0.162.1. Real Linux SSH Codex/Claude controls and Windows/Linux API switching and rollback passed in isolation. Windows Claude 2.1.168 creation, complete multi-turn replies, closed-session resume, permission controls and tool approval allow/deny passed. Windows Codex 0.162.0-alpha.17.2 also passed continuation, permission changes, creation, Goal controls and cold resume from a non-elevated user terminal; Windows extended-path spelling no longer incorrectly blocks cold resume. Real paid credentials, physical phones and new platform packages remain unverified. The external HTTPS entry still requires validation through the user's own proxy and phone network. Release builds are pending. See [verification](VERIFICATION.md). Public downloads remain v2.0.3. Manual Claude quota queries do not eliminate every macOS Keychain authorization scenario.
+#### Improvements
+
+- Show chat-type filters and labels above dates when relevant; align Codex/Claude lists and use a tappable context ring for Claude.
+- Refresh client status in the background while retaining the list; preserve CLI drafts and selected Skills across brief disconnects.
+- Add **SSH diagnostics** with copy/export and dismissible recurring SSH errors.
+- Query Claude quota on demand, displaying the last successful query time and retaining results if a refresh fails.
+- Place file actions beside the description, navigate Back through parent folders, exit fullscreen first and retain PDF reading position across tabs and fullscreen.
+
+#### Fixes
+
+- Fix Windows Codex extended paths in saved history and cold resume, and false occupied-state detection for exited legacy Claude Code sessions; improve Windows UTF-8 reading and Linux process identification.
+- Retain valid CLI connections across brief history-read timeouts, including after Goal execution.
+- Replace stale fixed-HTTPS errors after successful checks and clear old results when the entry changes.
+- Reduce PDF flashes during rapid navigation and zoom by retaining rendered pages until replacements are ready.
+
+#### Installation and usage
+
+Packages cover Apple Silicon/Intel macOS, Windows x64, Linux x64/ARM64, Android APK, unsigned iOS IPA and iOS source. Update the gateway and mobile apps together; browser users reload after updating the gateway. Update shared-relay deployments as well. Install Android over the existing app to retain data; iOS requires your own signing. Verify downloads with `SHA256SUMS.txt`.
+
+The execution host needs its native CLI installed and configured. Live Claude chats in another terminal are not taken over. PDF previews are capped at **20 MiB** and the ordinary-download limit; source/HTML previews accept **UTF-8 text up to 512 KiB**. Download larger files to open elsewhere. HTML previews are self-contained, without external network access or access to gateway sign-in data.
 
 ---
 

@@ -1117,7 +1117,9 @@ class Bridge:
                 return
             if not force and time.monotonic() < session.retry_at and not session.activity_only:
                 return
-            needs_history = session.state is None or session.activity_only
+            # A CLI origin may keep writing its rollout after the first passive
+            # read. Refresh saved turns while no runtime owns this viewer.
+            needs_history = session.state is None or session.activity_only or (session.origin == 'cli' and not session.connected)
             session.connecting = True
             session.changed()
         def refresh():
@@ -1129,7 +1131,8 @@ class Bridge:
                     try:
                         fallback = self._saved_history(session)
                         with session.condition:
-                            session.set_history(fallback)
+                            if session.saved_view != normalize_state(fallback, False):
+                                session.set_history(fallback)
                     except (OSError, ValueError, KeyError, RemoteUnavailable, StoreUnavailable):
                         # A missing saved rollout must not prevent a live snapshot.
                         logging.getLogger(__name__).warning("Saved history unavailable; trying desktop snapshot")

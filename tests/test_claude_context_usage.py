@@ -29,6 +29,23 @@ class ClaudeContextUsage(unittest.TestCase):
         self.assertEqual(result['contextUsage']['contextWindow'], 200000)
         self.assertTrue(result['contextUsage']['compacted'])
 
+    def test_matching_result_model_supplies_capacity_without_using_cumulative_tokens(self):
+        result = {'type': 'result', 'usage': {'input_tokens': 999999}, 'modelUsage': {
+            'old-model': {'inputTokens': 888888, 'contextWindow': 1000000},
+            'new-model': {'inputTokens': 777777, 'contextWindow': 200000}}}
+        reading = context_fields([assistant(10, 20, 30, model='old-model'),
+                                  assistant(40, 50, 60, model='new-model'), result])['contextUsage']
+        self.assertEqual(reading['usedTokens'], 150)
+        self.assertEqual(reading['contextWindow'], 200000)
+        self.assertEqual(reading['model'], 'new-model')
+        self.assertIsNone(context_fields([assistant(1, model='unknown-model'), result])['contextUsage']['contextWindow'])
+        self.assertIsNone(context_fields([assistant(1, model='new-model'), result,
+                                          assistant(2, model='new-model')])['contextUsage']['contextWindow'])
+        self.assertIsNone(context_fields([assistant(1, model='new-model'),
+                                          {**result, 'isSyntheticResult': True}])['contextUsage']['contextWindow'])
+        self.assertIsNone(context_fields([assistant(1, model='new-model'),
+                                          {'type': 'system', 'subtype': 'compact_boundary'}, result])['contextUsage'])
+
     def test_unknown_and_zero_are_distinct(self):
         self.assertIsNone(context_fields([assistant(None)])['contextUsage'])
         self.assertEqual(context_fields([assistant(0)])['contextUsage']['usedTokens'], 0)

@@ -445,12 +445,14 @@ test('context monitor remains discoverable and distinguishes unsupported from mi
   const ui=await opened();ui.run(`BridgeI18n.setLanguage('${language}')`);
   const apply=(usage,status)=>ui.view.applyDetail({session:{id:'a',title:'Chat',contextUsage:usage,contextUsageStatus:status},messages:[]});
   apply({usedTokens:40000,contextWindow:200000},'available');
-  assert.equal(ui.view.contextLabel.textContent,'20%');assert.equal(ui.view.contextButton.hidden,false);
+  assert.equal(ui.view.contextButton.textContent,'');assert.equal(ui.view.contextButton.children.length,1);assert.equal(ui.view.contextButton.hidden,false);
+  assert.equal(ui.view.contextRing.className,'context-usage-ring');assert.match(ui.view.contextButton.title,/20%/);
+  assert.equal(ui.view.contextRing.getAttribute('aria-hidden'),'true');
   ui.view.contextDetails();let dialog=ui.document.querySelector('dialog');assert.match(dialog.textContent,/40,000/);assert.match(dialog.textContent,/20\.0%/);dialog.close();
   apply({usedTokens:600,contextWindow:null,measurement:'lastPrompt',model:'fixture-model',compacted:true},'available');
-  assert.equal(ui.view.contextLabel.textContent,'600');assert.doesNotMatch(ui.view.contextButton.title,/0%/);
+  assert.equal(ui.view.contextButton.textContent,'');assert.ok(ui.view.contextRing.classList.contains('unknown'));assert.doesNotMatch(ui.view.contextButton.title,/0%/);
   ui.view.contextDetails();dialog=ui.document.querySelector('dialog');assert.match(dialog.textContent,/600/);assert.match(dialog.textContent,/fixture-model/);assert.doesNotMatch(dialog.textContent,/3\.0%/);dialog.close();
-  apply(null,'unsupported');assert.equal(ui.view.contextLabel.textContent,language==='en'?'Context':'上下文');assert.doesNotMatch(ui.view.contextButton.title,/0%|20%/);
+  apply(null,'unsupported');assert.equal(ui.view.contextButton.textContent,'');assert.doesNotMatch(ui.view.contextButton.title,/0%|20%/);
   ui.view.contextDetails();dialog=ui.document.querySelector('dialog');assert.match(dialog.textContent,language==='en'?/does not expose context usage/:/未提供上下文用量接口/);dialog.close();
   apply(null,'unavailable');ui.view.contextDetails();dialog=ui.document.querySelector('dialog');assert.match(dialog.textContent,language==='en'?/update automatically when available/:/有可用数据时会自动更新/);assert.doesNotMatch(dialog.textContent,language==='en'?/does not expose/:/未提供上下文用量接口/);
  }

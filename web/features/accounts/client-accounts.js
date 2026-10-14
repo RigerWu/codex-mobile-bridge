@@ -4,7 +4,7 @@ class DesktopClientAccountsPanel {
   constructor({root,provider,read,request,readModels=null,desktop=false,visible=null,onChanged=()=>{},onUpdate=()=>{}}){
     Object.assign(this,{root,provider,read,request,readModels,desktop,onChanged,onUpdate});
     this.visible=visible||(()=>!document.hidden&&!root.closest('[hidden]')&&(!root.closest('dialog')||root.closest('dialog').open));
-    this.value=null;this.generation=0;this.checkedAt=0;this.busy=false;this.loading=false;this.queryingId=null;this.error='';this.models=null;this.modelsOpen=false;this.modelsRevision=0;
+    this.value=null;this.generation=0;this.checkedAt=0;this.busy=false;this.loading=false;this.queryingId=null;this.error='';this.models=null;this.modelsOpen=false;this.modelsRevision=0;this.syncLocalCliIds=new Set();
     this.languageListener=()=>{BridgeI18n.apply(this.root);this.render();};this.visibilityListener=()=>this.resume();
     document.addEventListener('bridge-language',this.languageListener);document.addEventListener('visibilitychange',this.visibilityListener);
     this.build();this.render();
@@ -93,7 +93,8 @@ class DesktopClientAccountsPanel {
   choose(row){
     if(this.busy||this.loading||this.value?.canSwitch!==true||this.activeIds().has(row.id))return;
     const prompt=this.text('切换会重启对应桌面应用。未发送草稿按账号保留，待发附件需重新添加。请先结束任务并保存工作，确认切换？')+(this.provider==='claude'?'\n\n'+this.text('重新启动 Claude Desktop 后，初始化连接需要电脑处于解锁状态。是否确认退出？'):'');
-    if(window.confirm(prompt))return this.perform({action:'switch',id:row.id});
+    if(window.confirm(prompt))return this.perform({action:'switch',id:row.id,
+      ...(this.provider==='claude'&&this.syncLocalCliIds.has(row.id)?{syncLocalCli:true}:{})});
   }
   duration(minutes){return !minutes?'额度窗口':minutes%1440===0?minutes/1440+this.text(' 天'):minutes%60===0?minutes/60+this.text(' 小时'):minutes+this.text(' 分钟');}
   queryTime(seconds){const date=new Date(seconds*1000),pad=value=>String(value).padStart(2,'0');return `${date.getFullYear()}-${pad(date.getMonth()+1)}-${pad(date.getDate())} ${pad(date.getHours())}:${pad(date.getMinutes())}`;}
@@ -145,6 +146,8 @@ class DesktopClientAccountsPanel {
     const value=this.value;this.refreshButton.disabled=this.busy||this.loading;
     this.status.textContent=this.text(this.busy?'正在处理…':this.loading?'正在读取…':value?.message||(value?.gatewayRunning===false?'网关未启动':''));this.errorNode.textContent=this.text(this.error||'');
     this.current.textContent=this.text('当前接入：')+(value?.current?.name||value?.current?.label||value?.accounts.find(row=>row.id===value.activeId)?.name||this.text('暂未识别'))+(value?.current?.routes?.length?' · '+this.text('已配置接入：')+value.current.routes.map(route=>this.text(({'deepseek-account':'官方账号','deepseek-official':'API 接入'})[route]||route)).join(' / '):'');
+    if(value?.cliSync?.status==='verified')this.current.textContent+=' · '+this.text('本机 CLI 已核验');
+    else if(value?.cliSync?.status==='failed')this.current.textContent+=' · '+this.text('本机 CLI 同步失败：')+this.text(value.cliSync.error||'请检查接入');
     this.hint.textContent=this.text(this.desktop?'官方账号请先在对应桌面应用登录，再保存当前接入。API 可在此添加；保存后选择切换才会应用。':'添加账号或 API，请在电脑端完成。')+(this.provider==='deepseek'?' '+this.text('现有会话继续使用各自选择的模型接入。'):'');
     this.modelsButton.hidden=!this.readModels;this.modelsButton.textContent=this.text(this.modelsOpen?'收起模型':'查看可用模型');this.modelsButton.disabled=this.busy||this.modelsLoading;this.modelsBox.hidden=!this.modelsOpen;this.modelsBox.replaceChildren();if(this.modelsOpen)this.renderModels(this.modelsBox);
     if(this.nameInput)this.nameInput.disabled=this.busy||this.loading;
@@ -162,6 +165,7 @@ class DesktopClientAccountsPanel {
       name.append(this.node('p',row.kind==='api'?'API 接入':'官方账号','account-muted'));if(row.email)name.append(this.node('p',row.email,'account-muted'));identity.append(name);
       const usage=this.node('div',undefined,'accounts-usage');this.usage(usage,row);if(usage.children.length)identity.append(usage);card.append(identity);
       const actions=this.node('div',undefined,'accounts-actions'),switcher=this.button(active?'当前接入':'切换到此接入',()=>this.choose(row));switcher.disabled=active||this.busy||this.loading||value.canSwitch!==true;actions.append(switcher);
+      if(this.provider==='claude'&&row.kind==='api'&&!active){const label=this.node('label',undefined,'account-reminder'),checkbox=this.node('input');checkbox.type='checkbox';checkbox.checked=this.syncLocalCliIds.has(row.id);checkbox.disabled=this.busy||this.loading;checkbox.onchange=()=>{if(checkbox.checked)this.syncLocalCliIds.add(row.id);else this.syncLocalCliIds.delete(row.id);};label.append(checkbox,this.node('span','同时应用到本机 CLI'));actions.append(label);}
       if(this.desktop&&row.saved!==false){for(const [label,fn] of [['编辑',()=>this.editAccount(row)],['删除',()=>this.removeAccount(row)]]){const button=this.button(label,fn);button.disabled=this.busy||this.loading;actions.append(button);}}
       card.append(actions);this.rows.append(card);
     }

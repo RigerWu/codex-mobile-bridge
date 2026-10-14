@@ -2,6 +2,13 @@
 // UI messages only. Never translate chat content, commands, model IDs or user input.
 const BridgeI18n=(()=>{
 const en={
+"同时应用到本机 CLI":"Also apply to local CLI",
+"本机 CLI 已核验":"Local CLI verified",
+"本机 CLI 核验失败：":"Local CLI verification failed: ",
+"桌面已切换；本机 CLI 核验失败：":"Desktop switched; local CLI verification failed: ",
+"共享配置已变更，本机 CLI 尚未核验":"Shared configuration changed; local CLI has not been verified",
+"本机 CLI 同步失败：":"Local CLI sync failed: ",
+"请检查接入":"Check the connection",
 "请等待当前 Claude Code 任务结束后再发送":"Wait for the current Claude Code task to finish before sending another message.",
 "原项目目录不可用，请在电脑端检查":"The original project directory is unavailable. Check it on your computer.",
 "有 Claude Code 任务运行或等待确认，请先结束任务再关闭客户端":"A Claude Code task is running or awaiting approval. Finish it before closing the client.",

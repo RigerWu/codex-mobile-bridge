@@ -76,6 +76,12 @@ test('Claude account switch explains unlock requirement in the same confirmation
  ui.confirm(true);await ui.panel.choose(row('other'));assert.equal(ui.calls.length,1);assert.equal(ui.calls[0].action,'switch');assert.equal(ui.prompts.length,3,'each attempt has only one confirmation');
  const dsh=fixture();dsh.panel.accept(snapshot([row('current'),row('other')]));dsh.confirm(false);await dsh.panel.choose(row('other'));assert.doesNotMatch(dsh.prompts[0],/解锁|Claude/);assert.equal(dsh.calls.length,0);
 });
+test('Claude API switch sends local CLI choice only after checkbox selection',async()=>{
+ const ui=fixture({provider:'claude'});ui.panel.accept(snapshot([row('current'),row('other','api')]));
+ const box=ui.all().find(node=>node.tag==='input'&&node.type==='checkbox');
+ assert.ok(box);box.checked=true;box.onchange();ui.confirm(true);await ui.panel.choose(row('other','api'));
+ assert.equal(ui.calls[0].syncLocalCli,true);
+});
 test('switch remains pending until the backend finishes and rejects duplicate clicks',async()=>{
   const ui=fixture();ui.panel.accept(snapshot([row('current'),row('other')]));let finish;ui.setHandler(()=>new Promise(resolve=>finish=resolve));const pending=ui.panel.choose(row('other'));assert.equal(ui.panel.busy,true);await ui.panel.choose(row('other'));assert.equal(ui.calls.length,1);
   finish(snapshot([row('current'),row('other')],['other']));await pending;assert.equal(ui.panel.busy,false);assert.equal(ui.panel.value.activeId,'other');

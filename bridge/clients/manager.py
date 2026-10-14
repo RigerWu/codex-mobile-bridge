@@ -48,6 +48,7 @@ class DesktopSessions:
         self.workspace_roots = {}
         self.account_stores = {}
         self.account_operations = set()
+        self.cli_sync_status = {}
         self.deepseek_recovery = None
         self.claude_quit = None
         self.directory = Path(directory)/'desktop-sessions'
@@ -1082,7 +1083,8 @@ class DesktopSessions:
 
     def _accounts_public(self, provider, value):
         return {**value, 'provider': provider, 'gatewayRunning': self.gateway_running,
-                'canSwitch': provider not in self.account_operations}
+                'canSwitch': provider not in self.account_operations,
+                'cliSync': self.cli_sync_status.get(provider)}
 
     def _launch_account_client(self, provider, descriptor):
         from bridge.clients.lifecycle import launch_client
@@ -1107,6 +1109,11 @@ class DesktopSessions:
 
     def client_accounts(self, provider, value):
         operation = value.get('operation', 'list')
+        sync_cli = value.get('syncLocalCli') is True
+        if 'syncLocalCli' in value and not isinstance(value['syncLocalCli'], bool):
+            raise ValueError('本机 CLI 同步选项无效')
+        if sync_cli and (provider != 'claude' or operation != 'switch'):
+            raise ValueError('本机 CLI 同步仅支持 Claude Desktop 接入切换')
         store = self._account_store(provider)
         if operation == 'list':
             return self._accounts_public(provider, store.public())
@@ -1129,6 +1136,14 @@ class DesktopSessions:
             raise ValueError('不支持的账号操作')
         from bridge.clients.lifecycle import inspect_client
         with self.client_lock, self._changing(provider):
+            if sync_cli:
+                if not self.bridge or not getattr(self.bridge, 'cli_access', None):
+                    raise ValueError('本机 Claude Code CLI 接入管理器不可用')
+                from bridge.features.accounts.cli_sync import LocalCliSync
+                LocalCliSync(self.bridge).preflight('claude')
+                selected = next((row for row in store.public()['accounts'] if row['id'] == value.get('id')), None)
+                if not selected or selected.get('kind') != 'api' or selected.get('saved') is not True:
+                    raise ValueError('官方 Claude Desktop 登录不能同步到本机 CLI')
             # Harness persists one atomic credential file; saving it does not
             # require the multi-file profile snapshot used by Claude.
             if provider == 'deepseek' and operation == 'import-current':
@@ -1160,6 +1175,23 @@ class DesktopSessions:
                         active = result.get('activeIds', [result.get('activeId')])
                         if value.get('id') not in active:
                             raise ValueError('账号配置尚未生效，请重试')
+                if operation == 'switch' and sync_cli:
+                    try:
+                        imported = self.bridge.cli_access.change({'provider': 'claude', 'action': 'importDesktop',
+                                                                   'desktopId': value['id']})
+                        saved_id = imported.get('savedId')
+                        if not saved_id:
+                            raise ValueError('Claude Code CLI 接入未保存')
+                        selected = self.bridge.cli_access.change({'provider': 'claude', 'action': 'switch',
+                                                                   'id': saved_id, 'confirmed': True})
+                        if selected.get('claude', {}).get('activeId') != saved_id:
+                            raise ValueError('Claude Code CLI 未确认目标接入')
+                        self.cli_sync_status[provider] = {'status': 'verified'}
+                    except Exception as error:
+                        self.cli_sync_status[provider] = {'status': 'failed', 'error': str(error),
+                                                          'desktopStatus': 'verified'}
+                elif operation == 'switch':
+                    self.cli_sync_status[provider] = {'status': 'unchanged'}
             except Exception as error:
                 try:
                     if rollback is not None:

@@ -1,7 +1,7 @@
 /* Shared account selector; enrollment controls exist only in the desktop host. */
 class AccountsPanel {
   constructor({root,read,request,desktop=false,toolbar=null,onChanged=()=>{},onUpdate=()=>{},onReset=null}){
-    Object.assign(this,{root,read,request,desktop,toolbar,onChanged,onUpdate,onReset});this.value=null;this.busy=false;this.timer=null;this.generation=0;this.operationError=false;this.expandedModels=new Set();
+    Object.assign(this,{root,read,request,desktop,toolbar,onChanged,onUpdate,onReset});this.value=null;this.busy=false;this.timer=null;this.generation=0;this.operationError=false;this.expandedModels=new Set();this.syncLocalCliIds=new Set();
     this.build();
   }
   text(value){return typeof BridgeI18n==='undefined'?value:BridgeI18n.t(value);}
@@ -165,7 +165,8 @@ class AccountsPanel {
   }
   async choose(row){
     if(!window.confirm(this.text('确认所有桌面任务（包括未在网页显示的任务）已结束，并切换接入、重启 Codex 桌面应用？')+'\n'+row.name))return;
-    try{await this.perform({action:'switch',id:row.id,requestId:this.requestId(),confirmed:true,tasksConfirmed:true});this.refresh();}
+    try{await this.perform({action:'switch',id:row.id,requestId:this.requestId(),confirmed:true,tasksConfirmed:true,
+      ...(this.syncLocalCliIds.has(row.id)?{syncLocalCli:true}:{})});this.refresh();}
     catch(error){this.operationError=true;this.error.textContent=this.text('无法创建切换请求，请刷新页面后重试');}
   }
   renderTools(){
@@ -198,6 +199,9 @@ class AccountsPanel {
     const switching=!['idle','complete','restored','failed'].includes(phase);
     if(this.resetDialog?.open&&(switching||!value.accounts.some(row=>row.id===this.resetAccountId)))this.resetDialog.close();
     this.status.textContent=this.text(labels[phase]||phase)+(value.switch?.error?' · '+this.text(value.switch.error):'');
+    if(value.switch?.cliSync?.status==='verified')this.status.textContent+=' · '+this.text('本机 CLI 已核验');
+    else if(value.switch?.cliSync?.status==='failed')this.status.textContent+=' · '+this.text('桌面已切换；本机 CLI 核验失败：')+this.text(value.switch.cliSync.error||'请检查接入');
+    else if(value.switch?.cliSync?.status==='shared-config-unverified')this.status.textContent+=' · '+this.text('共享配置已变更，本机 CLI 尚未核验');
     this.status.hidden=phase==='idle'&&value.current?.status==='ready';
     const current=value.current;this.current.textContent=this.text('当前接入：')+(current?.status==='ready'?(current.kind==='signedOut'?this.text('Codex 未登录'):current.name+(current.id?'':this.text('（未保存到列表）'))):this.text(current?.status==='checking'?'正在识别…':'暂未识别'));
     this.currentReset.hidden=!this.onReset||current?.kind!=='chatgpt'||!!value.activeId;this.currentReset.disabled=this.busy||switching;
@@ -226,6 +230,7 @@ class AccountsPanel {
       name.append(title,this.node('p',row.kind==='chatgpt'?(row.email||this.text('官方 ChatGPT 账号')):(row.baseUrl+' · '+row.model),'account-muted'));
       identity.append(name);this.accountUsage(identity,row);card.append(identity);
       const choose=this.button(active?'当前接入':'切换到此接入',()=>this.choose(row));choose.disabled=this.busy||switching||active||(!this.desktop&&value.canSwitch===false);actions.append(choose);
+      if(!active){const label=this.node('label',undefined,'account-reminder'),checkbox=document.createElement('input');checkbox.type='checkbox';checkbox.checked=this.syncLocalCliIds.has(row.id);checkbox.disabled=this.busy||switching;checkbox.onchange=()=>{if(checkbox.checked)this.syncLocalCliIds.add(row.id);else this.syncLocalCliIds.delete(row.id);};label.append(checkbox,this.node('span','同时应用到本机 CLI'));actions.append(label);}
       if(this.desktop){
         const edit=this.button(row.kind==='chatgpt'?'重新登录':'修改',()=>{this.resetForm();this.editId=row.id;this.addDetails.open=true;this.name.input.value=row.name;this.kind.value=row.kind;this.kind.disabled=true;this.kind.onchange();this.url.input.value=row.baseUrl||'';this.model.input.value=row.model||'';this.key.input.value='';this.name.input.focus();});
         edit.hidden=active;edit.disabled=this.busy||switching||active;

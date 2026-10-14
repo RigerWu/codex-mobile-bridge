@@ -4,16 +4,16 @@ Status: implemented
 
 ## Problem
 
-Separate Code, Cowork and CLI groups interrupt chronological scanning and add a filter absent from the Codex list. Users want to identify each chat's type without changing views.
+Separate Code, Cowork and CLI groups interrupt chronological scanning. Users also need a quick way to narrow a mixed list without losing chronological order.
 
 ## Decision
 
-Show all Claude chat types in the same recent list. Put a compact type label beside the title, above the existing date. Keep search, archive visibility, project grouping, activity indicators and selection behavior. The create dialog owns its own chat-type selection.
+Show all Claude chat types in the same recent list by default. When the full readable inventory contains at least two types, show an All/Code/Cowork/CLI selector with only observed types and put a compact type label beside each title, above the existing date. The selector filters within the chronological list; search, archive visibility, project grouping, activity indicators and selection behavior remain available. A single-type inventory hides the selector and row type labels. The create dialog owns its own chat-type selection.
 
 ## Alternatives considered
 
-Keeping the type selector or collapsible type groups preserves the old navigation but does not meet the requested single-list behavior. Type remains row metadata instead. Project grouping remains an explicit display choice and groups by project across types.
+Collapsible type groups make scanning chronological activity harder. The optional selector narrows a mixed list without grouping it by type. Project grouping remains an explicit display choice and groups by project across types.
 
 ## Consequences
 
-Saved type filters no longer hide chats. Existing project collapse preferences still apply to project groups. DOM tests cover chronological mixing, row metadata placement, archive/search, project grouping and provider switching; responsive appearance is verified during integration.
+The selected type is kept per provider and resets to All if that type disappears from the full inventory. Search and archive visibility do not determine whether the selector appears. Existing project collapse preferences still apply to project groups. DOM tests cover chronological mixing, adaptive type filtering, archive/search, project grouping and provider switching; responsive appearance is verified during integration.

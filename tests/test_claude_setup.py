@@ -10,6 +10,7 @@ from pathlib import Path
 from unittest.mock import Mock, patch
 
 from bridge.clients.claude.adapter import Claude
+from bridge.clients.claude.mailbox import CONNECTOR_REVISION
 import bridge.clients.claude.setup as claude_setup
 from bridge.platforms.windows import claude as windows_claude
 from bridge.clients.claude.setup import _main_pids, console_source, inspect_installation, native_action, running_app
@@ -179,7 +180,7 @@ assert.equal(start.cwd,cwd);assert.equal(start.message,'');})();
         source = (ROOT/'bridge/clients/claude/connector.js').read_text(encoding='utf-8')
         config = {'transport': 'file', 'cwd': str(adapter.directory), 'token': adapter.desktop.token,
                   'generation': adapter.desktop.generation, 'reconnect': True,
-                  'inspectionMarker': prepared['inspectionMarker'], 'connectorRevision': 5,
+                  'inspectionMarker': prepared['inspectionMarker'], 'connectorRevision': CONNECTOR_REVISION,
                   'request': 'request.json', 'response': 'response.json'}
         self.assertEqual(Path(prepared['scriptPath']).read_text(encoding='utf-8'),
                          source.replace('__BRIDGE_CONFIG__', json.dumps(config)))

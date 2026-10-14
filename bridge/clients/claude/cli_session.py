@@ -12,6 +12,7 @@ import uuid
 from pathlib import Path
 
 from bridge.clients.claude import model
+from bridge.clients.claude.context import context_fields
 from bridge.clients.claude.session_registry import assert_session_closed
 from bridge.clients.errors import BridgeUnavailable
 from bridge.clients.uploads import DesktopUploads
@@ -231,6 +232,8 @@ class _Owned:
                     elif kind == 'system' and event.get('subtype') == 'status':
                         if event.get('permissionMode') in MODES:
                             self.permission = event['permissionMode']
+                    elif kind == 'system' and event.get('subtype') == 'compact_boundary':
+                        self.events.append(event)
                     elif kind == 'result':
                         self.active = False
                         self.pending.clear()
@@ -339,6 +342,7 @@ class ClaudeCli:
 
     def _public(self, row):
         value = {key: item for key, item in row.items() if key not in ('events', 'path', 'origin', 'permissionKnown')}
+        value.update(context_fields(row['events']))
         owned = self.owned.get(row['nativeId'])
         live = owned and owned.origin == row['origin'] and owned.process.poll() is None and not owned.error
         if live:
@@ -411,6 +415,7 @@ class ClaudeCli:
                         events = row['events'] + list(owned.events)
                 else:
                     events = row['events']
+                public.update(context_fields(events))
                 messages = model.transcript(events)
                 unique = {item['id']: item for item in messages}
                 can_resume = (not live and row['permissionKnown'] and self._ready(self.profile_resolver())

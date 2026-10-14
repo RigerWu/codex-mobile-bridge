@@ -153,6 +153,19 @@ class RemoteAdapterContract(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, '主机配置已变化'):
             self.cli._get(sid)
 
+    def test_detail_uses_remote_native_history_usage(self):
+        row = self.cli._row('ssh:test', self.hosts.hosts()['ssh:test'], self.row)
+        self.cli.index[row['id']] = row
+        events = [{'type': 'assistant', 'message': {'id': 'last', 'model': 'remote-model',
+                   'usage': {'input_tokens': 4, 'cache_creation_input_tokens': 5,
+                             'cache_read_input_tokens': 6}}}]
+        def response(_alias, request, **_kwargs):
+            return {'ready': True} if request['operation'] == 'auth' else {**self.row, 'events': events}
+        with patch.object(remote, '_remote', side_effect=response):
+            result = self.cli.call('detail', row['id'], {})
+        self.assertEqual(result['session']['contextUsage']['usedTokens'], 15)
+        self.assertEqual(result['session']['contextUsage']['model'], 'remote-model')
+
     def test_offline_host_refresh_does_not_block_cached_list_or_live_controls(self):
         row = self.cli._row('ssh:test', self.hosts.hosts()['ssh:test'], self.row)
         self.cli.index[row['id']] = row
@@ -163,7 +176,7 @@ class RemoteAdapterContract(unittest.TestCase):
         owned.process.poll.return_value = None
         self.cli.owned[row['id']] = owned
         self.cli.host_snapshot = self.hosts.hosts()
-        self.cli.last_refresh = 0
+        self.cli.last_refresh = __import__('time').monotonic()-11
         pause = threading.Event()
         entered = threading.Event()
         def offline(*_args, **_kwargs):

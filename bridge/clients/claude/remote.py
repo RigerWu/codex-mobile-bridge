@@ -12,6 +12,7 @@ import uuid
 from pathlib import Path
 
 from bridge.clients.claude import model
+from bridge.clients.claude.context import context_fields
 from bridge.clients.claude.cli_session import (_Owned, _message_content, _skill_catalog, MODES,
                                                 PERMISSION_OPTIONS, ResumePreflightBlocked)
 from bridge.clients.codex.remote import ssh_command
@@ -169,6 +170,7 @@ class RemoteClaudeCli:
     def _public(self, row):
         value = {key: item for key, item in row.items() if key not in
                  ('events', 'origin', 'alias', 'permissionKnown')}
+        value.update(context_fields(row.get('events') or []))
         owned = self.owned.get(row['id'])
         live = bool(owned and owned.origin == row['origin'] and owned.process.poll() is None and not owned.error)
         if live:
@@ -242,6 +244,7 @@ class RemoteClaudeCli:
                 if live:
                     with owned.condition:
                         history = history + list(owned.events)
+                public.update(context_fields(history))
                 messages = model.transcript(history)
                 ready = False
                 if not live and row['permissionKnown']:

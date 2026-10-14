@@ -88,12 +88,69 @@ class LocalCliSyncTests(unittest.TestCase):
         with patch('bridge.clients.claude.cli_session._profile', return_value={'binary': '/fixture/claude'}), \
              patch('bridge.clients.claude.cli_session.managed_api_env', return_value={}, create=True), \
              patch('bridge.features.accounts.cli_sync.subprocess.run', return_value=result) as run:
-            with self.assertRaisesRegex(ValueError, '未识别'):
+            with self.assertRaisesRegex(ValueError, '配置目录无法核验'):
+                self.sync._claude_auth(directory, 'api_key')
+            status['configDirectory'] = None
+            result.stdout = json.dumps(status)
+            with self.assertRaisesRegex(ValueError, '配置目录无法核验'):
                 self.sync._claude_auth(directory, 'api_key')
             status['configDirectory'] = str(directory)
             result.stdout = json.dumps(status)
             self.assertEqual(self.sync._claude_auth(directory, 'api_key')['authMethod'], 'api_key')
         self.assertEqual(run.call_args.kwargs['env']['CLAUDE_CONFIG_DIR'], str(directory))
+
+    def test_claude_auth_without_directory_field_requires_negative_control(self):
+        directory = self.root/'native-claude'
+        directory.mkdir()
+        control_dirs = []
+        control_logged_in = [False]
+        def native_status(*_, **kwargs):
+            selected = kwargs['env']['CLAUDE_CONFIG_DIR']
+            if selected == str(directory):
+                return SimpleNamespace(returncode=0, stdout=json.dumps({
+                    'loggedIn': True, 'authMethod': 'api_key'}))
+            control_dirs.append(selected)
+            return SimpleNamespace(returncode=0 if control_logged_in[0] else 1, stdout=json.dumps({
+                'loggedIn': control_logged_in[0],
+                'authMethod': 'api_key' if control_logged_in[0] else 'none'}))
+        with patch('bridge.clients.claude.cli_session._profile', return_value={'binary': '/fixture/claude'}), \
+             patch('bridge.clients.claude.cli_session.managed_api_env', return_value={}, create=True), \
+             patch('bridge.features.accounts.cli_sync.subprocess.run', side_effect=native_status):
+            self.assertEqual(self.sync._claude_auth(directory, 'api_key')['authMethod'], 'api_key')
+            control_logged_in[0] = True
+            with self.assertRaisesRegex(ValueError, '配置目录无法核验'):
+                self.sync._claude_auth(directory, 'api_key')
+        self.assertEqual(len(control_dirs), 2)
+        self.assertTrue(all(not Path(path).exists() for path in control_dirs))
+
+    def test_claude_auth_negative_control_rejects_unreadable_native_status(self):
+        directory = self.root/'native-claude'
+        directory.mkdir()
+        selected = SimpleNamespace(returncode=0, stdout=json.dumps({
+            'loggedIn': True, 'authMethod': 'api_key'}))
+        from subprocess import TimeoutExpired
+        failures = ('', '{', TimeoutExpired('claude', 10))
+        with patch('bridge.clients.claude.cli_session._profile', return_value={'binary': '/fixture/claude'}), \
+             patch('bridge.clients.claude.cli_session.managed_api_env', return_value={}, create=True):
+            for failure in failures:
+                with self.subTest(failure=type(failure).__name__), \
+                     patch('bridge.features.accounts.cli_sync.subprocess.run', side_effect=[
+                         selected, failure if isinstance(failure, Exception) else
+                         SimpleNamespace(returncode=1, stdout=failure)]):
+                    with self.assertRaisesRegex(ValueError, '认证状态无法核验'):
+                        self.sync._claude_auth(directory, 'api_key')
+
+    def test_claude_auth_rejects_wrong_selected_method_before_control(self):
+        directory = self.root/'native-claude'
+        directory.mkdir()
+        wrong = SimpleNamespace(returncode=0, stdout=json.dumps({
+            'loggedIn': True, 'authMethod': 'oauth_token'}))
+        with patch('bridge.clients.claude.cli_session._profile', return_value={'binary': '/fixture/claude'}), \
+             patch('bridge.clients.claude.cli_session.managed_api_env', return_value={}, create=True), \
+             patch('bridge.features.accounts.cli_sync.subprocess.run', return_value=wrong) as run:
+            with self.assertRaisesRegex(ValueError, '未识别'):
+                self.sync._claude_auth(directory, 'api_key')
+        run.assert_called_once()
 
     def test_managed_claude_api_is_materialized_and_restorable(self):
         identifier = 'a'*32

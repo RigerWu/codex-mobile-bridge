@@ -96,7 +96,7 @@ Windows 自动发现用户目录中的 App 运行时、常见安装目录、MSIX
 
 ## HTTP 与文件
 
-账号密码采用 PBKDF2-HMAC-SHA256，登录 Cookie 使用 HttpOnly、SameSite，HTTPS 入口加 Secure。Host 和 Origin 必须在允许列表；写操作还需 CSRF 令牌。
+账号密码采用 PBKDF2-HMAC-SHA256，登录 Cookie 使用 HttpOnly、SameSite，HTTPS 入口加 Secure。Host 必须在允许列表；提供 Origin 的请求须与当前 Host 的协议和完整域名／端口对应，写操作还需 Origin 与 CSRF 令牌。不能仅因 Host 与 Origin 各自在允许列表，就接受二者交叉配对。
 
 聊天内容、事件流、长轮询和附件接口均需要登录。文件访问仅允许当前聊天引用的本地工作目录或 visualizations 文件，并校验解析后的真实路径及大小。远端文件不映射到 本机文件系统。
 
@@ -129,6 +129,8 @@ Windows `desktop/shell/tray.cjs` 管理托盘状态、手机地址和两种退�
 ## 固定 HTTPS 入口
 
 桌面 `connections` 保存可独立启用的 Quick Tunnel、自有服务器 SSH 和 NAS 配置，局域网监听由 `lan` 控制，`lanAddresses: null` 保持所有 IPv4 网卡监听，数组仅绑定选中地址，空数组只保留回环。各监听器共享同一个认证、配对、通知和会话状态。`localAccess: false` 关闭本机网页入口，回环仅允许无会话信息的私有 `/api/health` 检查和保留 Host 的已授权 HTTPS 隧道；停机关闭全部监听器。桌面用系统网卡名称和 IPv4 地址呈现选择，地址不可绑定时失败，不回退至全网卡。旧单入口配置在读取时转换，保存前不改写文件。`bridge/features/network/access.py` 验证地址，生成不含凭据的 Caddy/Nginx Compose 部署包；所有启用的固定 URL 自动加入允许源，第一个启用的固定 URL 优先用于通知链接（显式 clickBase 仍优先）。停用或删除配置时移除对应托管固定源，保留其他手动 HTTPS 源。
+
+`accessMode: external` 只保存用户自管穿透或同机 HTTPS 反代的 `publicUrl`，要求可信 HTTPS 根地址，可包含端口；上游由用户指向电脑网关的实际回环端口。该模式不管理 SSH、frpc 或反代进程，即使 `lan: false`、`localAccess: false` 仍保留受公开 Host 约束的回环上游。跨设备 NAS 继续使用 `nas`，要求启用 LAN 并填写端口匹配、非回环的 `proxyUpstream`。固定入口和扫码前的探测不发送凭据、不跟随重定向、不跳过证书验证；仅核对本次网关实例，不用 `instanceId` 迁移或授予登录凭据。
 
 `bridge/features/network/ssh_tunnel.py` 管理独立 OpenSSH 子进程，复用已有 SSH 目标和身份，以 `-R 127.0.0.1:服务器端口:127.0.0.1:电脑端口` 回程。启用 BatchMode、StrictHostKeyChecking、ExitOnForwardFailure 与保活，不复用 ControlMaster。失败后台退避重连，不阻塞 LAN 服务。各 SSH 配置独立保存状态与日志，状态关联当前网关 PID；服务器 GatewayPorts 应使用 no/clientspecified，不能强制公网绑定。
 

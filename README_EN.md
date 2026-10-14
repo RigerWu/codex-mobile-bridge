@@ -7,7 +7,7 @@
 
 > **v2.0.3 (stable)**: [Release page](https://github.com/try2love/codex-mobile-bridge/releases/tag/v2.0.3) · [Full release notes](RELEASE_NOTES.md) · [Mobile installation](mobile/README.md). This release adds Android in-app updates with download choices and mobile/Web third-party notification settings, and improves search, landscape layouts and connection recovery.
 
-> **v2.0.4 (unreleased):** adds Codex CLI chat access and SSH diagnostics alongside locally tested source highlighting and wrapping, PDF/HTML previews, fullscreen reading, directory-aware Back and manual Claude quota queries. Download links below still point to v2.0.3; see the [upcoming release notes](RELEASE_NOTES.md).
+> **v2.1.0 (unreleased):** adds Codex and Claude CLI access and an externally managed HTTPS entry, with adaptive chat-type filters, context usage, and file-reading improvements. Download links below still point to v2.0.3; see the [upcoming release notes](RELEASE_NOTES.md).
 
 [简体中文](README.md) · [English](README_EN.md)
 
@@ -28,7 +28,7 @@ Tasks run on the original computer, or the original SSH host for Codex remote se
 
 <a id="workspace-reading"></a>
 
-## File reading and previews (v2.0.4, unreleased)
+## File reading and previews (v2.1.0, unreleased)
 
 - **Directory-aware Back:** return to the parent folder first, then to chat from the project root. Back exits fullscreen first.
 - **Source reading:** view common languages with syntax highlighting and line numbers. Select **Wrap lines** to fit long lines to the screen, or restore **Original line width**. Copy preserves the source without line numbers; previews never edit the file. Unknown languages and larger text use plain text.
@@ -38,11 +38,13 @@ Tasks run on the original computer, or the original SSH host for Codex remote se
 
 PDF previews are capped at **20 MiB** and the configured ordinary-download limit, whichever is lower. HTML and source previews accept **UTF-8 text up to 512 KiB**. Download larger or unsupported files to open elsewhere. Update both the gateway and mobile app for the complete feature set; browser users reload after updating the gateway. See [verification](VERIFICATION.md) for release status and platform coverage.
 
-## Codex CLI chats (v2.0.4, unreleased)
+## CLI chats (v2.1.0, unreleased)
 
 Saved local and configured SSH CLI chats appear with a **CLI** badge. Opening one reads its history without starting a runtime. Select **Continue chat** to connect to or resume the original CLI chat; its terminal does not need to remain open. This explicit action may start the already installed native managed daemon. Bridge does not install CLI, accept new SSH host keys or switch the chat to Desktop execution.
 
 Open **Connection diagnostics** in Settings to inspect local and remote status and counts, copy a sanitized summary, or export a file. Older mobile apps can read and copy but need an update to export. Warm connection and cold resume, including send and streaming replies, passed on macOS CLI 0.162.1; Windows, Linux and other SSH environments need separate validation. See the [CLI guide](docs/codex-cli.md) for supported controls and protocol limits.
+
+Codex and Claude CLI access are configured under their respective account sections. Local CLI sync is opt-in and verifies the target configuration before switching. Claude can create CLI chats from existing local or SSH projects, preserving the selected configuration and directory. Chat-type filters and badges appear only when the fully readable list contains multiple types; Claude shows a blue context ring for known capacity and a neutral ring when capacity is unknown. Local and loopback SSH Claude CLI creation, history and usage were checked with an isolated mock API; real paid models, physical phones and other remote hosts remain unverified.
 
 ## The v2 workbench
 
@@ -51,7 +53,7 @@ Open **Connection diagnostics** in Settings to inspect local and remote status a
 - **Files and images:** locate linked files in their folder or download them. Adjust the ordinary-download threshold live, and explicitly download large files/folders from the file list. Floating progress, speed, pause/resume, plus pinch/wheel/drag/double-click image zoom.
 - **Accounts and context:** inspect the current client's access, available models and upstream quota. Context usage sits beside permissions. Codex retains Fast, Skills, Plan/Goal, official quota and reset credits.
 - **Computers and alerts:** Android/iOS save multiple paired computers, sort by recent access and refresh availability. App icons show gateway-maintained unread counts and open the matching list. Standard mobile builds still need Bark, ntfy or PushPlus for dependable background alerts.
-- **Network choices:** LAN, temporary/fixed Cloudflare HTTPS, fixed Tailscale HTTPS, your own SSH server, or an existing NAS/reverse proxy.
+- **Network choices:** LAN, temporary/fixed Cloudflare HTTPS, fixed Tailscale HTTPS, an existing HTTPS tunnel, your own SSH server, or an advanced NAS proxy.
 
 | Client | Scope | Requirements and limits |
 | --- | --- | --- |
@@ -92,7 +94,7 @@ Download the desktop App for everyday use. **No deployment Agent, Python, Node.j
 3. In the mobile app, select **Scan to connect** and scan the chosen entry's QR code. A browser can also scan a sign-in code or open the address manually.
 4. Choose a client and chat, then continue the conversation or open workbench tabs. Keep the computer, gateway and selected client online.
 
-For remote access, choose [Tailscale HTTPS](docs/tailscale.md), bundled temporary Cloudflare HTTPS, a [fixed Cloudflare tunnel](docs/fixed-domain.md), [your own SSH server](docs/server-ssh.md) or a NAS proxy. See [Parallel connections](#parallel-connections). Fixed addresses do not guarantee mainland China performance; test the actual cellular network.
+For remote access, choose [Tailscale HTTPS](docs/tailscale.md), bundled temporary Cloudflare HTTPS, a [fixed Cloudflare tunnel](docs/fixed-domain.md), an [existing HTTPS tunnel](docs/external-tunnel.md), [your own SSH server](docs/server-ssh.md) or an advanced NAS proxy. See [Parallel connections](#parallel-connections). Fixed addresses do not guarantee mainland China performance; test the actual cellular network.
 
 Android APK, unsigned iOS IPA and Xcode source downloads are in the same [v2.0.3 Release](https://github.com/try2love/codex-mobile-bridge/releases/tag/v2.0.3). Install Android over the existing app; iOS requires your own signing, with no App Store/TestFlight distribution. Source/custom setups are covered by the [Deployment Agent instructions](#deployment-agent-instructions).
 
@@ -126,7 +128,7 @@ The accounts panel follows the selected client. Codex official accounts show rem
 
 Opening the Codex panel queries usage automatically; visible panels update every five minutes. Manual refresh runs immediately and restarts the timer. Failed queries preserve the last successful values and timestamp; unavailable upstream data remains unknown.
 
-In the upcoming v2.0.4 changes, Claude queries usage only when you select **View remaining quota**. Opening, revisiting and periodically refreshing its panel show saved usage with the original successful date and time. Failures preserve that snapshot and indicate it was not updated. This reduces unrequested quota credential reads without claiming to eliminate every Keychain prompt. DSH keeps its existing query behavior.
+In the upcoming v2.1.0 changes, Claude queries usage only when you select **View remaining quota**. Opening, revisiting and periodically refreshing its panel show saved usage with the original successful date and time. Failures preserve that snapshot and indicate it was not updated. This reduces unrequested quota credential reads without claiming to eliminate every Keychain prompt. DSH keeps its existing query behavior.
 
 View remaining percentages, reset times and available usage resets. In v2.0.0, reset credits can be used for the current or another saved official account without switching sign-in or enabling Codex's agent usage-reset setting. Confirm the account and credit expiry, then wait five seconds before using a credit. Interrupted requests retain their original redemption ID for retry. Subscription dates are queried online; blocked or missing results remain unconfirmed rather than being inferred from token expiry or old login records. Account credentials are never sent to the phone.
 
@@ -206,10 +208,13 @@ Under **Network access → Add connection**, choose a type and click **Add conne
 | --- | --- | --- |
 | LAN | Phone and computer share a reachable network | Enable LAN access and keep the existing port |
 | Temporary Cloudflare HTTPS | No domain or existing public entry | Add a connection, save, and start using the bundled program |
+| Existing tunnel / reverse proxy | You already manage trusted HTTPS forwarding to this computer's loopback gateway | Enter only the phone's HTTPS root URL, optionally with a port; see the [guide](docs/external-tunnel.md) |
 | Fixed Cloudflare tunnel | Private domain, no server | Configure Cloudflare DNS and a public hostname; enter the domain and tunnel token |
 | Fixed Tailscale HTTPS | A fixed address without your own server | Sign in to the official client, discover its address and authorize Funnel/Serve; see the [guide](docs/tailscale.md) |
 | Own server + SSH | A public Linux server; the computer is behind NAT | Prepare HTTPS and forwarding, then use a regular SSH account. Bind a domain to the public IP, or leave the URL blank for HTTPS by public IP with a trusted IP certificate |
 | NAS / existing proxy / Docker | The NAS can reach the computer and already has an HTTPS reverse proxy | Enter the fixed HTTPS URL and the computer's HTTP address as reachable from the NAS |
+
+The existing-tunnel option keeps tunnel software and certificates under your control. Use the gateway's actual loopback port and preserve the public Host; LAN and local browser access may stay off. A proxy on another device belongs under the advanced NAS option. See the [illustrated setup](site/setup.html#external).
 
 LAN, a temporary Cloudflare tunnel and multiple fixed entries can run together. Only one temporary tunnel is needed per gateway. Profiles targeting the same SSH server need different loopback ports. Different SSH aliases pointing to the same server can still conflict; choose their ports accordingly.
 

@@ -16,6 +16,7 @@ from bridge.features.sessions.model import normalize_state
 from bridge.clients.codex.cli_session import CliSessions, _local_cli, _managed_cli, _ssh_daemon_start_command, _ssh_proxy_command
 
 ROOT = Path(__file__).resolve().parents[1]
+MANAGED_NAME = 'codex.exe' if os.name == 'nt' else 'codex'
 
 
 class FakeClient:
@@ -220,13 +221,14 @@ class CliSessionTests(unittest.TestCase):
 
     def test_core_turn_and_approval_mapping(self):
         self.sessions.attach('thread-a', explicit=True)
+        attachment = str(self.home / 'a.py')
         result = self.sessions.call('thread-a', 'thread-follower-start-turn', {
             'turnStart': {'request': {'input': [{'type': 'text', 'text': 'Inspect this'}],
                                       'clientUserMessageId': 'submission-1'},
-                          'context': {'fileAttachments': [{'path': '/original/project/a.py'}]}}})
+                          'context': {'fileAttachments': [{'path': attachment}]}}})
         self.assertEqual(result['turn']['id'], 'turn-1')
         params = next(params for method, params in self.fake.sent if method == 'turn/start')
-        self.assertIn('/original/project/a.py', params['input'][0]['text'])
+        self.assertIn(attachment, params['input'][0]['text'])
         self.assertIn('Inspect this', params['input'][0]['text'])
         self.assertNotIn('model', params)
         self.sessions._server_request({'id': 9, 'method': 'item/commandExecution/requestApproval',
@@ -789,6 +791,7 @@ class CliSessionTests(unittest.TestCase):
         self.assertTrue(remote.available())
         self.assertEqual(remote.attach('thread-a', explicit=True)['id'], 'thread-a')
 
+    @unittest.skipIf(os.name == 'nt', 'POSIX remote shell fixture')
     def test_ssh_proxy_falls_back_to_selected_managed_package_without_path_cli(self):
         managed = self.home / 'packages/app-server-daemon/current/bin/codex'
         managed.parent.mkdir(parents=True)
@@ -803,7 +806,7 @@ class CliSessionTests(unittest.TestCase):
         self.assertEqual(result.stdout.splitlines(), ['app-server', 'proxy'])
 
     def test_packaged_app_finds_existing_daemon_cli_without_path(self):
-        runtime = self.home / 'packages/app-server-daemon/current/bin/codex'
+        runtime = self.home / 'packages/app-server-daemon/current/bin' / MANAGED_NAME
         runtime.parent.mkdir(parents=True)
         runtime.write_text('#!/bin/sh\n')
         runtime.chmod(0o700)
@@ -812,7 +815,7 @@ class CliSessionTests(unittest.TestCase):
             self.assertEqual(_local_cli(self.home, 'codex'), str(runtime))
 
     def test_local_proxy_prefers_selected_daemon_package_over_another_path_cli(self):
-        runtime = self.home / 'packages/app-server-daemon/current/bin/codex'
+        runtime = self.home / 'packages/app-server-daemon/current/bin' / MANAGED_NAME
         runtime.parent.mkdir(parents=True)
         runtime.write_text('#!/bin/sh\n')
         runtime.chmod(0o700)
@@ -868,7 +871,7 @@ class CliSessionTests(unittest.TestCase):
         self.assertNotIn('daemon bootstrap', inner)
 
     def test_explicit_start_uses_selected_home_without_installing(self):
-        managed = self.home / 'packages/app-server-daemon/current/bin/codex'
+        managed = self.home / 'packages/app-server-daemon/current/bin' / MANAGED_NAME
         managed.parent.mkdir(parents=True)
         managed.write_text('#!/bin/sh\n')
         managed.chmod(0o700)

@@ -317,7 +317,8 @@ class ConcurrentRuntimeTests(unittest.TestCase):
                  patch.object(run, 'GatewayControl'), patch.object(run.signal, 'signal'), \
                  patch.object(run, 'GatewayServer', return_value=server) as make_server, \
                  patch.object(run, 'SSHTunnel', side_effect=tunnels) as make_ssh, \
-                 patch.object(run, 'QuickTunnel', return_value=quick):
+                 patch.object(run, 'QuickTunnel', return_value=quick), \
+                 patch('bridge.features.network.server_connection.Path.home', return_value=data):
                 run.main(connections=rows)
             self.assertEqual([call.args[-1] for call in make_ssh.call_args_list], ['a', 'b'])
             for tunnel in tunnels:

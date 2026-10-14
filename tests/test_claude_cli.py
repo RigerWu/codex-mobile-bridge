@@ -1,6 +1,7 @@
 import json
 import os
 import queue
+import sys
 import tempfile
 import threading
 import unittest
@@ -426,7 +427,7 @@ class ClaudeCliContract(unittest.TestCase):
         content = owner.write.call_args.args[0]['message']['content']
         self.assertEqual(content[1], {'type': 'image', 'source': {
             'type': 'base64', 'media_type': 'image/png', 'data': 'aGVsbG8='}})
-        self.assertIn(str(file), content[0]['text'])
+        self.assertEqual(json.loads(content[0]['text'].split('\n', 1)[1])[0]['path'], str(file))
         self.assertNotIn('fixture bytes', json.dumps(content))
 
     def test_question_approval_forwards_answers_to_owned_tool(self):
@@ -469,7 +470,11 @@ class ClaudeCliContract(unittest.TestCase):
         with owned.condition:
             owned.condition.wait_for(lambda: owned.error is not None, timeout=1)
         self.assertIn('身份', owned.error)
-        process.terminate.assert_called_once()
+        if sys.platform == 'win32':
+            # An unbound Windows child is not ours to terminate; the next test covers a bound child.
+            process.terminate.assert_not_called()
+        else:
+            process.terminate.assert_called_once()
 
     def test_windows_init_identity_mismatch_closes_bound_native_child(self):
         lines = queue.Queue()

@@ -7,6 +7,7 @@ import threading
 import time
 import unittest
 import uuid
+from contextlib import closing
 from pathlib import Path
 from unittest.mock import Mock, patch
 
@@ -34,7 +35,7 @@ class CliBridgeFixture(unittest.TestCase):
         rollout.parent.mkdir()
         rollout.write_text(json.dumps({'type': 'response_item', 'payload': {'type': 'message',
             'role': 'assistant', 'content': [{'type': 'text', 'text': self.private_text}]}}) + '\n')
-        with sqlite3.connect(self.home / 'state_5.sqlite') as db:
+        with closing(sqlite3.connect(self.home / 'state_5.sqlite')) as db, db:
             db.execute('CREATE TABLE threads(id TEXT, title TEXT, cwd TEXT, updated_at INT, archived INT, '
                        'originator TEXT, source TEXT, rollout_path TEXT, model_provider TEXT)')
             db.execute('INSERT INTO threads VALUES(?,?,?,?,?,?,?,?,?)',
@@ -785,7 +786,7 @@ class CliDiagnosticsHttpTests(CliBridgeFixture):
 class CliApprovalProtocolTests(unittest.TestCase):
     def setUp(self):
         self.thread_id = str(uuid.uuid4())
-        self.adapter = CliSessions(Path('/fixture/codex-home'), lambda *_: None, lambda: None)
+        self.adapter = CliSessions(ROOT / '.tmp' / 'fixture-codex-home', lambda *_: None, lambda: None)
         self.process = object()
         self.adapter.client.process = self.process
         self.adapter.client.is_loaded = Mock(return_value=True)
@@ -849,7 +850,7 @@ class CliModelAttributionTests(unittest.TestCase):
                     {'type': 'event_msg', 'payload': {'type': 'task_complete', 'turn_id': turn_id}},
                 ])
             rollout.write_text(''.join(json.dumps(record) + '\n' for record in records))
-            with sqlite3.connect(home / 'state_5.sqlite') as db:
+            with closing(sqlite3.connect(home / 'state_5.sqlite')) as db, db:
                 db.execute('CREATE TABLE threads(id TEXT, cwd TEXT, originator TEXT, source TEXT, rollout_path TEXT, model_provider TEXT)')
                 db.execute('INSERT INTO threads VALUES(?,?,?,?,?,?)',
                            (thread_id, '/fixture/work', 'codex_cli_rs', 'cli', str(rollout), 'openai'))

@@ -2,6 +2,7 @@ import hashlib
 import sqlite3
 import tempfile
 import unittest
+from contextlib import closing
 from pathlib import Path
 from unittest.mock import patch
 
@@ -84,7 +85,7 @@ class StoreTests(unittest.TestCase):
             copy.assert_not_called()
 
     def test_cli_discovery_read_and_sanitized_diagnostics(self):
-        with sqlite3.connect(self.path) as db:
+        with closing(sqlite3.connect(self.path)) as db, db:
             db.executemany('INSERT INTO threads VALUES (?,?,?,?,?,?,?)', [
                 ('tui', 'CLI private title', '/private/user', 3, 0, 'codex-tui', 'vscode'),
                 ('cli', 'CLI private title', '/private/user', 4, 0, 'codex_cli_rs', 'cli'),
@@ -123,7 +124,7 @@ class StoreTests(unittest.TestCase):
 
     def test_source_only_schema_has_same_list_and_get_eligibility(self):
         self.path.unlink()
-        with sqlite3.connect(self.path) as db:
+        with closing(sqlite3.connect(self.path)) as db, db:
             db.execute('CREATE TABLE threads(id TEXT, title TEXT, cwd TEXT, updated_at INT, archived INT, source TEXT)')
             db.executemany('INSERT INTO threads VALUES (?,?,?,?,?,?)', [
                 ('desktop', 'Desktop', '/fixture', 1, 0, 'vscode'),
@@ -142,13 +143,13 @@ class StoreTests(unittest.TestCase):
 
     def test_inventory_tolerates_schema_without_source_columns(self):
         self.path.unlink()
-        with sqlite3.connect(self.path) as db:
+        with closing(sqlite3.connect(self.path)) as db, db:
             db.execute('CREATE TABLE threads(id TEXT, title TEXT, updated_at INT, archived INT)')
         self.assertEqual(self.store.available_sources(), [])
         self.assertEqual(self.store.list(), [])
 
     def test_source_filter_precedes_pagination_and_inventory_ignores_search_archive_and_page(self):
-        with sqlite3.connect(self.path) as db:
+        with closing(sqlite3.connect(self.path)) as db, db:
             db.executemany('INSERT INTO threads VALUES (?,?,?,?,?,?,?)',
                            [(f'app-{i}', 'App', '/fixture', 200 + i, 0, 'Codex Desktop', 'vscode') for i in range(120)])
             db.executemany('INSERT INTO threads VALUES (?,?,?,?,?,?,?)', [

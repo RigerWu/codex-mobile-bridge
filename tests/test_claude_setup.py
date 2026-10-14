@@ -127,7 +127,8 @@ class ClaudeDiscovery(unittest.TestCase):
 
     def test_prerequisites_only_request_accessibility_on_supported_installed_mac(self):
         adapter = Claude(self.root/'adapter', auto_connect=False)
-        with patch('bridge.clients.claude.adapter.native_action') as native:
+        with patch('bridge.clients.claude.adapter.native_action') as native, \
+             patch('bridge.clients.claude.cli_session._profile', return_value=None):
             for platform in ('darwin', 'win32', 'linux'):
                 for installed in (False, True):
                     if platform == 'darwin' and installed:

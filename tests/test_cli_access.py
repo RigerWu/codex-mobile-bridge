@@ -48,7 +48,8 @@ class CliAccessTests(unittest.TestCase):
         identifier = self.save_api()
         directory = self.root/'cli-access'/'claude'/identifier
         self.assertEqual(json.loads((directory/'api.json').read_text())['key'], 'private-fixture-key')
-        self.assertEqual((directory/'api.json').stat().st_mode & 0o077, 0)
+        if sys.platform != 'win32':
+            self.assertEqual((directory/'api.json').stat().st_mode & 0o077, 0)
         self.assertFalse((self.native/'settings.json').exists())
         self.assertNotIn('private-fixture-key', json.dumps(self.manager.public()))
         self.assertNotIn('private-fixture-key', (self.root/'cli-access'/'index.json').read_text())

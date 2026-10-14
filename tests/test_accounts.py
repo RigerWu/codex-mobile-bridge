@@ -38,7 +38,8 @@ class AccountsTests(unittest.TestCase):
             remote_bridges={}, live={}, submissions={}, lock=threading.RLock(),
             account=Account(self.home,self.root,executable=self.root/'runtime'), ipc=Mock(), _disconnected=Mock())
         self.bridge.cli_sessions = SimpleNamespace(lock=threading.RLock(), joined={}, attaching=set(),
-            requests={}, client=SimpleNamespace(socket_path=str(self.root/'missing.sock')))
+            requests={}, client=SimpleNamespace(socket_path=str(self.root/'missing.sock')),
+            daemon_may_be_running=Mock(return_value=False))
         self.manager = Accounts(self.bridge)
         self.bridge.accounts = self.manager
         self.manager.index['desktopExecutable'] = '/fixture/Desktop'

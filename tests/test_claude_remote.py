@@ -36,11 +36,14 @@ class RemoteWorkerContract(unittest.TestCase):
                          'content': [{'type': 'text', 'text': 'fixture response'}]}}])+'\n')
         (self.config/'sessions').mkdir()
         bindir = self.root/'bin'; bindir.mkdir()
-        binary = bindir/'claude'
-        binary.write_text('#!/bin/sh\nif [ "$1" = auth ]; then printf \'{"loggedIn":true}\\n\'; fi\n')
-        binary.chmod(0o700)
+        binary = bindir/('claude.cmd' if os.name == 'nt' else 'claude')
+        if os.name == 'nt':
+            binary.write_text('@echo off\r\nif "%1"=="auth" echo {"loggedIn":true}\r\n')
+        else:
+            binary.write_text('#!/bin/sh\nif [ "$1" = auth ]; then printf \'{"loggedIn":true}\\n\'; fi\n')
+            binary.chmod(0o700)
         self.env = {**os.environ, 'HOME': str(self.root), 'CLAUDE_CONFIG_DIR': str(self.config),
-                    'PATH': str(bindir)+':'+os.environ.get('PATH', '')}
+                    'PATH': str(bindir)+os.pathsep+os.environ.get('PATH', '')}
         self.binary = binary
 
     def run_worker(self, request):
@@ -101,7 +104,8 @@ class RemoteWorkerContract(unittest.TestCase):
         first = self.run_worker(request)['value']['path']
         self.assertEqual(Path(first).read_bytes(), data)
         self.assertEqual(self.run_worker(request)['value']['path'], first)
-        self.assertEqual(Path(first).stat().st_mode & 0o777, 0o600)
+        if os.name != 'nt':
+            self.assertEqual(Path(first).stat().st_mode & 0o777, 0o600)
         self.assertFalse(self.run_worker({**request, 'origin': 'other'})['ok'])
 
     def test_linux_registry_pid_start_and_domain_are_checked(self):

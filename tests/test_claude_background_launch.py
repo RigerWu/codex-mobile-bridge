@@ -133,6 +133,8 @@ class ClaudeBackgroundWorker(unittest.TestCase):
     def setUp(self):
         platform = patch('bridge.clients.claude.adapter.sys.platform', 'win32')
         platform.start(); self.addCleanup(platform.stop)
+        cli_profile = patch('bridge.clients.claude.cli_session._profile', return_value=None)
+        cli_profile.start(); self.addCleanup(cli_profile.stop)
         self.temp = tempfile.TemporaryDirectory()
         self.addCleanup(self.temp.cleanup)
         self.adapter = Claude(Path(self.temp.name)/'adapter', auto_connect=False)

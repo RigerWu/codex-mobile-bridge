@@ -333,7 +333,7 @@ class RelayIntegrationTests(unittest.IsolatedAsyncioTestCase):
                 return {'data': base64.b64encode(data).decode(), 'name': 'example.bin'}
             return SimpleNamespace(identifier=THREAD, workspace=files,
                                    terminal=lambda thread, owner, action, body: {'owner': owner, 'provider': provider, 'action': action})
-        manager = SimpleNamespace(clients=lambda: {'clients': [{'id': 'deepseek', 'enabled': True}]},
+        manager = SimpleNamespace(clients_status=lambda: {'clients': [{'id': 'deepseek', 'enabled': True}]},
                                   toggle_client=control, require_enabled=require, call=call, list_with_activity=lambda p: call(p, 'list', None, {}), workspace_bridge=workspace)
         connector = await self.real_connector(a, manager)
         self.assertIs(connector.server.desktop_sessions, manager)

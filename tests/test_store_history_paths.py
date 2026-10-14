@@ -55,10 +55,21 @@ class StoreHistoryPathTests(unittest.TestCase):
 
     @unittest.skipUnless(os.name == 'nt', 'Windows extended-length paths')
     def test_windows_extended_path_uses_same_existing_rollout(self):
-        self.set_rollout('\\\\?\\' + str(self.rollout))
+        extended = Path('\\\\?\\' + str(self.rollout))
+        self.set_rollout(extended)
         self.assert_readable()
-        with patch.object(Path, 'samefile', side_effect=PermissionError('identity unavailable')):
+        # Some Python versions remove the extended prefix during resolve().
+        # Retain it here to exercise the identity fallback when it is needed.
+        original_resolve = Path.resolve
+
+        def retain_extended(path, *args, **kwargs):
+            return path if path == extended else original_resolve(path, *args, **kwargs)
+
+        self.assertNotIn(self.sessions.resolve(), extended.parents)
+        with patch.object(Path, 'resolve', retain_extended), \
+             patch.object(Path, 'samefile', side_effect=PermissionError('identity unavailable')) as samefile:
             self.assert_outside()
+        samefile.assert_called()
 
     def test_outside_and_prefix_similar_directories_stay_rejected(self):
         outside = self.root / 'outside.jsonl'

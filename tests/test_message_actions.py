@@ -7,6 +7,7 @@ import sys
 import tempfile
 import unittest
 import uuid
+from contextlib import closing
 from pathlib import Path
 from unittest.mock import patch
 
@@ -23,7 +24,7 @@ class MessageActionTests(unittest.TestCase):
         self.temp = tempfile.TemporaryDirectory(dir=ROOT / '.tmp')
         self.root = Path(self.temp.name)
         self.source, self.child = str(uuid.uuid4()), str(uuid.uuid4())
-        with sqlite3.connect(self.root / 'state_fixture.sqlite') as database:
+        with closing(sqlite3.connect(self.root / 'state_fixture.sqlite')) as database, database:
             database.execute('CREATE TABLE threads (id TEXT PRIMARY KEY, originator TEXT, archived INTEGER, updated_at INTEGER)')
             database.execute('INSERT INTO threads VALUES (?, ?, 0, 0)', (self.source, 'Codex Desktop'))
         self.bridge = Bridge(self.root, self.root / 'data')

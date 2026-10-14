@@ -15,6 +15,16 @@ def context_fields(events):
             reading = None
             compacted = True
             continue
+        if (event.get('type') == 'result' and reading is not None and reading['model']
+                and not event.get('isSidechain') and not event.get('parent_tool_use_id')
+                and not event.get('isSyntheticResult') and not event.get('isSynthetic')
+                and not event.get('isMeta') and not event.get('isCompactSummary')):
+            models = event.get('modelUsage')
+            details = models.get(reading['model']) if isinstance(models, dict) else None
+            capacity = _count(details.get('contextWindow')) if isinstance(details, dict) else None
+            if capacity:
+                reading['contextWindow'] = capacity
+            continue
         if (event.get('type') != 'assistant' or event.get('isSidechain') or
                 event.get('parent_tool_use_id') or event.get('isSynthetic') or
                 event.get('isMeta') or event.get('isCompactSummary')):

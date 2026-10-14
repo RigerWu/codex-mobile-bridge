@@ -188,13 +188,20 @@
         row.type==='system'&&row.subtype==='compact_boundary')
       .map(row => {
         if(row.type==='system')return {type:'system',subtype:'compact_boundary'};
-        if(row.type==='result')return Object.fromEntries(
+        if(row.type==='result'){
+          const modelUsage=row.modelUsage&&typeof row.modelUsage==='object'&&!Array.isArray(row.modelUsage)
+            ? Object.fromEntries(Object.entries(row.modelUsage).filter(([model,usage])=>
+              model&&usage&&typeof usage==='object'&&Number.isSafeInteger(usage.contextWindow)&&usage.contextWindow>0)
+              .map(([model,usage])=>[model,{contextWindow:usage.contextWindow}])) : {};
+          return Object.fromEntries(
           ['type','uuid','subtype'].filter(k=>typeof row[k]==='string').map(k=>[k,row[k]])
           .concat(['is_error','isSidechain','isSyntheticResult','isSynthetic','isMeta','isCompactSummary']
             .filter(k=>typeof row[k]==='boolean').map(k=>[k,row[k]]),
             typeof row.num_turns==='number'&&Number.isFinite(row.num_turns)?[['num_turns',row.num_turns]]:[],
             'parent_tool_use_id' in row?[['parent_tool_use_id',row.parent_tool_use_id==null?null:
-              typeof row.parent_tool_use_id==='string'?row.parent_tool_use_id:'nested']]:[]));
+              typeof row.parent_tool_use_id==='string'?row.parent_tool_use_id:'nested']]:[],
+            Object.keys(modelUsage).length?[['modelUsage',modelUsage]]:[]));
+        }
         const source = row.message || row;
         let content = typeof source.content === 'string' ? source.content :
           (Array.isArray(source.content) ? source.content : []).filter(b =>

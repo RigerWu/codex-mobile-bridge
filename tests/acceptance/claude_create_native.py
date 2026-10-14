@@ -62,7 +62,7 @@ def main():
                 assert len(MockAPI.bodies) == 1
                 usage = local.call('detail', sid, {})['session']['contextUsage']
                 assert usage['usedTokens'] == 1 and usage['model'] == 'fixture-model'
-                assert usage['contextWindow'] is None
+                assert usage['contextWindow'] == 200000
             local.close()
 
             sshd, bindir, stderr = loopback_sshd(root)
@@ -98,7 +98,7 @@ def main():
                 assert len(MockAPI.bodies) == 2
                 usage = remote_cli.call('detail', sid, {})['session']['contextUsage']
                 assert usage['usedTokens'] == 1 and usage['model'] == 'fixture-model'
-                assert usage['contextWindow'] is None
+                assert usage['contextWindow'] == 200000
                 assert all(credential == 'isolated-fixture-key'
                            for credential in MockAPI.credentials)
                 assert len(list(profile.glob('projects/**/*.jsonl'))) == 2

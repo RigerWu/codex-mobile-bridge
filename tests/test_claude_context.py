@@ -74,12 +74,14 @@ class ClaudeContext(unittest.IsolatedAsyncioTestCase):
         row = session('code', raw)
         self.adapter.index = {row['id']: row}
         self.adapter.desktop.capabilities = {'code': ['mobileDetail']}
-        self.adapter.desktop.call.return_value = {'session': raw, 'transcript': [event],
+        capacity = {'type': 'result', 'modelUsage': {'desktop-model': {'contextWindow': 200000}}}
+        self.adapter.desktop.call.return_value = {'session': raw, 'transcript': [event, capacity],
                                                   'contextUsage': None, 'contextUsageStatus': 'unsupported'}
         with patch.object(self.adapter, 'prepare'), patch.object(self.adapter, 'connect'), \
              patch.object(self.adapter, 'reconnect'):
             result = await self.adapter.dispatch('detail', row['id'], {})
         self.assertEqual(result['session']['contextUsage']['usedTokens'], 60)
+        self.assertEqual(result['session']['contextUsage']['contextWindow'], 200000)
         self.assertEqual(result['session']['contextUsageStatus'], 'available')
         self.assertTrue(result['capabilities']['contextUsage'])
 

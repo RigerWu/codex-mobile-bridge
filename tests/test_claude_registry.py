@@ -8,6 +8,7 @@ from unittest.mock import patch
 from bridge.clients.claude import session_registry
 from bridge.clients.claude.session_registry import assert_profile_idle, assert_session_closed
 from bridge.clients.errors import BridgeUnavailable
+from bridge.platforms.windows import claude_process
 
 
 class ClaudeRegistryTests(unittest.TestCase):
@@ -87,6 +88,67 @@ class ClaudeRegistryTests(unittest.TestCase):
         with patch.object(session_registry, '_pid_domain', return_value='darwin:other:pid:[123]'):
             with self.assertRaises(BridgeUnavailable):
                 assert_session_closed(self.config, self.session_id)
+
+    def test_windows_2168_native_start_ticks_guard(self):
+        start = '638960923680000000'
+        self.entry(procStart=start, version='2.1.168')
+        entry = json.loads((self.registry/'1234.json').read_text())
+        del entry['pidDomain']
+        (self.registry/'1234.json').write_text(json.dumps(entry))
+        with patch.object(session_registry.sys, 'platform', 'win32'), \
+             patch.object(session_registry.os, 'kill', side_effect=AssertionError('Windows must not signal PID')) as kill, \
+             patch.object(claude_process, 'process_start_ticks', return_value=start) as lookup:
+            with self.assertRaisesRegex(BridgeUnavailable, '仍在其他终端运行'):
+                assert_session_closed(self.config, self.session_id)
+        kill.assert_not_called()
+        lookup.assert_called_once_with(1234)
+        with patch.object(session_registry.sys, 'platform', 'win32'), \
+             patch.object(claude_process, 'process_start_ticks', return_value=None):
+            assert_session_closed(self.config, self.session_id)
+        with patch.object(session_registry.sys, 'platform', 'win32'), \
+             patch.object(claude_process, 'process_start_ticks', return_value='638960923680000001'):
+            assert_session_closed(self.config, self.session_id)
+        entry['version'] = '2.1.287'
+        (self.registry/'1234.json').write_text(json.dumps(entry))
+        with patch.object(session_registry.sys, 'platform', 'win32'), \
+             patch.object(claude_process, 'process_start_ticks') as lookup:
+            with self.assertRaises(BridgeUnavailable):
+                assert_session_closed(self.config, self.session_id)
+        lookup.assert_not_called()
+
+    def test_windows_2287_domain_and_filetime_guard(self):
+        entry = {'sessionId': self.session_id, 'pid': 1234, 'version': '2.1.287',
+                 'procStartFt': '134057862268120000', 'pidDomain': 'darwin:machine-guid'}
+        (self.registry/'1234.json').write_text(json.dumps(entry))
+        with patch.object(session_registry.sys, 'platform', 'win32'), \
+             patch.object(claude_process, 'pid_domain', return_value=entry['pidDomain']), \
+             patch.object(claude_process, 'process_start_filetime', return_value=entry['procStartFt']):
+            with self.assertRaisesRegex(BridgeUnavailable, '仍在其他终端运行'):
+                assert_session_closed(self.config, self.session_id)
+        with patch.object(session_registry.sys, 'platform', 'win32'), \
+             patch.object(claude_process, 'pid_domain', return_value=entry['pidDomain']), \
+             patch.object(claude_process, 'process_start_filetime', return_value=None):
+            assert_session_closed(self.config, self.session_id)
+        with patch.object(session_registry.sys, 'platform', 'win32'), \
+             patch.object(claude_process, 'pid_domain', return_value='darwin:other'), \
+             patch.object(claude_process, 'process_start_filetime') as lookup:
+            with self.assertRaises(BridgeUnavailable):
+                assert_session_closed(self.config, self.session_id)
+        lookup.assert_not_called()
+
+    def test_windows_process_query_distinguishes_missing_from_unknown(self):
+        ok = SimpleNamespace(returncode=0, stdout='638960923680000000\r\n')
+        with patch.object(claude_process.subprocess, 'run', return_value=ok) as run:
+            self.assertEqual(claude_process.process_start_ticks(1234), '638960923680000000')
+            self.assertIn('ProcessId=1234', run.call_args.args[0][-1])
+        for result in (SimpleNamespace(returncode=0, stdout='missing\r\n'),):
+            with patch.object(claude_process.subprocess, 'run', return_value=result):
+                self.assertIsNone(claude_process.process_start_ticks(1234))
+        for result in (SimpleNamespace(returncode=1, stdout=''),
+                       SimpleNamespace(returncode=0, stdout='')):
+            with patch.object(claude_process.subprocess, 'run', return_value=result):
+                with self.assertRaises(OSError):
+                    claude_process.process_start_ticks(1234)
 
     def test_fresh_profile_without_registry_is_idle_but_symlink_is_unknown(self):
         self.registry.rmdir()

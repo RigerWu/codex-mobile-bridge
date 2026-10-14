@@ -24,6 +24,7 @@ def _pid_domain():
         except OSError as exc:
             raise BridgeUnavailable(_UNKNOWN) from exc
         if machine and re.fullmatch(r'pid:\[\d+\]', namespace):
+            # Claude Code 2.1.287 uses this historical prefix on Linux too.
             return 'darwin:' + machine + ':' + namespace
     raise BridgeUnavailable(_UNKNOWN)
 
@@ -48,6 +49,26 @@ def _native_writer(pid, proc_start):
     return result.stdout.split() == proc_start.split()
 
 
+def _windows_writer(pid, entry):
+    from bridge.platforms.windows import claude_process
+    try:
+        if entry.get('version') == '2.1.168':
+            if ('pidDomain' in entry or 'procStartFt' in entry or
+                    not isinstance(entry.get('procStart'), str) or
+                    not re.fullmatch(r'[1-9][0-9]*', entry['procStart'])):
+                raise BridgeUnavailable(_UNKNOWN)
+            return claude_process.process_start_ticks(pid) == entry['procStart']
+        if entry.get('version') == '2.1.287':
+            if ('procStart' in entry or not isinstance(entry.get('procStartFt'), str) or
+                    not re.fullmatch(r'[1-9][0-9]*', entry['procStartFt']) or
+                    entry.get('pidDomain') != claude_process.pid_domain()):
+                raise BridgeUnavailable(_UNKNOWN)
+            return claude_process.process_start_filetime(pid) == entry['procStartFt']
+        raise BridgeUnavailable(_UNKNOWN)
+    except OSError as exc:
+        raise BridgeUnavailable(_UNKNOWN) from exc
+
+
 def assert_session_closed(config_dir: Path, session_id: str = None):
     registry = Path(config_dir)/'sessions'
     if session_id is None and not registry.exists() and not registry.is_symlink():
@@ -55,7 +76,7 @@ def assert_session_closed(config_dir: Path, session_id: str = None):
     if not registry.is_dir() or registry.is_symlink():
         raise BridgeUnavailable(_UNKNOWN)
     try:
-        domain = _pid_domain()
+        domain = _pid_domain() if sys.platform != 'win32' else None
         entries = list(registry.iterdir())
         for path in entries:
             if path.suffix != '.json':
@@ -68,11 +89,17 @@ def assert_session_closed(config_dir: Path, session_id: str = None):
             if session_id is not None and entry.get('sessionId') != session_id:
                 continue
             pid = entry.get('pid')
-            if (not isinstance(pid, int) or isinstance(pid, bool) or pid <= 0 or
-                    path.stem != str(pid) or not isinstance(entry.get('procStart'), str) or
-                    not entry['procStart'] or entry.get('pidDomain') != domain):
+            if type(pid) is not int or pid <= 0 or path.stem != str(pid):
                 raise BridgeUnavailable(_UNKNOWN)
-            if _native_writer(pid, entry['procStart']):
+            if sys.platform == 'win32':
+                writer = _windows_writer(pid, entry)
+            else:
+                start = entry.get('procStart')
+                if (not isinstance(start, str) or not start or
+                        entry.get('pidDomain') != domain):
+                    raise BridgeUnavailable(_UNKNOWN)
+                writer = _native_writer(pid, start)
+            if writer:
                 raise BridgeUnavailable(_RUNNING)
     except (OSError, ValueError, UnicodeError) as exc:
         raise BridgeUnavailable(_UNKNOWN) from exc

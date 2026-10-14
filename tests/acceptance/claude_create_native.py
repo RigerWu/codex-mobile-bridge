@@ -60,6 +60,9 @@ def main():
                 assert row['permissionMode'] == 'plan'
                 assert wait_for(lambda: not local.owned[row['nativeId']].active)
                 assert len(MockAPI.bodies) == 1
+                usage = local.call('detail', sid, {})['session']['contextUsage']
+                assert usage['usedTokens'] == 1 and usage['model'] == 'fixture-model'
+                assert usage['contextWindow'] is None
             local.close()
 
             sshd, bindir, stderr = loopback_sshd(root)
@@ -93,10 +96,13 @@ def main():
                 assert row['permissionMode'] == 'plan'
                 assert wait_for(lambda: not remote_cli.owned[sid].active)
                 assert len(MockAPI.bodies) == 2
+                usage = remote_cli.call('detail', sid, {})['session']['contextUsage']
+                assert usage['usedTokens'] == 1 and usage['model'] == 'fixture-model'
+                assert usage['contextWindow'] is None
                 assert all(credential == 'isolated-fixture-key'
                            for credential in MockAPI.credentials)
                 assert len(list(profile.glob('projects/**/*.jsonl'))) == 2
-                print('PASS: native local and SSH create use selected profile/cwd/auth, send first message once, and persist real session history')
+                print('PASS: native local and SSH create use selected profile/cwd/auth, send first message once, persist real session history, and expose native prompt usage')
         finally:
             local.close()
             if remote_cli is not None:

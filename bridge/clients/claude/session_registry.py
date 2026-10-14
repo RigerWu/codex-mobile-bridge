@@ -32,8 +32,10 @@ def _darwin_writer(pid, proc_start):
     return result.stdout.split() == proc_start.split()
 
 
-def assert_session_closed(config_dir: Path, session_id: str):
+def assert_session_closed(config_dir: Path, session_id: str = None):
     registry = Path(config_dir)/'sessions'
+    if session_id is None and not registry.exists() and not registry.is_symlink():
+        return  # A fresh native profile has no sessions yet.
     if not registry.is_dir() or registry.is_symlink():
         raise BridgeUnavailable(_UNKNOWN)
     try:
@@ -46,7 +48,7 @@ def assert_session_closed(config_dir: Path, session_id: str):
             entry = json.loads(path.read_text())
             if not isinstance(entry, dict):
                 raise BridgeUnavailable(_UNKNOWN)
-            if entry.get('sessionId') != session_id:
+            if session_id is not None and entry.get('sessionId') != session_id:
                 continue
             pid = entry.get('pid')
             if (not isinstance(pid, int) or isinstance(pid, bool) or pid <= 0 or
@@ -60,3 +62,8 @@ def assert_session_closed(config_dir: Path, session_id: str):
                 raise BridgeUnavailable(_RUNNING)
     except (OSError, ValueError, UnicodeError) as exc:
         raise BridgeUnavailable(_UNKNOWN) from exc
+
+
+def assert_profile_idle(config_dir: Path):
+    """Use the resume guard against every writer in a native config profile."""
+    assert_session_closed(config_dir)

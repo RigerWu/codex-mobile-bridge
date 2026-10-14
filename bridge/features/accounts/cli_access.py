@@ -5,6 +5,7 @@ import json
 import re
 import threading
 import uuid
+from contextlib import ExitStack
 from pathlib import Path
 
 from bridge.clients.claude.cli_session import _auth_ready, _profile
@@ -160,7 +161,14 @@ class CliAccess:
             raise ValueError('CLI 接入请求无效')
         provider, action = value['provider'], value.get('action')
         saved_id = None
-        with self.lock:
+        with ExitStack() as locks:
+            # ClaudeCli.call holds cli.lock while resolving this manager's
+            # profile. Keep the same order through the settings transaction.
+            if provider == 'claude' and action == 'switch':
+                cli = self._claude_cli()
+                if cli:
+                    locks.enter_context(cli.lock)
+            locks.enter_context(self.lock)
             if provider == 'codex':
                 accounts = self.bridge.accounts
                 if action == 'saveApi':

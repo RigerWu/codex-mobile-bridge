@@ -631,14 +631,15 @@ class Accounts:
         with self.gate, self.lock:
             row = dict(self.row(value.get('id')))
             sync_cli = value.get('syncLocalCli') is True
-            if sync_cli:
-                from bridge.features.accounts.cli_sync import LocalCliSync
-                LocalCliSync(self.bridge).preflight('codex')
             ledger = read_json(self.root/'requests.json', {})
             if request_id in ledger:
                 if ledger[request_id] != row['id']:
                     raise ValueError('同一请求不能切换到不同账号')
                 return self.public()
+            # Desktop and local CLI use the same auth/config files even when
+            # the optional CLI effectiveness check is not selected.
+            from bridge.features.accounts.cli_sync import LocalCliSync
+            LocalCliSync(self.bridge).preflight('codex')
             self.assert_editable()
             if self.info.current().get('id') == row['id']:
                 return self.public()
@@ -809,6 +810,8 @@ class Accounts:
             self.wait_stopped()
             if changed:
                 folder = self.prepare(row, before)
+            from bridge.features.accounts.cli_sync import LocalCliSync
+            LocalCliSync(self.bridge)._codex_idle()
             self.phase('applying')
             private_bytes(self.home/'config.toml', (folder/'config.toml').read_bytes())
             if (folder/'auth.json').is_file():

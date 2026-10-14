@@ -18,6 +18,7 @@ class LocalCliSync:
     def __init__(self, bridge):
         self.bridge = bridge
         self._claude_backup = None
+        self._claude_created_dir = None
 
     def _accounts(self):
         return self.bridge.accounts
@@ -47,9 +48,18 @@ class LocalCliSync:
                     raise ValueError('本机 Codex CLI 后台服务仍在运行，请先正常结束后再切换')
 
     def _claude_dir(self, row):
-        path = Path(row['directory']).expanduser().resolve(strict=True)
-        if not path.is_dir():
+        candidate = Path(row['directory']).expanduser()
+        path = candidate.resolve()
+        if candidate.is_symlink():
             raise ValueError('Claude Code 配置目录不可用')
+        if not path.is_dir():
+            from bridge.clients.claude.cli_session import _profile
+            native = _profile()
+            default = (Path.home()/'.claude').resolve()
+            if (row['kind'] != 'api' or path != default or not native
+                    or not native['origin'].startswith('default:')
+                    or Path(native['directory']).resolve() != path or path.exists()):
+                raise ValueError('Claude Code 配置目录不可用')
         return path
 
     def _claude_key(self, row):
@@ -173,6 +183,11 @@ class LocalCliSync:
         if provider == 'claude':
             directory = self._claude_dir(row)
             self._close_claude_idle()
+            from bridge.clients.claude.session_registry import assert_profile_idle
+            assert_profile_idle(directory)
+            if not directory.exists():
+                directory.mkdir(mode=0o700)
+                self._claude_created_dir = directory
             settings_path, settings = self._claude_settings(directory)
             original = settings_path.read_bytes() if settings_path.is_file() else None
             env = dict(settings.get('env') or {})
@@ -273,6 +288,12 @@ class LocalCliSync:
                 if created:
                     created.unlink(missing_ok=True)
                 self._claude_backup = None
+            if self._claude_created_dir:
+                try:
+                    self._claude_created_dir.rmdir()
+                except OSError:
+                    pass  # Preserve files created by the native CLI or another writer.
+                self._claude_created_dir = None
             return {'status': 'restored'}
         raise ValueError('不支持的本机 CLI 客户端')
 

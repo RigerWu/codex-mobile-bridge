@@ -135,23 +135,13 @@ class ClaudeRegistryTests(unittest.TestCase):
                 assert_session_closed(self.config, self.session_id)
         lookup.assert_not_called()
 
-    def test_windows_2287_domain_and_filetime_guard(self):
+    def test_windows_unverified_newer_registry_fails_closed(self):
         entry = {'sessionId': self.session_id, 'pid': 1234, 'version': '2.1.287',
-                 'procStartFt': '134057862268120000', 'pidDomain': 'darwin:machine-guid'}
+                 'procStartFt': '134057862268120000', 'pidDomain': 'windows:machine-guid'}
         (self.registry/'1234.json').write_text(json.dumps(entry))
         with patch.object(session_registry.sys, 'platform', 'win32'), \
-             patch.object(claude_process, 'pid_domain', return_value=entry['pidDomain']), \
-             patch.object(claude_process, 'process_start_filetime', return_value=entry['procStartFt']):
-            with self.assertRaisesRegex(BridgeUnavailable, '仍在其他终端运行'):
-                assert_session_closed(self.config, self.session_id)
-        with patch.object(session_registry.sys, 'platform', 'win32'), \
-             patch.object(claude_process, 'pid_domain', return_value=entry['pidDomain']), \
-             patch.object(claude_process, 'process_start_filetime', return_value=None):
-            assert_session_closed(self.config, self.session_id)
-        with patch.object(session_registry.sys, 'platform', 'win32'), \
-             patch.object(claude_process, 'pid_domain', return_value='darwin:other'), \
-             patch.object(claude_process, 'process_start_filetime') as lookup:
-            with self.assertRaises(BridgeUnavailable):
+             patch.object(claude_process, 'process_start_ticks') as lookup:
+            with self.assertRaisesRegex(BridgeUnavailable, '无法确认'):
                 assert_session_closed(self.config, self.session_id)
         lookup.assert_not_called()
 

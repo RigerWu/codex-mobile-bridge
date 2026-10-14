@@ -51,6 +51,12 @@ class ClaudeCliContract(unittest.TestCase):
         self.assertTrue(detail['capabilities']['resume'])
         self.assertFalse(detail['capabilities']['send'])
 
+    def test_closed_adapter_status_never_queries_auth(self):
+        self.cli.close()
+        with patch('bridge.clients.claude.cli_session._auth_ready',
+                   side_effect=AssertionError('closed adapter started auth')):
+            self.assertEqual(self.cli.status(), {'cliAvailable': False, 'cliAuthReady': False})
+
     def test_tool_only_first_user_record_keeps_listing_readable(self):
         events = self.path.read_text().splitlines()
         first = json.loads(events[0])

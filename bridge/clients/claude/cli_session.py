@@ -219,9 +219,10 @@ class ClaudeCli:
         self.owned = {}
         self.index = {}
         self.auth_cache = None
+        self.closed = False
 
     def _ready(self, profile, *, fresh=False):
-        if not profile:
+        if self.closed or not profile:
             return False
         now = time.time()
         with self.lock:
@@ -234,6 +235,8 @@ class ClaudeCli:
         return ready
 
     def status(self):
+        if self.closed:
+            return {'cliAvailable': False, 'cliAuthReady': False}
         profile = _profile()
         return {'cliAvailable': bool(profile), 'cliAuthReady': self._ready(profile)}
 
@@ -469,6 +472,7 @@ class ClaudeCli:
 
     def close(self):
         with self.lock:
+            self.closed = True
             for owned in self.owned.values():
                 owned.close()
             self.owned.clear()

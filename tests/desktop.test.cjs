@@ -182,6 +182,38 @@ test('existing tunnel needs only an HTTPS address and keeps NAS upstream in the 
   }
 });
 
+test('submitting a focused bare hostname saves a strict HTTPS origin',async()=>{
+  const ui=await renderer();
+  ui.run(`connectionDraft=[{id:'entry',name:'Home',enabled:true,accessMode:'external',publicUrl:''}];renderConnections();`);
+  const descendants=node=>[node,...(node.children||[]).flatMap(descendants)];
+  const url=descendants(ui.nodes.get('connections')).find(node=>node.dataset.connectionField==='publicUrl');
+  url.value='bridge.example.com:8443';url.oninput();
+  let submitted;ui.api.save=async payload=>{submitted=payload;ui.value.preferences={...ui.value.preferences,...payload.preferences};return structuredClone(ui.value);};
+  await ui.nodes.get('settings').onsubmit({preventDefault(){}});
+  assert.equal(submitted.preferences.connections[0].publicUrl,'https://bridge.example.com:8443');
+  assert.equal(ui.value.preferences.connections[0].accessMode,'external');
+});
+
+test('external status updates a folded summary without replacing the focused card',async()=>{
+  const ui=await renderer();
+  ui.value.preferences.connections=[{id:'entry',name:'Home',enabled:true,accessMode:'external',publicUrl:'https://bridge.example.com'}];
+  await ui.poll();
+  const descendants=node=>[node,...(node.children||[]).flatMap(descendants)];
+  const card=ui.nodes.get('connections').children[0],items=descendants(card);
+  const status=items.find(node=>node.dataset.connectionStatus==='entry');
+  const summary=items.find(node=>node.className==='connection-summary');
+  status.closest=()=>({querySelector:()=>summary});
+  ui.context.document.querySelectorAll=selector=>selector==='[data-connection-status]'?[status]:[];
+  ui.context.document.activeElement={closest:selector=>selector==='#connections'?card:null};
+  await ui.poll();
+  assert.match(status.textContent,/保存配置后可检测入口/);
+  assert.doesNotMatch(status.textContent,/导出部署包/);
+  ui.value.externalStatus={entry:{message:'入口已连接'}};
+  await ui.poll();
+  assert.match(summary.textContent,/Home · https:\/\/bridge.example.com · 入口已连接/);
+  assert.equal(ui.nodes.get('connections').children[0],card);
+});
+
 test('changing the Tailscale HTTPS port invalidates the previously detected URL',async()=>{
   const ui=await renderer();
   ui.run(`connectionDraft=[{id:'ts',enabled:true,accessMode:'tailscale',publicUrl:'https://mac.example.ts.net',tailscaleMode:'funnel',tailscalePort:443,tailscaleNodeId:'n123'}];renderConnections();`);
@@ -695,8 +727,10 @@ test('native window title and local target copy respect their fixed origins',asy
   handlers['bridge:set-language'](event,'en');assert.equal(changes,1);
   vm.runInContext("lastSnapshot={urls:[],preferences:{port:8787}};updateQuitting=true;updater={status(){return {}}}",context);
   await handlers['bridge:copy'](event,'http://127.0.0.1:8787');
-  assert.deepEqual(copied,['http://127.0.0.1:8787']);
-  await assert.rejects(handlers['bridge:copy'](event,'http://127.0.0.1:8788'),/地址不可用/);
+  await handlers['bridge:copy'](event,'http://127.0.0.1:8788');
+  assert.deepEqual(copied,['http://127.0.0.1:8787','http://127.0.0.1:8788']);
+  await assert.rejects(handlers['bridge:copy'](event,'http://127.0.0.1:65536'),/地址不可用/);
+  await assert.rejects(handlers['bridge:copy'](event,'http://127.0.0.1:8788/path'),/地址不可用/);
   await assert.rejects(handlers['bridge:copy'](event,'http://192.168.1.2:8787'),/地址不可用/);
   await handlers['bridge:open'](event,'setup-external');
   assert.match(opened[0],/#external$/);

@@ -188,7 +188,10 @@ class RelayIntegrationTests(unittest.IsolatedAsyncioTestCase):
     async def real_connector(self, device, desktop_sessions=None, mobile_updates=None):
         directory = Path(self.temp.name)/device['deviceId']
         save_config(directory, {**device, 'url': self.url, 'enabled': True})
-        bridge = SimpleNamespace(host_errors=[], list=lambda **kw: [{'title': device['deviceName'], 'id': THREAD}])
+        def list_sessions(**kwargs):
+            rows = [{'title': device['deviceName'], 'id': THREAD}]
+            return (rows, []) if kwargs.get('include_sources') else rows
+        bridge = SimpleNamespace(host_errors=[], list=list_sessions)
         bridge.create_chat = lambda project, title, identifier: self.created.append((device['deviceName'], identifier)) or {'id': identifier}
         bridge.for_host = lambda host: bridge
         bridge.terminal = lambda thread, owner, action, body: {'owner': owner, 'action': action}

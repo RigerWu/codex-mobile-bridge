@@ -586,9 +586,14 @@ class Handler(BaseHTTPRequestHandler):
                 report = self.server.bridge.discovery_diagnostics(query.get('thread', [None])[0])
                 return self.output(200, report, content_disposition='attachment; filename="codex-session-diagnostics.json"')
             if not write and path == "/api/sessions":
+                if set(query) - {'q', 'offset', 'archived', 'source'}:
+                    raise ValueError('会话列表请求包含不支持的字段')
+                source = query.get('source', ['all'])[0]
+                if source not in ('all', 'desktop', 'cli'):
+                    raise ValueError('不支持的会话来源')
                 feed = self.server.notifications.mobile.checkpoint() if self.server.notifications else None
-                rows = self.server.bridge.list(query=query.get("q", [""])[0][:200], offset=max(0, int(query.get("offset", [0])[0])), archived=query.get("archived", ["false"])[0] == "true")
-                return self.output(200, {"sessions": rows, "unavailableHosts": self.server.bridge.host_errors,
+                rows, available = self.server.bridge.list(query=query.get("q", [""])[0][:200], offset=max(0, int(query.get("offset", [0])[0])), archived=query.get("archived", ["false"])[0] == "true", source=source, include_sources=True)
+                return self.output(200, {"sessions": rows, "availableSources": available, "unavailableHosts": self.server.bridge.host_errors,
                                         'notificationRead': {key: feed[key] for key in ('streamId', 'cursor')} if feed else None})
             if not write and path == '/api/projects':
                 return self.output(200, {'projects': self.server.bridge.projects()})

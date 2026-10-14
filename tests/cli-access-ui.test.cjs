@@ -4,6 +4,7 @@ const app=fs.readFileSync(path.join(__dirname,'../web/shell/app.js'),'utf8');
 const html=fs.readFileSync(path.join(__dirname,'../web/index.html'),'utf8');
 const extract=(start,end)=>app.slice(app.indexOf(start),app.indexOf(end,app.indexOf(start)));
 const accessCode=extract('function sessionAccess(access){','function renderList(){');
+const sourceFilterCode=extract('function renderSourceFilter(){','function sessionAccess(access){');
 const listCode=extract('function renderList(){','async function loadList(');
 const stateCode=extract('function renderState(view){',"$('send-mode').onchange");
 const reconnectCode=extract("$('reconnect').onclick=", "document.querySelectorAll('[data-close]')");
@@ -26,15 +27,29 @@ test('CLI creation picker enables only a known CLI folder and uses an accurate a
 function node(){return {hidden:false,disabled:false,value:'',textContent:'',title:'',children:[],scrollTop:0,classList:{toggle(){}},append(...parts){this.children.push(...parts);},replaceChildren(...parts){this.children=parts;},querySelector(){return node();}};}
 function fixture(){
   const nodes=new Map();const $=id=>{if(!nodes.has(id))nodes.set(id,node());return nodes.get(id);};
-  const ctx={$ ,state:null,reconnectFailure:null,listRows:[],listRenderStamp:'',currentId:'a',currentHost:'local',sending:false,catalogStarted:false,catalogLoads:0,startCatalog(){ctx.catalogLoads++;},selectedSkills:new Set(),invalidSkills:new Set(),renderSkillPills(){},BridgeI18n:{locale:()=> 'en-US'},t:key=>({'此电脑':'This computer','其他来源':'Other source','历史记录':'History','重新连接':'Reconnect','继续会话':'Continue chat'}[key]||key),localStorage:{getItem:()=>null,setItem(){}},dateText:()=> 'today',el:(tag,cls='',value='')=>Object.assign(node(),{tag,cls,textContent:value,dataset:{}}),renderActivity(){},contextUsageControl:{update(){}},fastModeControl:{sync(){}},visibleChat:()=>false,sessionActivity:{read(){}},attachments:{ready:()=>true},workModes:{render(view){ctx.modesView=view;}},workbench:{current:{}},chatTimeline:{refreshActions(){}},renderApprovals(rows){ctx.approvals=rows;},renderQueue(){},approvalStamp:'',chatKey:()=> 'local|a'};
+  const ctx={$ ,state:null,reconnectFailure:null,listRows:[],availableSources:[],listRenderStamp:'',currentId:'a',currentHost:'local',sending:false,catalogStarted:false,catalogLoads:0,startCatalog(){ctx.catalogLoads++;},selectedSkills:new Set(),invalidSkills:new Set(),renderSkillPills(){},BridgeI18n:{locale:()=> 'en-US'},t:key=>({'此电脑':'This computer','其他来源':'Other source','历史记录':'History','重新连接':'Reconnect','继续会话':'Continue chat'}[key]||key),localStorage:{getItem:()=>null,setItem(){}},dateText:()=> 'today',el:(tag,cls='',value='')=>Object.assign(node(),{tag,cls,textContent:value,dataset:{}}),renderActivity(){},contextUsageControl:{update(){}},fastModeControl:{sync(){}},visibleChat:()=>false,sessionActivity:{read(){}},attachments:{ready:()=>true},workModes:{render(view){ctx.modesView=view;}},workbench:{current:{}},chatTimeline:{refreshActions(){}},renderApprovals(rows){ctx.approvals=rows;},renderQueue(){},approvalStamp:'',chatKey:()=> 'local|a'};
   vm.createContext(ctx);vm.runInContext(accessCode+listCode+stateCode,ctx);
   return {ctx,$,nodes};
 }
 const cli={source:'cli',runtime:null,readOnly:true,canSend:false,canInterrupt:false,canApprove:false,canReconnect:false};
-test('CLI list rows retain source identity while legacy Desktop rows remain unchanged',()=>{
-  const {ctx,$}=fixture();ctx.listRows=[{id:'a',host:'local',title:'CLI thread',projectName:'Project',projectKey:'p',recency:1,access:cli},{id:'b',host:'local',title:'Desktop thread',projectName:'Project',projectKey:'p',recency:2}];$('list-mode').value='recent';ctx.renderList();
-  assert.match($('sessions').children[0].children[1].children[0].textContent,/CLI/);
-  assert.doesNotMatch($('sessions').children[1].children[1].children[0].textContent,/CLI|Desktop/);
+test('source selector uses full inventory and preserves its open options across unchanged refreshes',()=>{
+  const nodes=new Map(),$=id=>{if(!nodes.has(id))nodes.set(id,{hidden:false,value:'',rebuilds:0,replaceChildren(...children){this.children=children;this.rebuilds++;}});return nodes.get(id);};
+  const saved=[];let locale='zh-CN';
+  const ctx={$ ,availableSources:['desktop','cli'],listSource:'all',sourceFilterStamp:'',localStorage:{setItem(...args){saved.push(args);}},BridgeI18n:{locale:()=>locale},t:key=>key,el:(tag,cls,label)=>({tag,cls,textContent:label,value:''})};
+  vm.createContext(ctx);vm.runInContext(sourceFilterCode,ctx);
+  assert.equal(ctx.renderSourceFilter(),true);assert.equal($('source-filter-label').hidden,false);
+  assert.deepEqual($('source-filter').children.map(option=>option.value),['all','desktop','cli']);
+  const rebuilds=$('source-filter').rebuilds;ctx.renderSourceFilter();assert.equal($('source-filter').rebuilds,rebuilds);
+  locale='en-US';ctx.renderSourceFilter();assert.equal($('source-filter').rebuilds,rebuilds+1);
+  ctx.listSource='cli';ctx.availableSources=['desktop'];assert.equal(ctx.renderSourceFilter(),false);
+  assert.equal($('source-filter-label').hidden,true);assert.equal(ctx.listSource,'all');assert.deepEqual(saved.at(-1),['codex-source-filter','all']);
+});
+test('CLI list rows retain source identity and show badges only for a mixed full inventory',()=>{
+  const {ctx,$}=fixture();ctx.listRows=[{id:'a',host:'local',title:'CLI thread',projectName:'Project',projectKey:'p',recency:1,access:cli},{id:'b',host:'local',title:'Desktop thread',projectName:'Project',projectKey:'p',recency:2,access:{source:'desktop'}}];$('list-mode').value='recent';ctx.renderList();
+  assert.equal($('sessions').children[0].children.length,2);
+  ctx.availableSources=['cli','desktop'];ctx.renderList();
+  assert.equal($('sessions').children[0].children[1].textContent,'CLI');
+  assert.equal($('sessions').children[1].children[1].textContent,'APP');
   assert.equal(ctx.sessionAccess().canSend,true);assert.equal(ctx.sessionAccess(cli).canSend,false);
   assert.equal(ctx.sessionAccess({...cli,readOnly:false,canConfigure:false}).canChangeModel,false);
   assert.equal(ctx.sessionAccess({...cli,readOnly:false,canConfigure:true}).canSelectSkills,true);

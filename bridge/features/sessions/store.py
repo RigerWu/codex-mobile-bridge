@@ -62,7 +62,9 @@ class SessionStore:
                 bool(database and Path(str(database) + '-shm').exists()), exc)
             raise StoreUnavailable("暂时无法读取 Codex 会话数据库，请稍后重试或重新打开电脑 Codex。") from exc
 
-    def list(self, query="", limit=100, offset=0, archived=False):
+    def list(self, query="", limit=100, offset=0, archived=False, source='all'):
+        if source not in ('all', 'desktop', 'cli'):
+            raise ValueError('不支持的会话来源')
         with self._connect() as conn:
             columns = {r[1] for r in conn.execute("PRAGMA table_info(threads)")}
             fields = [name for name in ("id", "name", "title", "cwd", "updated_at", "updated_at_ms", "recency_at", "recency_at_ms", "model_provider", "model", "originator", "source", "archived", "is_pinned") if name in columns]
@@ -73,6 +75,8 @@ class SessionStore:
                 where.append("COALESCE(thread_source, '') != 'subagent'")
             if "source" in columns:
                 where.append("COALESCE(source, '') NOT LIKE '%\"subagent\"%'")
+            if source != 'all':
+                where.append(self._source_filter(columns, source))
             if query:
                 search_fields = [name for name in ("name", "title", "cwd") if name in columns]
                 where.append("(" + " OR ".join(name + " LIKE ?" for name in search_fields) + ")")
@@ -80,6 +84,31 @@ class SessionStore:
             recency = "COALESCE(recency_at_ms, recency_at * 1000, updated_at * 1000)" if "recency_at_ms" in columns else "COALESCE(recency_at, updated_at)" if "recency_at" in columns else "updated_at"
             rows = conn.execute("SELECT " + ",".join(fields) + " FROM threads WHERE " + " AND ".join(where) + " ORDER BY " + recency + " DESC, id DESC LIMIT ? OFFSET ?", params + [limit, offset]).fetchall()
             return [dict(row, origin=self._origin(dict(row))) for row in rows]
+
+    def available_sources(self):
+        """Original sources across the complete visible inventory, independent of list filters."""
+        with self._connect() as conn:
+            columns = {r[1] for r in conn.execute("PRAGMA table_info(threads)")}
+            where = [self._user_origin_filter(columns)]
+            if 'thread_source' in columns:
+                where.append("COALESCE(thread_source, '') != 'subagent'")
+            if 'source' in columns:
+                where.append("COALESCE(source, '') NOT LIKE '%\"subagent\"%'")
+            fields = [name for name in ('originator', 'source') if name in columns]
+            if not fields:
+                return []
+            rows = conn.execute('SELECT DISTINCT ' + ','.join(fields) + ' FROM threads WHERE ' + ' AND '.join(where)).fetchall()
+            return sorted({self._origin(dict(row)) for row in rows})
+
+    @staticmethod
+    def _source_filter(columns, source):
+        if source == 'desktop':
+            originators = "originator IN ('Codex Desktop', 'codex_work_desktop', 'codex_mobile_bridge')" if 'originator' in columns else '0'
+            legacy = "(originator IS NULL AND source = 'vscode')" if 'originator' in columns and 'source' in columns else "source = 'vscode'" if 'source' in columns else '0'
+            return '(' + originators + ' OR ' + legacy + ')'
+        originators = "originator IN ('codex-tui', 'codex_cli_rs', 'codex-mobile-bridge-cli')" if 'originator' in columns else '0'
+        legacy = "(originator IS NULL AND source = 'cli')" if 'originator' in columns and 'source' in columns else "source = 'cli'" if 'source' in columns else '0'
+        return '(' + originators + ' OR ' + legacy + ')'
 
     @staticmethod
     def _user_origin_filter(columns):

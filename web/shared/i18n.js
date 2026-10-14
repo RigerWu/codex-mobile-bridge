@@ -2,6 +2,8 @@
 // UI messages only. Never translate chat content, commands, model IDs or user input.
 const BridgeI18n=(()=>{
 const en={
+"全部会话":"All chats",
+"会话类型":"Chat type",
 "同时应用到本机 CLI":"Also apply to local CLI",
 "桌面版与本机 CLI 共用账号配置；切换后 CLI 也会使用新接入。勾选后额外核验 CLI 是否生效。":"Desktop and local CLI share account settings. The CLI will use the new access after switching; select this to verify it took effect.",
 "官方 Claude Desktop 登录不能直接同步到 Claude Code CLI":"Claude Desktop sign-in cannot be copied to Claude Code CLI",

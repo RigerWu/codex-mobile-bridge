@@ -472,7 +472,15 @@ class Handler(BaseHTTPRequestHandler):
                 if write and parts[3] == 'send' and 'attachments' in body:
                     if self.server.desktop_uploads is None:
                         return self.output(503, {'error': '桌面会话接入不可用'})
-                    body['resolvedImages'] = self.server.desktop_uploads.resolve(parts[2], sid, body.pop('attachments'))
+                    detail = manager.call(parts[2], 'detail', sid)
+                    session = detail.get('session') or {}
+                    local_cli = (parts[2] == 'claude' and session.get('backend') == 'cli'
+                                 and session.get('host') == 'local')
+                    images, files = self.server.desktop_uploads.resolve(
+                        parts[2], sid, body.pop('attachments'), local_claude_cli=local_cli)
+                    body['resolvedImages'] = images
+                    if files:
+                        body['resolvedFiles'] = files
                 feed = self.server.notifications.mobile.checkpoint() if parts[3] == 'list' and self.server.notifications else None
                 result = manager.list_with_activity(parts[2]) if parts[3] == 'list' else manager.call(parts[2], parts[3], sid, body)
                 if feed is not None:

@@ -11,6 +11,12 @@ async function get(url){
   try{return await fetch(url,{headers:{Connection:'close'},signal:AbortSignal.timeout(5000)});}
   catch(error){throw Error('GET '+url+': '+(error.cause?.message||error.message),{cause:error});}
 }
+async function getStatus(url){
+  const response=await get(url);
+  // Drain large static responses before their Connection: close socket ends.
+  await response.arrayBuffer();
+  return response.status;
+}
 async function freePort(){
   const server=net.createServer();await new Promise(resolve=>server.listen(0,'127.0.0.1',resolve));
   const port=server.address().port;await new Promise(resolve=>server.close(resolve));return port;
@@ -113,8 +119,8 @@ async function main(){
     await until(()=>client.evaluate('snapshot.runtime.running'),'Bundled gateway startup',90000);
     assert.equal(await client.evaluate("document.getElementById('port').disabled"),true);
     const base='http://127.0.0.1:'+port;
-    assert.equal((await get(base+'/api/sessions')).status,401);
-    for(const route of ['/','/app.js','/i18n.js','/markdown.js','/timeline.js','/vendor/katex/katex.min.js'])assert.equal((await get(base+route)).status,200,route);
+    assert.equal(await getStatus(base+'/api/sessions'),401);
+    for(const route of ['/','/app.js','/i18n.js','/markdown.js','/timeline.js','/vendor/katex/katex.min.js'])assert.equal(await getStatus(base+route),200,route);
     assert.ok((await (await get(base+'/')).text()).includes('id="notify-completion"'));
     assert.ok((await (await get(base+'/app.js')).text()).includes('notifyOnCompletion'));
     const phone=await execute(require('electron'),[path.join(root,'scripts/smoke-mobile.cjs'),base+'/'],{env,windowsHide:true,timeout:30000});
@@ -169,7 +175,7 @@ async function main(){
     // Check the independent gateway, then reuse this CDP session after restore.
     await delay(300);
     assert.equal(child.exitCode,null);
-    assert.equal((await get(base+'/api/auth')).status,200);
+    assert.equal(await getStatus(base+'/api/auth'),200);
     await execute(executable,[],{env,timeout:15000});
     await until(()=>client.evaluate("document.visibilityState==='visible'"),'Single-instance restore');
     await client.evaluate("document.querySelector('[data-tab=advanced]').click()");

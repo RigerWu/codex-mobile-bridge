@@ -45,6 +45,11 @@ class DesktopSessions:
         self.startup_thread = None
         self.client_lock = threading.RLock()
         self.client_cache = None
+        self.client_snapshot = None
+        self.client_snapshot_lock = threading.Lock()
+        self.client_refreshing = False
+        self.client_refresh_error = False
+        self.client_refresh_retry_at = 0
         self.workspace_roots = {}
         self.account_stores = {}
         self.account_operations = set()
@@ -915,7 +920,51 @@ class DesktopSessions:
             if sys.platform == 'win32':
                 result['windowsSession'] = windows_session.status()
             self.client_cache = (time.monotonic(), result)
+            with self.client_snapshot_lock:
+                if not self.closed.is_set():
+                    self.client_snapshot = _copy_read(result)
+                    self.client_refresh_error = False
+                    self.client_refresh_retry_at = 0
             return result
+
+    def clients_status(self):
+        """Return display status without waiting for startup or native inspection."""
+        if self.closed.is_set():
+            raise BridgeUnavailable('客户端连接已关闭')
+        cached = None
+        if self.client_lock.acquire(blocking=False):
+            try:
+                cached = self.client_cache
+                pending = cached and any(row.get('connectionState') in ('starting', 'connecting')
+                                         for row in cached[1]['clients'])
+                if cached and time.monotonic() - cached[0] < (1 if pending else 15):
+                    with self.client_snapshot_lock:
+                        if not self.client_refreshing and not self.client_refresh_error:
+                            return {**_copy_read(cached[1]), 'pending': False}
+            finally:
+                self.client_lock.release()
+        with self.client_snapshot_lock:
+            snapshot = _copy_read(self.client_snapshot) if self.client_snapshot else {'clients': []}
+            now = time.monotonic()
+            start = not self.client_refreshing and now >= self.client_refresh_retry_at and not self.closed.is_set()
+            if start:
+                self.client_refreshing = True
+            failed = self.client_refresh_error and not self.client_refreshing
+        if start:
+            threading.Thread(target=self._refresh_clients_status, daemon=True).start()
+        return {**snapshot, 'pending': not failed, **({'refreshError': '客户端状态读取失败，请重试。'} if failed else {})}
+
+    def _refresh_clients_status(self):
+        try:
+            if not self.closed.is_set():
+                self.clients(refresh=True)
+        except Exception:
+            with self.client_snapshot_lock:
+                self.client_refresh_error = True
+                self.client_refresh_retry_at = time.monotonic() + 2
+        finally:
+            with self.client_snapshot_lock:
+                self.client_refreshing = False
 
     def _claude_progress(self, row, native):
         row.update(connectionState='connected' if row['connected'] else 'idle', retryable=False)

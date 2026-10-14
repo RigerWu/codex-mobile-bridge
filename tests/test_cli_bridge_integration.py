@@ -70,6 +70,44 @@ class CliBridgeFixture(unittest.TestCase):
 
 
 class CliBridgeTests(CliBridgeFixture):
+    def test_explicit_continue_reuses_inflight_absent_owner_probe(self):
+        started = threading.Event()
+        self.bridge.ipc.connect = Mock()
+        def owner(*_args, **_kwargs):
+            started.set()
+            time.sleep(.08)
+            raise IPCError('no-client-found')
+        self.bridge.ipc.owner = Mock(side_effect=owner)
+        self.bridge.session(self.thread_id, background=True)
+        self.assertTrue(started.wait(2))
+        began = time.monotonic()
+        session = self.bridge.activate(self.thread_id)
+        elapsed = time.monotonic() - began
+        self.assertEqual(session.runtime, 'cli')
+        self.bridge.ipc.owner.assert_called_once()
+        self.assertLess(elapsed, .16)
+        self.bridge._cli_disconnected()
+        self.bridge.activate(self.thread_id)
+        self.assertEqual(self.bridge.ipc.owner.call_count, 2)
+
+    def test_explicit_continue_reuses_inflight_found_owner_without_snapshot(self):
+        started = threading.Event()
+        self.bridge.ipc.connect = Mock()
+        def owner(*_args, **_kwargs):
+            started.set()
+            time.sleep(.08)
+            return 'desktop-owner'
+        self.bridge.ipc.owner = Mock(side_effect=owner)
+        self.bridge.ipc.follow = Mock()
+        original = self.bridge._attach
+        with patch.object(self.bridge, '_attach', side_effect=lambda session: original(session, timeout=.08)):
+            self.bridge.session(self.thread_id, background=True)
+            self.assertTrue(started.wait(2))
+            with self.assertRaisesRegex(IPCError, 'Codex App'):
+                self.bridge.activate(self.thread_id)
+        self.bridge.ipc.owner.assert_called_once()
+        self.cli.attach.assert_not_called()
+
     def test_missing_native_runtime_explains_how_to_enable_continuation(self):
         self.cli.available.return_value = False
         view = self.bridge.view(self.thread_id, attach=False)

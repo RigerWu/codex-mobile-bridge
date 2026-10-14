@@ -1,15 +1,15 @@
-# Agent Note: Skip duplicate failed CLI proxy connection
+# Agent Note: Reuse in-flight owner discovery during explicit continuation
 
 Status: implemented
 
 ## Problem
 
-When an explicit native CLI connection failed, the adapter repeated the same proxy attempt under the daemon-start lock before starting the daemon. With a stalled proxy handshake this adds another full failed attempt, up to the existing 5-second connect timeout, before any recovery action. Warm native connects do not enter this path.
+An explicit continuation on a CLI-origin chat first requests a background owner lookup, then synchronously runs the same lookup again. If the background lookup has already reached a slow `IPC.owner`, the second call adds a second wait before native continuation or a Desktop-owner error. Separately, a failed native proxy connection repeated the same attempt before starting the daemon.
 
 ## Decision
 
-Remember the daemon-start generation before the first connect. After taking the lock, retry the proxy only if another adapter call has successfully started the daemon meanwhile. Otherwise start it immediately and connect once. This keeps concurrent starts serialized and leaves the existing handshake timeout, identity checks, and no-write-replay rules intact.
+Explicit continuation waits for the current background owner lookup to finish and consumes that result once. If no lookup is in flight, it still performs a fresh one. A later independent explicit action also probes again. Background saved-history reading proceeds independently. The native adapter additionally remembers the daemon-start generation before its first connect; after taking the lock, it retries the proxy only if another adapter call started the daemon meanwhile. Existing timeouts, identity checks, and no-write-replay rules remain intact.
 
 ## Verification and limit
 
-A controlled unavailable-proxy fixture required two attempts instead of three. Its two 30 ms failure waits fell to one; this proves the removed wait under identical conditions, not a production speedup measurement. Isolated native 0.162.1 cold attach remained about 0.25 seconds before and after because that fixture has no stalled proxy. The reported multi-second delay in a Desktop-owned CLI-origin chat may lie in Desktop IPC owner discovery and was not reproduced by the native fixture.
+The real `Bridge.activate` chain with a delayed fake `IPC.owner` called owner discovery twice before the change, both when no owner existed and when an owner had no snapshot yet. After the change it calls once; a later separate activation probes again. A controlled unavailable-proxy fixture required two attempts instead of three. Isolated native 0.162.1 cold attach remained about 0.25 seconds before and after because that fixture has no stalled proxy. The measured fixture demonstrates the duplicate wait, while the reported production delay has not been timed at its actual IPC boundary.

@@ -59,6 +59,7 @@ class LiveSession:
         self.sequence = 0
         self.connected = False
         self.connecting = False
+        self.owner_probe_inflight = False
         self.activating = False
         self.last_activation = None
         self.retry_at = 0
@@ -1119,10 +1120,18 @@ class Bridge:
                 return
             needs_history = session.state is None or session.activity_only
             session.connecting = True
+            session.owner_probe_inflight = True
             session.changed()
         def refresh():
             # Owner discovery and saved-history IO progress independently.
-            attachment = threading.Thread(target=self._attach, args=(session,), daemon=True)
+            def attach_owner():
+                try:
+                    self._attach(session)
+                finally:
+                    with session.condition:
+                        session.owner_probe_inflight = False
+                        session.changed()
+            attachment = threading.Thread(target=attach_owner, daemon=True)
             attachment.start()
             try:
                 if needs_history:
@@ -1215,8 +1224,16 @@ class Bridge:
                 session.activating = True
                 session.changed()
             try:
-                # Reuse an in-flight passive attach before considering navigation.
-                self._attach(session)
+                # Reuse this in-flight passive owner probe once. If none is
+                # running, the explicit action performs its own fresh probe.
+                with session.condition:
+                    probe_inflight = session.owner_probe_inflight
+                if probe_inflight:
+                    with session.condition:
+                        session.condition.wait_for(
+                            lambda: not session.owner_probe_inflight or session.connected or self.closed.is_set())
+                else:
+                    self._attach(session)
                 if session.connected:
                     return session
                 if session.origin == 'cli' and session.desktop_owner_probe != 'absent':

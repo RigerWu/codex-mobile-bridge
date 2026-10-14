@@ -1,5 +1,6 @@
 """Read-only discovery and history for existing Codex chats."""
 import copy
+import os
 import threading
 from collections import OrderedDict
 import json
@@ -188,6 +189,22 @@ class SessionStore:
             result['origin'] = origin
             return result
 
+    def _rollout_in_home(self, resolved):
+        for base in (self.home / 'sessions', self.home / 'archived_sessions'):
+            root = base.resolve()
+            if root in resolved.parents:
+                return True
+            if os.name == 'nt':
+                # Native Windows metadata may use \\?\ paths while CODEX_HOME
+                # uses a drive path. Compare actual directories only in that case.
+                for parent in resolved.parents:
+                    try:
+                        if root.samefile(parent):
+                            return True
+                    except OSError:
+                        continue
+        return False
+
     def discovery_diagnostics(self, thread_id=None):
         """Return aggregate source and read status, never chat content or private paths."""
         with self._connect() as conn:
@@ -221,7 +238,7 @@ class SessionStore:
                         reason = 'rollout_missing'
                     else:
                         resolved = Path(path).resolve()
-                        if not any(root.resolve() in resolved.parents for root in (self.home / 'sessions', self.home / 'archived_sessions')):
+                        if not self._rollout_in_home(resolved):
                             reason = 'rollout_outside_home'
                         elif not resolved.is_file():
                             reason = 'rollout_missing'
@@ -317,7 +334,7 @@ class SessionStore:
         path = Path(meta["rollout_path"])
         # The file path must be an actual rollout in this user's Codex home.
         resolved = path.resolve()
-        if not any(root.resolve() in resolved.parents for root in (self.home / "sessions", self.home / "archived_sessions")):
+        if not self._rollout_in_home(resolved):
             raise ValueError("会话记录路径不在 Codex 数据目录中")
         stat = resolved.stat()
         cache_key = (str(resolved), stat.st_ino, stat.st_size, stat.st_mtime_ns, turn_limit)

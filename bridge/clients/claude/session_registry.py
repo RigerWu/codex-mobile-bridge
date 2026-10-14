@@ -60,8 +60,13 @@ def _windows_writer(pid, entry):
     from bridge.platforms.windows import claude_process
     try:
         if entry.get('version') == '2.1.168':
-            if ('pidDomain' in entry or 'procStartFt' in entry or
-                    not isinstance(entry.get('procStart'), str) or
+            if 'pidDomain' in entry or 'procStartFt' in entry:
+                raise BridgeUnavailable(_UNKNOWN)
+            if 'procStart' not in entry:
+                if claude_process.process_start_ticks(pid) is None:
+                    return False
+                raise BridgeUnavailable(_UNKNOWN)
+            if (not isinstance(entry['procStart'], str) or
                     not re.fullmatch(r'[1-9][0-9]*', entry['procStart'])):
                 raise BridgeUnavailable(_UNKNOWN)
             return claude_process.process_start_ticks(pid) == entry['procStart']

@@ -406,7 +406,7 @@ class Handler(BaseHTTPRequestHandler):
                     if not isinstance(value, dict) or not {'provider', 'enabled'} <= set(value) or set(value) - {'provider', 'enabled', 'quitDesktop', 'initializeDesktop', 'forceDesktop', 'forceConfirmed'}:
                         raise ValueError('应用开关无效')
                     return self.output(200, manager.toggle_client(value))
-                return self.output(200, manager.clients())
+                return self.output(200, manager.clients_status())
             desktop_upload = re.fullmatch(r'/api/desktop-sessions/(deepseek|claude)/uploads(?:/([0-9a-f-]{36})/(thumb|preview))?', path)
             if desktop_upload:
                 manager, uploads = self.server.desktop_sessions, self.server.desktop_uploads

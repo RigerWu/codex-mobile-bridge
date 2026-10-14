@@ -53,6 +53,25 @@ test('an unanswered initialization prompt blocks duplicate operations and stale 
  finishRead({clients:[]});await reading;assert.equal(nav.clients.length,3);ui.decideInitialize(false);await confirming;assert.equal(calls,1);assert.equal(nav.choosing,null);
 });
 
+test('pending client status preserves selection and uncertain operation evidence',async()=>{
+ const {nav}=fixture(),notices=[];nav.notify=value=>notices.push(value);
+ nav.operationFailures=new Map([['claude',{action:'quit',uncertain:true,message:'结果未知'}]]);
+ nav.request=async()=>({pending:true,clients:[]});
+ await nav.refresh();
+ assert.equal(nav.provider,'claude');assert.equal(nav.clients.length,3);
+ assert.equal(nav.operationFailures.get('claude').uncertain,true);
+ assert.equal(nav.statusPending,true);assert.deepEqual(notices,[]);
+});
+
+test('pending client status uses existing fast poll and applies only complete results',async()=>{
+ const {nav}=fixture();let reads=0;const current=nav.clients;
+ nav.applyClients=data=>{nav.clients=data.clients;};
+ nav.request=async()=>++reads===1?{pending:true,clients:[]}:{pending:false,clients:[{...current[0],name:'新状态'}]};
+ await nav.refresh();assert.equal(nav.clients.length,3);
+ await nav.poll(true);assert.equal(reads,2);assert.equal(nav.clients.length,1);
+ assert.equal(nav.clients[0].name,'新状态');assert.equal(nav.statusPending,false);
+});
+
 test('unknown mobile quit requires a successful status read before retry and ignores late replies',async()=>{
  const ui=fixture(),nav=ui.nav;nav.lifecycleTimeout=5;const client={id:'claude',name:'Claude',enabled:true,configured:true,installed:true,connected:true,running:true};nav.clients=[client];nav.provider='claude';let finish,reads=0,mutations=0,readable=false;
  nav.request=(url,body)=>{if(body){mutations++;return new Promise(resolve=>finish=resolve);}reads++;return readable?Promise.resolve({clients:[client]}):Promise.reject(Error('status offline'));};

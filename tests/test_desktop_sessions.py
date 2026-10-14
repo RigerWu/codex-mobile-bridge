@@ -135,6 +135,16 @@ class HttpAdapters(unittest.TestCase):
     tearDown = test_bridge.HttpTests.tearDown
     request = test_bridge.HttpTests.request
     login = test_bridge.HttpTests.login
+    def test_client_get_uses_nonblocking_status_path(self):
+        manager = self.server.desktop_sessions = Mock()
+        manager.clients_status.return_value = {'clients': [], 'pending': True}
+        headers = self.login()
+        response = self.request('GET', '/api/clients', headers=headers)
+        self.assertEqual(response[0], 200)
+        self.assertEqual(response[2], {'clients': [], 'pending': True})
+        manager.clients_status.assert_called_once_with()
+        manager.clients.assert_not_called()
+
     def test_force_desktop_choice_requires_auth_csrf_and_exact_payload(self):
         manager = self.server.desktop_sessions = Mock()
         manager.toggle_client.return_value = {'clients': []}

@@ -2,6 +2,7 @@
 import tempfile
 import json
 import threading
+import time
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
@@ -70,6 +71,96 @@ class ClientLifecycleTests(unittest.TestCase):
 
     def finish(self, descriptor, **kwargs):
         self.running = False
+
+    def test_client_status_returns_pending_without_waiting_for_startup_lock(self):
+        manager = self.manager
+        previous = manager.client_snapshot
+        manager.client_cache = None
+        entered, release = threading.Event(), threading.Event()
+        def hold_startup():
+            with manager.client_lock:
+                entered.set()
+                release.wait(3)
+        holder = threading.Thread(target=hold_startup)
+        holder.start(); self.assertTrue(entered.wait(1))
+        with patch.object(manager, 'clients', wraps=manager.clients) as refresh:
+            try:
+                started = time.monotonic()
+                first = manager.clients_status()
+                self.assertLess(time.monotonic() - started, 0.2)
+                self.assertTrue(first['pending'])
+                self.assertEqual(first['clients'], previous['clients'])
+                self.assertTrue(manager.client_refreshing)
+                manager.client_snapshot = None
+                cold = manager.clients_status()
+                self.assertEqual(cold, {'clients': [], 'pending': True})
+                self.assertTrue(manager.client_refreshing)
+            finally:
+                release.set(); holder.join(2)
+            deadline = time.monotonic() + 3
+            while manager.client_refreshing and time.monotonic() < deadline:
+                time.sleep(0.01)
+            self.assertEqual(refresh.call_count, 1)
+            self.assertTrue(refresh.call_args.kwargs['refresh'])
+        ready = manager.clients_status()
+        self.assertFalse(ready['pending'])
+        self.assertEqual(len(ready['clients']), 3)
+
+    def test_client_status_failed_refresh_is_visible_and_can_retry(self):
+        manager = self.manager
+        manager.client_cache = None
+        manager.client_snapshot = None
+        original = manager.clients
+        with patch.object(manager, 'clients', side_effect=RuntimeError('fixture failure')):
+            self.assertTrue(manager.clients_status()['pending'])
+            deadline = time.monotonic() + 2
+            while manager.client_refreshing and time.monotonic() < deadline:
+                time.sleep(0.01)
+            failed = manager.clients_status()
+            self.assertFalse(failed['pending'])
+            self.assertIn('refreshError', failed)
+        manager.client_refresh_retry_at = 0
+        with patch.object(manager, 'clients', wraps=original) as refresh:
+            self.assertTrue(manager.clients_status()['pending'])
+            deadline = time.monotonic() + 3
+            while manager.client_refreshing and time.monotonic() < deadline:
+                time.sleep(0.01)
+            self.assertEqual(refresh.call_count, 1)
+        self.assertFalse(manager.clients_status()['pending'])
+        manager.closed.set()
+        with self.assertRaises(BridgeUnavailable):
+            manager.clients_status()
+
+    def test_client_status_does_not_publish_a_refresh_after_close(self):
+        manager = self.manager
+        manager.client_cache = None
+        manager.client_snapshot = None
+        entered, release = threading.Event(), threading.Event()
+        original = manager.clients
+        def delayed_refresh(refresh=False):
+            entered.set()
+            release.wait(2)
+            return original(refresh=refresh)
+        with patch.object(manager, 'clients', side_effect=delayed_refresh):
+            self.assertTrue(manager.clients_status()['pending'])
+            self.assertTrue(entered.wait(1))
+            manager.closed.set()
+            release.set()
+            deadline = time.monotonic() + 3
+            while manager.client_refreshing and time.monotonic() < deadline:
+                time.sleep(0.01)
+        self.assertIsNone(manager.client_snapshot)
+        with self.assertRaises(BridgeUnavailable):
+            manager.clients_status()
+
+    def test_client_status_cache_never_decides_enable_write(self):
+        manager = self.manager
+        manager.gateway_running = False
+        manager.client_cache = (time.monotonic(), {'clients': [{'id': 'claude', 'selectable': False}]})
+        with patch.object(manager, 'clients', wraps=manager.clients) as read:
+            value = manager.toggle_client({'provider': 'claude', 'enabled': True})
+        self.assertTrue(any(call.kwargs.get('refresh') is True for call in read.call_args_list))
+        self.assertTrue(next(row for row in value['clients'] if row['id'] == 'claude')['enabled'])
 
     def test_codex_cached_runtime_reuses_scanned_gui_for_readiness_and_launch(self):
         self.accounts.index['desktopExecutable'] = ''

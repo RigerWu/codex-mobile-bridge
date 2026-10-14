@@ -73,24 +73,53 @@ class CliBridgeFixture(unittest.TestCase):
 
 class CliBridgeTests(CliBridgeFixture):
     def test_explicit_continue_reuses_inflight_absent_owner_probe(self):
-        started = threading.Event()
+        started, release, finished, waiting = (threading.Event() for _ in range(4))
         self.bridge.ipc.connect = Mock()
         def owner(*_args, **_kwargs):
             started.set()
-            time.sleep(.08)
+            if not release.wait(5):
+                raise AssertionError('owner probe was not released')
+            finished.set()
             raise IPCError('no-client-found')
         self.bridge.ipc.owner = Mock(side_effect=owner)
-        self.bridge.session(self.thread_id, background=True)
-        self.assertTrue(started.wait(2))
-        began = time.monotonic()
-        session = self.bridge.activate(self.thread_id)
-        elapsed = time.monotonic() - began
+        def attach(*_args, **_kwargs):
+            self.assertTrue(finished.is_set(), 'CLI attached before the owner probe completed')
+            return self.native_state
+        self.cli.attach.side_effect = attach
+        session = self.bridge.session(self.thread_id, background=True)
+        original_wait = session.condition.wait_for
+        def await_probe(*args, **kwargs):
+            waiting.set()
+            return original_wait(*args, **kwargs)
+        outcome = {}
+        def activate():
+            try:
+                outcome['session'] = self.bridge.activate(self.thread_id)
+            except BaseException as exc:
+                outcome['error'] = exc
+        worker = threading.Thread(target=activate)
+        try:
+            self.assertTrue(started.wait(5), 'background owner probe did not start')
+            with patch.object(session.condition, 'wait_for', side_effect=await_probe):
+                worker.start()
+                self.assertTrue(waiting.wait(5), 'explicit continue did not wait for the in-flight probe')
+                self.cli.attach.assert_not_called()
+                self.bridge.ipc.owner.assert_called_once()
+        finally:
+            release.set()
+            if worker.ident is not None:
+                worker.join(5)
+        self.assertFalse(worker.is_alive(), 'explicit continue did not finish')
+        if 'error' in outcome:
+            raise outcome['error']
+        self.assertIs(outcome['session'], session)
         self.assertEqual(session.runtime, 'cli')
         self.bridge.ipc.owner.assert_called_once()
-        self.assertLess(elapsed, .16)
+        self.cli.attach.assert_called_once_with(self.thread_id, explicit=True)
         self.bridge._cli_disconnected()
         self.bridge.activate(self.thread_id)
         self.assertEqual(self.bridge.ipc.owner.call_count, 2)
+        self.assertEqual(self.cli.attach.call_count, 2)
 
     def test_explicit_continue_reuses_inflight_found_owner_without_snapshot(self):
         started = threading.Event()

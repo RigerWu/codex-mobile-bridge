@@ -2,11 +2,16 @@
 
 import hashlib
 import json
+import os
 import socket
+import subprocess
 from pathlib import Path
 
 from bridge.clients.desktop_app import DesktopApp
 from bridge.features.accounts.accounts import ManagedRPC, private_bytes, private_json, token_owner
+
+
+CLAUDE_ENV_KEYS = ('ANTHROPIC_BASE_URL', 'ANTHROPIC_API_KEY', 'ANTHROPIC_AUTH_TOKEN', 'ANTHROPIC_MODEL')
 
 
 class LocalCliSync:
@@ -45,11 +50,65 @@ class LocalCliSync:
         path = Path(row['directory']).expanduser().resolve(strict=True)
         if not path.is_dir():
             raise ValueError('Claude Code 配置目录不可用')
-        if row['kind'] == 'api':
-            base = (self.bridge.data_dir/'cli-access'/'claude').resolve()
-            if path.parent != base or path.name != row['id']:
-                raise ValueError('Claude API 配置目录不属于本机接入管理器')
         return path
+
+    def _claude_key(self, row):
+        path = Path(row['secretPath']).resolve(strict=True)
+        base = (self.bridge.data_dir/'cli-access'/'claude').resolve()
+        if path.parent.parent != base or path.parent.name != row['id'] or path.name != 'api.json':
+            raise ValueError('Claude API 密钥不属于本机接入管理器')
+        key = json.loads(path.read_text())['key']
+        if not isinstance(key, str) or not key:
+            raise ValueError('Claude Code API Key 不可用')
+        return key
+
+    def _claude_baseline(self, directory):
+        digest = hashlib.sha256(str(directory).encode()).hexdigest()
+        return self.bridge.data_dir/'cli-access'/'claude-baselines'/(digest+'.json')
+
+    @staticmethod
+    def _claude_settings(directory):
+        path = directory/'settings.json'
+        settings = json.loads(path.read_text()) if path.is_file() else {}
+        if not isinstance(settings, dict) or not isinstance(settings.get('env', {}), dict):
+            raise ValueError('Claude Code 设置无法安全合并')
+        return path, settings
+
+    def _close_claude_idle(self):
+        manager = getattr(self.bridge, 'desktop_sessions', None)
+        cli = manager.adapters['claude'].cli if manager else None
+        if not cli:
+            return
+        with cli.lock:
+            for owned in cli.owned.values():
+                if owned.process.poll() is None:
+                    with owned.condition:
+                        if owned.active or owned.pending:
+                            raise ValueError('请先结束已继续的本机 Claude Code 会话再切换接入')
+            for native, owned in list(cli.owned.items()):
+                if owned.process.poll() is None:
+                    owned.close()
+                cli.owned.pop(native, None)
+            cli.auth_cache = None
+
+    @staticmethod
+    def _claude_auth(directory, expected):
+        from bridge.clients.claude.cli_session import _profile
+        profile = _profile()
+        if not profile:
+            raise ValueError('找不到 Claude Code CLI')
+        env = {key: value for key, value in os.environ.items() if not key.startswith('ANTHROPIC_')}
+        env['CLAUDE_CONFIG_DIR'] = str(directory)
+        try:
+            result = subprocess.run([profile['binary'], 'auth', 'status', '--json'],
+                                    env=env, capture_output=True, text=True, timeout=10)
+            status = json.loads(result.stdout)
+        except (OSError, subprocess.SubprocessError, ValueError) as exc:
+            raise ValueError('Claude Code CLI 认证状态无法核验') from exc
+        if (result.returncode or status.get('loggedIn') is not True
+                or expected and status.get('authMethod') != expected):
+            raise ValueError('Claude Code CLI 未识别所选认证方式')
+        return status
 
     def preflight(self, provider):
         if provider == 'codex':
@@ -61,8 +120,11 @@ class LocalCliSync:
             adapter = self.bridge.desktop_sessions.adapters['claude'] if hasattr(self.bridge, 'desktop_sessions') else None
             if adapter:
                 with adapter.cli.lock:
-                    if any(owner.process.poll() is None for owner in adapter.cli.owned.values()):
-                        raise ValueError('请先结束已继续的本机 Claude Code 会话再切换接入')
+                    for owner in adapter.cli.owned.values():
+                        if owner.process.poll() is None:
+                            with owner.condition:
+                                if owner.active or owner.pending:
+                                    raise ValueError('请先结束已继续的本机 Claude Code 会话再切换接入')
             return {'sharedWithDesktop': False, 'desktopRunning': False}
         raise ValueError('不支持的本机 CLI 客户端')
 
@@ -110,20 +172,39 @@ class LocalCliSync:
             return {'status': 'applied', 'sharedWithDesktop': True}
         if provider == 'claude':
             directory = self._claude_dir(row)
+            self._close_claude_idle()
+            settings_path, settings = self._claude_settings(directory)
+            original = settings_path.read_bytes() if settings_path.is_file() else None
+            env = dict(settings.get('env') or {})
+            baseline = self._claude_baseline(directory)
             if row['kind'] == 'native':
+                if baseline.is_file():
+                    saved = json.loads(baseline.read_text())
+                    for key in CLAUDE_ENV_KEYS:
+                        if key in saved:
+                            env[key] = saved[key]
+                        else:
+                            env.pop(key, None)
+                    settings['env'] = env
+                    private_json(settings_path, settings)
+                    self._claude_backup = (settings_path, original, baseline, None)
                 return {'status': 'selected', 'directory': str(directory)}
             if row['kind'] != 'api':
                 raise ValueError('不支持的 Claude Code 接入')
-            key = json.loads((directory/'api.json').read_text())['key']
-            if not isinstance(key, str) or not key:
-                raise ValueError('Claude Code API Key 不可用')
-            env = {'ANTHROPIC_BASE_URL': row['baseUrl']}
+            key = self._claude_key(row)
+            created = None
+            if not baseline.is_file():
+                private_json(baseline, {key: env[key] for key in CLAUDE_ENV_KEYS if key in env})
+                created = baseline
+            for name in CLAUDE_ENV_KEYS:
+                env.pop(name, None)
+            env['ANTHROPIC_BASE_URL'] = row['baseUrl']
             env['ANTHROPIC_AUTH_TOKEN' if row.get('authScheme') == 'bearer' else 'ANTHROPIC_API_KEY'] = key
             if row.get('model'):
                 env['ANTHROPIC_MODEL'] = row['model']
-            settings = directory/'settings.json'
-            self._claude_backup = (settings, settings.read_bytes() if settings.is_file() else None)
-            private_json(directory/'settings.json', {'env': env})
+            settings['env'] = env
+            self._claude_backup = (settings_path, original, baseline, created)
+            private_json(settings_path, settings)
             return {'status': 'applied', 'directory': str(directory)}
         raise ValueError('不支持的本机 CLI 客户端')
 
@@ -151,20 +232,21 @@ class LocalCliSync:
         if provider == 'claude':
             directory = self._claude_dir(row)
             if row['kind'] == 'native':
-                from bridge.clients.claude.cli_session import _auth_ready, _profile
-                installed = _profile()
-                if not installed or not _auth_ready({**installed, 'directory': directory}):
-                    raise ValueError('原 Claude Code CLI 登录未通过核验')
-                return {'status': 'verified', 'directory': str(directory),
-                        'authentication': 'native-login'}
-            key = json.loads((directory/'api.json').read_text())['key']
-            settings = json.loads((directory/'settings.json').read_text())
+                self._claude_auth(directory, None)
+                baseline = self._claude_baseline(directory)
+                baseline.unlink(missing_ok=True)
+                return {'status': 'configured', 'directory': str(directory),
+                        'authentication': 'native-profile'}
+            key = self._claude_key(row)
+            _, settings = self._claude_settings(directory)
             env = settings.get('env') or {}
             credential = 'ANTHROPIC_AUTH_TOKEN' if row.get('authScheme') == 'bearer' else 'ANTHROPIC_API_KEY'
             if (env.get('ANTHROPIC_BASE_URL') != row['baseUrl'] or env.get(credential) != key
-                    or row.get('model') and env.get('ANTHROPIC_MODEL') != row['model']):
+                    or env.get('ANTHROPIC_MODEL', '') != row.get('model', '')
+                    or any(env.get(name) for name in ('ANTHROPIC_API_KEY', 'ANTHROPIC_AUTH_TOKEN') if name != credential)):
                 raise ValueError('Claude Code CLI API 配置未生效')
-            return {'status': 'verified', 'directory': str(directory),
+            self._claude_auth(directory, 'oauth_token' if row.get('authScheme') == 'bearer' else 'api_key')
+            return {'status': 'configured', 'directory': str(directory),
                     'authentication': 'configured'}
         raise ValueError('不支持的本机 CLI 客户端')
 
@@ -183,11 +265,13 @@ class LocalCliSync:
             return {'status': 'restored'}
         if provider == 'claude':
             if self._claude_backup:
-                path, content = self._claude_backup
+                path, content, baseline, created = self._claude_backup
                 if content is None:
                     path.unlink(missing_ok=True)
                 else:
                     private_bytes(path, content)
+                if created:
+                    created.unlink(missing_ok=True)
                 self._claude_backup = None
             return {'status': 'restored'}
         raise ValueError('不支持的本机 CLI 客户端')

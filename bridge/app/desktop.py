@@ -80,6 +80,8 @@ class Desktop:
         bridge, sessions = self.local_services()
         if action == 'desktop-sessions':
             return sessions.control(value)
+        if action == 'cli-access':
+            return bridge.cli_access.public() if value.get('action') == 'list' else bridge.cli_access.change(value)
         return bridge.accounts.control(value) if action == 'accounts' else bridge.accounts.account(value)
 
     def config(self):
@@ -326,6 +328,9 @@ class Desktop:
 
     def accounts(self, value):
         return self.local_control('accounts', 'accountsManagement', value)
+
+    def cli_access(self, value):
+        return self.local_control('cli-access', 'cliAccessManagement', value)
 
     def desktop_sessions(self, value):
         return self.local_control('desktop-sessions', 'desktopSessionsManagement', value)

@@ -67,19 +67,54 @@ class LocalCliSyncTests(unittest.TestCase):
 
     def test_managed_claude_api_is_materialized_and_restorable(self):
         identifier = 'a'*32
-        directory = self.root/'cli-access'/'claude'/identifier
-        directory.mkdir(parents=True)
-        private_json(directory/'api.json', {'key': 'fixture-key'})
+        directory = self.root/'native-claude'
+        directory.mkdir()
+        private_json(directory/'settings.json', {'hooks': {'PreToolUse': []},
+            'env': {'UNRELATED': 'keep', 'ANTHROPIC_API_KEY': 'native-key'}})
+        original = (directory/'settings.json').read_bytes()
+        secret = self.root/'cli-access'/'claude'/identifier/'api.json'
+        private_json(secret, {'key': 'fixture-key'})
         row = {'id': identifier, 'kind': 'api', 'directory': str(directory),
+               'secretPath': str(secret),
                'baseUrl': 'https://api.example', 'model': 'fixture-model', 'authScheme': 'bearer'}
         backup = self.sync.snapshot('claude')
         self.sync.apply('claude', row)
-        self.assertEqual(self.sync.verify('claude', row)['status'], 'verified')
+        with patch.object(self.sync, '_claude_auth', return_value={'loggedIn': True}) as auth:
+            self.assertEqual(self.sync.verify('claude', row)['status'], 'configured')
+        auth.assert_called_once_with(directory.resolve(), 'oauth_token')
         settings = json.loads((directory/'settings.json').read_text())
         self.assertEqual(settings['env']['ANTHROPIC_AUTH_TOKEN'], 'fixture-key')
         self.assertNotIn('ANTHROPIC_API_KEY', settings['env'])
+        self.assertEqual(settings['env']['UNRELATED'], 'keep')
+        self.assertEqual(settings['hooks'], {'PreToolUse': []})
         self.sync.restore('claude', backup)
-        self.assertFalse((directory/'settings.json').exists())
+        self.assertEqual((directory/'settings.json').read_bytes(), original)
+
+    def test_claude_switch_closes_only_idle_gateway_owned_processes(self):
+        idle = Mock()
+        idle.process.poll.return_value = None
+        idle.condition = threading.Condition()
+        idle.active = False
+        idle.pending = {}
+        active = Mock()
+        active.process.poll.return_value = None
+        active.condition = threading.Condition()
+        active.active = True
+        active.pending = {}
+        cli = SimpleNamespace(lock=threading.RLock(), owned={'idle': idle, 'active': active}, auth_cache='cached')
+        self.bridge.desktop_sessions = SimpleNamespace(adapters={'claude': SimpleNamespace(cli=cli)})
+        with self.assertRaisesRegex(ValueError, '先结束'):
+            self.sync.preflight('claude')
+        with self.assertRaisesRegex(ValueError, '先结束'):
+            self.sync._close_claude_idle()
+        idle.close.assert_not_called()
+        active.close.assert_not_called()
+        cli.owned.pop('active')
+        self.sync.preflight('claude')
+        self.sync._close_claude_idle()
+        idle.close.assert_called_once_with()
+        self.assertFalse(cli.owned)
+        self.assertIsNone(cli.auth_cache)
 
     def test_desktop_claude_import_requires_active_verified_api_snapshot(self):
         directory = self.root/'desktop-profile'

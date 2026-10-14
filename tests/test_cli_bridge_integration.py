@@ -118,17 +118,25 @@ class CliBridgeTests(CliBridgeFixture):
                 {'type': 'event_msg', 'payload': {'type': 'task_complete', 'turn_id': 'later'}},
             ):
                 stream.write(json.dumps(record) + '\n')
-        self.bridge.live[self.thread_id].retry_at = 0
+        session = self.bridge.live[self.thread_id]
+        owner_retry = session.retry_at
+        self.assertGreater(owner_retry, time.monotonic())
+        session.history_retry_at = 0
         self.bridge.timeline_read(self.thread_id)
-        self.wait_for_background_read()
+        deadline = time.monotonic() + 2
+        while session.history_refreshing and time.monotonic() < deadline:
+            time.sleep(.01)
         later = self.bridge.timeline_read(self.thread_id, 'changes', after=first['sequence'], epoch=first['epoch'], start=first['before'])
         self.assertIn('later reply', [row['text'] for row in later['rows']])
+        self.assertEqual(session.retry_at, owner_retry)
         self.assertIn(self.private_text, [row['text'] for row in self.bridge.timeline_read(self.thread_id)['rows']])
         sequence = later['sequence']
         saved_view = self.bridge.live[self.thread_id].saved_view
-        self.bridge.live[self.thread_id].retry_at = 0
+        session.history_retry_at = 0
         self.bridge.timeline_read(self.thread_id)
-        self.wait_for_background_read()
+        deadline = time.monotonic() + 2
+        while session.history_refreshing and time.monotonic() < deadline:
+            time.sleep(.01)
         unchanged = self.bridge.timeline_read(self.thread_id, 'changes', after=sequence, epoch=first['epoch'], start=first['before'])
         self.assertIs(self.bridge.live[self.thread_id].saved_view, saved_view)
         self.assertEqual(unchanged['rows'], [])

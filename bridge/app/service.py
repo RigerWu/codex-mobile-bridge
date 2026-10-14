@@ -62,6 +62,8 @@ class LiveSession:
         self.activating = False
         self.last_activation = None
         self.retry_at = 0
+        self.history_retry_at = 0
+        self.history_refreshing = False
         self.error = None
         self.viewers = 0
         self.watched = False
@@ -1084,6 +1086,7 @@ class Bridge:
         if background:
             if attach:
                 self._refresh_async(session, force)
+                self._refresh_saved_async(session)
             return session
         if attach and not session.connected:
             self._attach(session)
@@ -1111,6 +1114,32 @@ class Bridge:
     def _saved_history(self, session):
         return self.store.history(session.id, turn_limit=session.history_limit)
 
+    def _refresh_saved_async(self, session):
+        # Local rollout reads are cheap enough to follow terminal writes without
+        # repeating the slower owner discovery (or SSH) on every poll.
+        if isinstance(self.store, RemoteStore):
+            return
+        with session.condition:
+            if (session.origin != 'cli' or session.connected or session.connecting or session.saved_view is None or
+                    session.history_refreshing or self.closed.is_set() or
+                    time.monotonic() < session.history_retry_at):
+                return
+            session.history_refreshing = True
+            session.history_retry_at = time.monotonic() + 2
+        def refresh():
+            try:
+                fallback = self._saved_history(session)
+                normalized = normalize_state(fallback, False)
+                with session.condition:
+                    if not session.connected and session.saved_view != normalized:
+                        session.set_history(fallback)
+            except (OSError, ValueError, KeyError, RemoteUnavailable, StoreUnavailable):
+                pass
+            finally:
+                with session.condition:
+                    session.history_refreshing = False
+        threading.Thread(target=refresh, daemon=True).start()
+
     def _refresh_async(self, session, force=False):
         with session.condition:
             if (session.connected and not session.activity_only) or session.connecting or self.closed.is_set():
@@ -1133,6 +1162,7 @@ class Bridge:
                         with session.condition:
                             if session.saved_view != normalize_state(fallback, False):
                                 session.set_history(fallback)
+                            session.history_retry_at = time.monotonic() + 2
                     except (OSError, ValueError, KeyError, RemoteUnavailable, StoreUnavailable):
                         # A missing saved rollout must not prevent a live snapshot.
                         logging.getLogger(__name__).warning("Saved history unavailable; trying desktop snapshot")

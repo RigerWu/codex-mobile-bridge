@@ -8,8 +8,8 @@ The first passive read stores a CLI rollout snapshot in the live session. Later 
 
 ## Decision
 
-While a CLI-origin session is disconnected, periodic background reads refresh its saved rollout. An unchanged normalized snapshot does not advance the timeline sequence. This only reads saved data; it does not resume a thread, start a daemon, or claim its writer. A connected runtime remains responsible for its own events.
+While a CLI-origin session is disconnected, periodic background reads refresh its saved rollout. Local saved history has a two-second read cadence independent of the 15-second owner retry; SSH keeps the existing owner retry cadence to avoid extra remote reads. An unchanged normalized snapshot does not advance the timeline sequence. This only reads saved data; it does not resume a thread, start a daemon, or claim its writer. A connected runtime remains responsible for its own events.
 
 ## Verification
 
-An integration fixture appends a second terminal turn after the first passive read and checks that timeline changes contain the new reply with no native attach or call. The test failed before the change and passes after it.
+An integration fixture appends a second terminal turn after the first passive read and checks that timeline changes contain the new reply without advancing the owner retry, native attach or call. An unchanged repeat read yields no new rows. The test failed before the change and passes after it.

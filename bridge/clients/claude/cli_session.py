@@ -3,6 +3,7 @@
 import hashlib
 import json
 import os
+import re
 import shutil
 import subprocess
 import threading
@@ -13,9 +14,11 @@ from pathlib import Path
 from bridge.clients.claude import model
 from bridge.clients.claude.session_registry import assert_session_closed
 from bridge.clients.errors import BridgeUnavailable
+from bridge.clients.uploads import DesktopUploads
 
 
 MODES = {'default', 'acceptEdits', 'plan', 'dontAsk', 'auto', 'bypassPermissions'}
+IMAGE_URL = re.compile(r'data:(image/(?:png|jpeg|gif|webp));base64,([A-Za-z0-9+/]+={0,2})\Z')
 
 
 class ResumePreflightBlocked(BridgeUnavailable):
@@ -90,6 +93,30 @@ def _text(content):
         return '\n'.join(item.get('text', '') for item in content
                          if isinstance(item, dict) and item.get('type') == 'text')
     return ''
+
+
+def _message_content(body):
+    """Build the CLI's native stream-json user content from server-resolved uploads."""
+    images = body.get('resolvedImages') or []
+    files = body.get('resolvedFiles') or []
+    if not images and not files:
+        return body['text']
+    blocks = []
+    if body['text'].strip():
+        blocks.append({'type': 'text', 'text': body['text']})
+    for image in images:
+        match = IMAGE_URL.fullmatch(image.get('url', '')) if isinstance(image, dict) else None
+        if not match:
+            raise ValueError('图片附件格式无效')
+        blocks.append({'type': 'image', 'source': {'type': 'base64', 'media_type': match[1], 'data': match[2]}})
+    if files:
+        references = []
+        for item in files:
+            if not isinstance(item, dict) or not isinstance(item.get('path'), str) or not Path(item['path']).is_absolute() or not isinstance(item.get('name'), str):
+                raise ValueError('文件附件格式无效')
+            references.append({'name': item['name'], 'path': item['path']})
+        blocks.append({'type': 'text', 'text': '请读取并参考这些已上传的本机文件：\n'+json.dumps(references, ensure_ascii=False)})
+    return blocks
 
 
 def _saved(path, origin):
@@ -214,8 +241,9 @@ class _Owned:
 
 
 class ClaudeCli:
-    def __init__(self):
+    def __init__(self, upload_root=None):
         self.lock = threading.RLock()
+        self.upload_root = Path(upload_root) if upload_root is not None else None
         self.owned = {}
         self.index = {}
         self.auth_cache = None
@@ -355,7 +383,7 @@ class ClaudeCli:
                             'resume': can_resume,
                             'send': live and public['connectionState'] == 'ready',
                             'models': live, 'permissions': live, 'stop': live,
-                            'attachments': False, 'queue': False, 'steer': False, 'skills': False}}
+                            'attachments': True, 'queue': False, 'steer': False, 'skills': False}}
             if action == 'catalog':
                 if not live:
                     return {'models': [], 'capabilities': {'models': False}, 'notice': '请先继续这条 Claude Code 会话'}
@@ -387,6 +415,12 @@ class ClaudeCli:
                            '--output-format', 'stream-json', '--verbose', '--replay-user-messages',
                            '--setting-sources', 'user,project,local', '--permission-mode', row['permissionMode'],
                            '--permission-prompt-tool', 'stdio', '--permission-prompts', 'host']
+                if self.upload_root is not None:
+                    upload_dir = self.upload_root/DesktopUploads.scope('claude', sid)
+                    upload_dir.mkdir(parents=True, exist_ok=True, mode=0o700)
+                    if self.upload_root.is_symlink() or upload_dir.is_symlink():
+                        raise ResumePreflightBlocked('Claude Code 附件目录无效')
+                    command.extend(('--add-dir', str(upload_dir.resolve())))
                 if row['model']:
                     command.extend(('--model', row['model']))
                 try:
@@ -411,13 +445,14 @@ class ClaudeCli:
             if not live:
                 raise BridgeUnavailable('请先继续这条 Claude Code 会话')
             if action == 'send':
-                if body.get('resolvedImages') or body.get('plugins') or body.get('mode') in ('queue', 'steer'):
+                if body.get('plugins') or body.get('mode') in ('queue', 'steer'):
                     raise ValueError('Claude Code CLI 暂不支持此发送选项')
+                content = _message_content(body)
                 with owned.condition:
                     if owned.active or owned.pending:
                         raise BridgeUnavailable('请等待当前 Claude Code 任务结束后再发送')
                     owned.active = True
-                    owned.write({'type': 'user', 'message': {'role': 'user', 'content': body['text']}})
+                    owned.write({'type': 'user', 'message': {'role': 'user', 'content': content}})
             elif action == 'stop':
                 owned.control({'subtype': 'interrupt'})
             elif action == 'settings':

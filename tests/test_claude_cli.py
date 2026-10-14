@@ -10,6 +10,7 @@ from bridge.clients.claude import model
 from bridge.clients.claude.cli_session import ClaudeCli, ResumePreflightBlocked, _Owned
 from bridge.clients.errors import BridgeUnavailable
 from bridge.clients.manager import DesktopSessions
+from bridge.clients.uploads import DesktopUploads
 
 
 class ClaudeCliContract(unittest.TestCase):
@@ -37,7 +38,7 @@ class ClaudeCliContract(unittest.TestCase):
         self.auth_patch = patch('bridge.clients.claude.cli_session._auth_ready', return_value=True)
         self.profile_patch.start(); self.auth_patch.start()
         self.addCleanup(self.profile_patch.stop); self.addCleanup(self.auth_patch.stop)
-        self.cli = ClaudeCli()
+        self.cli = ClaudeCli(self.root/'uploads')
 
     def test_saved_list_and_detail_are_passive_and_closed(self):
         with patch('bridge.clients.claude.cli_session.subprocess.Popen') as popen:
@@ -92,6 +93,8 @@ class ClaudeCliContract(unittest.TestCase):
             self.assertEqual(args[0][args[0].index('--permission-mode') + 1], 'plan')
             self.assertEqual(args[0][args[0].index('--model') + 1], 'fixture-model')
             self.assertIn('--resume', args[0])
+            scope = str((self.root/'uploads'/DesktopUploads.scope('claude', self.sid)).resolve())
+            self.assertEqual(args[0][args[0].index('--add-dir') + 1], scope)
             self.assertNotIn('Fixture request', args[0])
             self.assertEqual(popen.call_count, 1)
 
@@ -132,6 +135,18 @@ class ClaudeCliContract(unittest.TestCase):
         self.assertEqual(manager.call('claude', 'resume', self.sid, body)['status'], 'ready')
         self.assertEqual(manager.call('claude', 'resume', self.sid, body)['status'], 'ready')
         adapter.call.assert_called_once_with('resume', self.sid, body)
+
+    def test_file_only_send_uses_receipt_and_does_not_replay(self):
+        manager = DesktopSessions(self.root/'gateway')
+        self.addCleanup(manager.close)
+        adapter = Mock()
+        adapter.call.return_value = {'status': 'accepted'}
+        manager.adapters['claude'] = adapter
+        body = {'id': str(uuid.uuid4()), 'text': '',
+                'resolvedFiles': [{'name': 'note.txt', 'path': str(self.root/'note.txt')}]}
+        self.assertEqual(manager.call('claude', 'send', self.sid, body)['status'], 'accepted')
+        self.assertEqual(manager.call('claude', 'send', self.sid, body)['status'], 'accepted')
+        adapter.call.assert_called_once_with('send', self.sid, body)
 
     def test_preflight_block_can_retry_with_new_receipt_after_session_closes(self):
         manager = DesktopSessions(self.root/'gateway')
@@ -196,6 +211,23 @@ class ClaudeCliContract(unittest.TestCase):
                                                                              'message': '用户拒绝了本次操作'}}})
         self.cli.call('stop', self.sid, {})
         owner.control.assert_called_with({'subtype': 'interrupt'})
+
+    def test_attachment_only_send_uses_native_image_block_and_local_file_reference(self):
+        process = Mock(); process.poll.return_value = None
+        owner = Mock(origin=self.profile['origin'], process=process, active=False,
+                     model=None, permission='plan', events=[])
+        owner.pending = {}; owner.condition = threading.Condition(); owner.error = None
+        self.cli.owned[self.native] = owner
+        self.assertTrue(self.cli.call('detail', self.sid, {})['capabilities']['attachments'])
+        file = self.root/'private note.txt'; file.write_text('fixture bytes')
+        self.cli.call('send', self.sid, {'text': '', 'resolvedImages': [
+            {'name': 'photo.png', 'url': 'data:image/png;base64,aGVsbG8='}],
+            'resolvedFiles': [{'name': file.name, 'path': str(file)}]})
+        content = owner.write.call_args.args[0]['message']['content']
+        self.assertEqual(content[0], {'type': 'image', 'source': {
+            'type': 'base64', 'media_type': 'image/png', 'data': 'aGVsbG8='}})
+        self.assertIn(str(file), content[1]['text'])
+        self.assertNotIn('fixture bytes', json.dumps(content))
 
     def test_question_approval_forwards_answers_to_owned_tool(self):
         process = Mock()

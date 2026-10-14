@@ -23,7 +23,7 @@ DESKTOP_WAIT_STATES = {'needs-screen-saver', 'needs-unlock', 'needs-desktop'}
 class Claude:
     def __init__(self, directory, *, auto_connect=True):
         self.directory = Path(directory)
-        self.cli = ClaudeCli()
+        self.cli = ClaudeCli(self.directory.parent/'uploads')
         self.desktop = None
         self.index = {}
         self.loop = None

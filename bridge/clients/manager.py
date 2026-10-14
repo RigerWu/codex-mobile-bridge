@@ -227,7 +227,7 @@ class DesktopSessions:
             return self._read(provider, action, sid, body)
         rid = str(uuid.UUID(body.get('id', '')))
         if action == 'send' and (not isinstance(body.get('text'), str) or
-                                 not body['text'].strip() and not body.get('resolvedImages') or len(body['text']) > 100000):
+                                 not body['text'].strip() and not (body.get('resolvedImages') or body.get('resolvedFiles')) or len(body['text']) > 100000):
             raise ValueError('请输入 1–100000 字的消息')
         if action == 'create' and (not isinstance(body.get('title', ''), str) or len(body.get('title', '')) > 120):
             raise ValueError('聊天名称不能超过 120 字')

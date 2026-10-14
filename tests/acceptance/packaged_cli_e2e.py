@@ -111,10 +111,12 @@ class MockHandler(BaseHTTPRequestHandler):
             messages = body.get('messages') or []
             last = messages[-1] if isinstance(messages, list) and messages else {}
             last = last if isinstance(last, dict) else {}
-            content = last.get('content')
+            latest_user = next((item for item in reversed(messages)
+                                if isinstance(item, dict) and item.get('role') == 'user'), {})
+            content = latest_user.get('content')
             self.server.record(kind='fixture-reject', reason=str(exc)[:80], path=path,
                                messageCount=len(messages) if isinstance(messages, list) else -1,
-                               lastRole=last.get('role'), contentType=type(content).__name__,
+                               lastRole=last.get('role'), latestUserContentType=type(content).__name__,
                                markers=[marker for marker in ('CLAUDE_SEED', 'CLAUDE_HTTP_SEND',
                                    'REQUEST_DENY_WRITE', 'REQUEST_ALLOW_WRITE')
                                    if marker in json.dumps(content)])
@@ -166,8 +168,9 @@ class MockHandler(BaseHTTPRequestHandler):
 
     def _claude_events(self, body):
         messages = body.get('messages') or []
-        last = messages[-1] if messages else {}
-        content = last.get('content') if isinstance(last, dict) else None
+        latest_user = next((item for item in reversed(messages)
+                            if isinstance(item, dict) and item.get('role') == 'user'), {})
+        content = latest_user.get('content')
         text = json.dumps(content)
         tool_results = [item for item in content if isinstance(item, dict)
                         and item.get('type') == 'tool_result'] if isinstance(content, list) else []

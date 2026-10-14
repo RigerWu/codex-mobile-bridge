@@ -68,6 +68,29 @@ class RemoteWorkerContract(unittest.TestCase):
         self.assertEqual(len(project_probe['sessions']), 1)
         self.assertFalse((self.config/'mobile-bridge').exists())
 
+    def test_worker_reads_utf8_chinese_history_independent_of_host_locale(self):
+        path = self.root/'中文记录.jsonl'
+        event = {'type': 'user', 'cwd': '/项目/中文目录',
+                 'message': {'role': 'user', 'content': '中文标题\n正文内容'}}
+        path.write_text(json.dumps(event, ensure_ascii=False)+'\n', encoding='utf-8')
+        original = Path.open
+        reads = []
+
+        def opening(target, *args, **kwargs):
+            if target == path:
+                reads.append(kwargs.get('encoding'))
+            return original(target, *args, **kwargs)
+
+        with patch.object(Path, 'open', opening):
+            self.assertEqual(remote_worker.events(path), [event])
+        self.assertEqual(reads, ['utf-8'])
+        saved_path = self.root/'中文项目'/(self.native + '.jsonl')
+        saved_path.parent.mkdir()
+        saved_path.write_text(path.read_text(encoding='utf-8'), encoding='utf-8')
+        saved = remote_worker.saved(saved_path, {'origin': 'fixture'}, include_events=True)
+        self.assertEqual((saved['title'], saved['cwd']), ('中文标题', '/项目/中文目录'))
+        self.assertEqual(saved['events'], [event])
+
     def test_upload_is_private_immutable_and_bound_to_remote_profile(self):
         profile = self.run_worker({'operation': 'list'})['value']['profile']
         scope, identifier = str(uuid.uuid4()), str(uuid.uuid4())

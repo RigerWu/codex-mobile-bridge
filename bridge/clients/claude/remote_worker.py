@@ -72,7 +72,7 @@ def events(path):
     if path.stat().st_size > 20_000_000:
         raise ValueError('Claude 会话记录过大')
     result = []
-    with path.open(errors='replace') as source:
+    with path.open(encoding='utf-8', errors='replace') as source:
         for line in source:
             try:
                 event = json.loads(line)
@@ -184,7 +184,7 @@ def assert_session_closed(found, native):
             continue
         if path.is_symlink() or not path.is_file() or path.stat().st_size > 65536:
             raise ValueError('无法核验 Claude Code 原会话是否仍在运行')
-        entry = json.loads(path.read_text())
+        entry = json.loads(path.read_text(encoding='utf-8'))
         if not isinstance(entry, dict):
             raise ValueError('无法核验 Claude Code 原会话是否仍在运行')
         if entry.get('sessionId') != native:

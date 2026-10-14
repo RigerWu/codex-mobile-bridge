@@ -1,5 +1,6 @@
 import json
 import os
+import queue
 import tempfile
 import threading
 import unittest
@@ -10,10 +11,11 @@ from unittest.mock import Mock, patch
 
 from bridge.clients.claude import model
 from bridge.clients.claude.adapter import Claude
-from bridge.clients.claude.cli_session import ClaudeCli, ResumePreflightBlocked, _Owned, _skill_catalog, _auth_ready, _permission_prompt_args
+from bridge.clients.claude.cli_session import ClaudeCli, ResumePreflightBlocked, _Owned, _skill_catalog, _auth_ready, _events, _saved, _permission_prompt_args
 from bridge.clients.errors import BridgeUnavailable
 from bridge.clients.manager import DesktopSessions
 from bridge.clients.uploads import DesktopUploads
+from bridge.platforms.windows import claude_process
 
 
 class ClaudeCliContract(unittest.TestCase):
@@ -97,6 +99,28 @@ class ClaudeCliContract(unittest.TestCase):
         events[0] = json.dumps(first)
         self.path.write_text('\n'.join(events) + '\n')
         self.assertEqual(self.cli.listing()['sessions'][0]['title'], 'Claude Code 会话')
+
+    def test_utf8_history_keeps_chinese_filename_cwd_title_and_body(self):
+        path = self.root/'中文记录.jsonl'
+        event = {'type': 'user', 'cwd': '/项目/中文目录',
+                 'message': {'role': 'user', 'content': '中文标题\n正文内容'}}
+        path.write_text(json.dumps(event, ensure_ascii=False)+'\n', encoding='utf-8')
+        original = Path.open
+        reads = []
+
+        def opening(target, *args, **kwargs):
+            if target == path:
+                reads.append(kwargs.get('encoding'))
+            return original(target, *args, **kwargs)
+
+        with patch.object(Path, 'open', opening):
+            self.assertEqual(_events(path), [event])
+        self.assertEqual(reads, ['utf-8'])
+        saved_path = self.root/'中文项目'/(self.native + '.jsonl')
+        saved_path.parent.mkdir()
+        saved_path.write_text(path.read_text(encoding='utf-8'), encoding='utf-8')
+        saved = _saved(saved_path, self.profile['origin'])
+        self.assertEqual((saved['title'], saved['cwd']), ('中文标题', '/项目/中文目录'))
 
     def test_create_accepts_durably_saved_user_uuid_without_replay_event(self):
         process = Mock()
@@ -438,6 +462,7 @@ class ClaudeCliContract(unittest.TestCase):
 
     def test_native_init_identity_mismatch_terminates_owned_process(self):
         process = Mock()
+        process.poll.return_value = None
         process.stdout = iter([json.dumps({'type': 'system', 'subtype': 'init',
                                            'session_id': str(uuid.uuid4()), 'cwd': str(self.cwd)})])
         owned = _Owned(process, self.profile['origin'], self.native, str(self.cwd))
@@ -445,6 +470,32 @@ class ClaudeCliContract(unittest.TestCase):
             owned.condition.wait_for(lambda: owned.error is not None, timeout=1)
         self.assertIn('身份', owned.error)
         process.terminate.assert_called_once()
+
+    def test_windows_init_identity_mismatch_closes_bound_native_child(self):
+        lines = queue.Queue()
+
+        def stream():
+            while True:
+                line = lines.get()
+                if line is None:
+                    return
+                yield line
+
+        process = Mock()
+        process.poll.return_value = None
+        process.stdout = stream()
+        owned = _Owned(process, self.profile['origin'], self.native, str(self.cwd))
+        owned.native_process = (1234, 5678)
+        with patch('bridge.clients.claude.cli_session.sys.platform', 'win32'), \
+             patch.object(claude_process, 'terminate_matching_process', return_value=True) as terminate:
+            lines.put(json.dumps({'type': 'system', 'subtype': 'init',
+                                  'session_id': str(uuid.uuid4()), 'cwd': str(self.cwd)}))
+            with owned.condition:
+                self.assertTrue(owned.condition.wait_for(lambda: owned.error is not None, timeout=1))
+            lines.put(None)
+            with owned.condition:
+                self.assertTrue(owned.condition.wait_for(lambda: owned.finished, timeout=1))
+        terminate.assert_called_once_with(1234, 5678)
 
     def test_native_cancel_and_terminal_result_clear_pending_approval(self):
         for ending in ({'type': 'control_cancel_request', 'request_id': 'pending'},
@@ -460,6 +511,22 @@ class ClaudeCliContract(unittest.TestCase):
             self.assertFalse(owned.active)
             self.assertEqual([event['type'] for event in owned.events],
                              ['result'] if ending['type'] == 'result' else [])
+
+    def test_windows_owned_close_terminates_exact_native_child(self):
+        process = Mock()
+        process.pid = 5555
+        process.stdout = iter(())
+        process.poll.return_value = None
+        owned = _Owned(process, self.profile['origin'], self.native, str(self.cwd))
+        owned.catalog = {'pid': 1234}
+        with patch('bridge.clients.claude.cli_session.sys.platform', 'win32'), \
+             patch.object(claude_process, 'owned_child_start_filetime', return_value=5678) as bind, \
+             patch.object(claude_process, 'terminate_matching_process', return_value=True) as terminate:
+            owned.bind_native_process()
+            owned.close()
+        bind.assert_called_once_with(1234, 5555)
+        terminate.assert_called_once_with(1234, 5678)
+        process.terminate.assert_called_once()
 
 
 class ClaudeCliVersionContract(unittest.TestCase):

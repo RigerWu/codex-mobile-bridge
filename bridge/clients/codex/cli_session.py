@@ -305,6 +305,10 @@ class CliSessions:
             process = self.client.process
             if process is None or self.joined.get(thread_id) is not process:
                 raise AppServerUnavailable('CLI thread is not joined on this connection')
+            starting = self.states.get(thread_id) or {}
+            starting_model = starting.get('latestModel')
+            starting_effort = starting.get('latestReasoningEffort')
+            starting_turn_ids = {turn.get('turnId') for turn in starting.get('turns', [])}
         result = self.client.request('thread/read', {'threadId': thread_id, 'includeTurns': True},
                                      replay_safe=True)
         thread = result.get('thread') or {}
@@ -329,13 +333,21 @@ class CliSessions:
                 previous = self.states.get(thread_id) or {}
                 previous_turns = {turn.get('turnId'): turn for turn in previous.get('turns', [])
                                   if turn.get('turnId')}
+                read_turn_ids = {turn.get('turnId') for turn in state['turns']}
                 for turn in state['turns']:
                     prior = previous_turns.get(turn.get('turnId')) or {}
                     if not (turn.get('params') or {}).get('model') and (prior.get('params') or {}).get('model'):
                         turn['params'] = copy.deepcopy(prior['params'])
-                if thread.get('model') is None and previous.get('latestModel'):
+                for turn_id, prior in previous_turns.items():
+                    if turn_id not in starting_turn_ids and turn_id not in read_turn_ids:
+                        state['turns'].append(copy.deepcopy(prior))
+                if previous.get('latestModel') != starting_model:
+                    state['latestModel'] = previous.get('latestModel')
+                elif thread.get('model') is None and previous.get('latestModel'):
                     state['latestModel'] = previous['latestModel']
-                if 'reasoningEffort' not in thread and 'latestReasoningEffort' in previous:
+                if previous.get('latestReasoningEffort') != starting_effort:
+                    state['latestReasoningEffort'] = previous.get('latestReasoningEffort')
+                elif 'reasoningEffort' not in thread and 'latestReasoningEffort' in previous:
                     state['latestReasoningEffort'] = previous['latestReasoningEffort']
                 for key in ('latestThreadSettings', 'currentPermissions', 'latestCollaborationMode', 'threadGoal',
                             'completedThreadGoal', 'turnPlan'):

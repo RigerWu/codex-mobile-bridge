@@ -423,6 +423,40 @@ class CliSessionTests(unittest.TestCase):
         self.assertEqual(state['latestThreadSettings']['model'], 'native-model')
         self.assertIsNone(state['latestThreadSettings']['effort'])
 
+    def test_old_native_read_cannot_erase_new_model_event_or_turn(self):
+        self.sessions.attach('thread-a', explicit=True)
+        original = self.fake.request
+        started = threading.Event()
+        release = threading.Event()
+        old_thread = self.fake.thread.copy()
+        def request(method, params, **kwargs):
+            if method == 'thread/read' and not started.is_set():
+                started.set()
+                release.wait(2)
+                return {'thread': old_thread}
+            return original(method, params, **kwargs)
+        self.fake.request = request
+        worker = threading.Thread(target=lambda: self.sessions.refresh('thread-a'))
+        worker.start()
+        self.assertTrue(started.wait(2))
+        self.sessions._event({'method': 'thread/settings/updated', 'params': {
+            'threadId': 'thread-a', 'threadSettings': {'model': 'new-model', 'effort': 'high'}}})
+        self.sessions._event({'method': 'turn/started', 'params': {
+            'threadId': 'thread-a', 'turn': {'id': 'new-turn', 'status': 'inProgress'}}})
+        release.set()
+        worker.join(2)
+        self.assertFalse(worker.is_alive())
+        state = self.sessions.states['thread-a']
+        self.assertEqual(state['latestModel'], 'new-model')
+        self.assertEqual(state['latestReasoningEffort'], 'high')
+        self.assertEqual(state['turns'][-1]['turnId'], 'new-turn')
+        self.assertEqual(state['turns'][-1]['params']['model'], 'new-model')
+        self.fake.thread['model'] = 'later-native-model'
+        self.fake.thread['reasoningEffort'] = 'low'
+        state = self.sessions.refresh('thread-a')
+        self.assertEqual(state['latestModel'], 'later-native-model')
+        self.assertEqual(state['latestReasoningEffort'], 'low')
+
     def test_resume_projects_persisted_mode_tier_and_goal(self):
         original = self.fake.request
         def request(method, params, **kwargs):

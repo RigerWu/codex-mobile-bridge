@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Isolated native Windows Codex daemon acceptance with a loopback model API.
 
-The companion PowerShell launcher runs this from a standard non-admin terminal.
+The companion CMD/Python launcher runs this from a standard non-admin terminal.
 It uses only the staged CLI and project under the caller's temporary test root.
 """
 import json

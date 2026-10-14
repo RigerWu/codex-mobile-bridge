@@ -368,7 +368,7 @@ Alternatively, double-click `启动手机网关.command`. Stop with `Ctrl+C`, `p
 
 Open the printed LAN URL on a phone on the same network, for example `http://192.168.1.10:8787`. The initial username is `admin`; the generated password is in `.local/首次登录.txt`. Select a chat and wait for **Connected** before sending.
 
-Without `--lan`, the gateway listens only on `127.0.0.1`. It does not install a system login service. Restarting the gateway requires logging in again. If a chat shows saved history only, open it in the desktop App and reconnect on the phone; the gateway does not create a replacement execution owner for an unloaded chat.
+Without `--lan`, the gateway listens only on `127.0.0.1`. It does not install a system login service. Restarting the gateway requires logging in again. If a Desktop chat shows saved history only, open it in the desktop App and reconnect on the phone; the gateway does not replace its original execution owner. In v2.1.0-preview.1, use **Continue chat** to explicitly connect or resume a CLI chat after its terminal closes. Reading history does not start a runtime.
 
 ## Temporary HTTPS and existing proxies
 
@@ -407,7 +407,7 @@ Preserve the external Host header, Origin, cookies and CSRF header; disable prox
 - **Confirmations:** respond to supported command, file, permission and question requests. Unsupported requests should be handled in the desktop App.
 - **Unknown result:** inspect chat history before trying again. The gateway does not automatically replay an uncertain submission.
 
-Work mode follows the chat unless manually selected. Default and Plan messages can be queued; steering retains the running turn's mode. Modes preserve the original host, model, provider and permissions. After a goal request is accepted, subsequent messages return to ordinary input without cancelling the goal. Local chats support pausing, resuming, editing and closing goals from the browser; these controls are not yet supported for SSH chats. Pause before editing. Saving replaces the objective and resets usage while retaining the token budget and paused state; resume to continue. Pausing or closing a goal does not interrupt an active reply; use Stop for that. Manage budgets with existing Codex controls. These features require desktop runtime support; see [verification scope](VERIFICATION.md).
+Work mode follows the chat unless manually selected. Default and Plan messages can be queued; steering retains the running turn's mode. Modes preserve the original host, model, provider and permissions. After a goal request is accepted, subsequent messages return to ordinary input without cancelling the goal. Compatible local App chats and local/SSH native CLI chats support pausing, resuming, editing and closing goals from the browser. SSH chats executed by an App owner do not support these controls. Pause before editing. Saving replaces the objective and resets usage while retaining the token budget and paused state; resume to continue. Pausing or closing a goal does not interrupt an active reply; use Stop for that. Manage budgets with existing Codex controls. These features require support from the actual execution runtime; see [verification scope](VERIFICATION.md).
 
 ## Login settings
 
@@ -478,7 +478,7 @@ Keep the process running using the user's chosen launcher or an authorized proce
 | HTTP 502/504 | Proxy upstream, SSH connection and remote loopback port |
 | Host/Origin rejection | Exact allowed HTTPS origin and preserved external Host header |
 | Login keeps resetting | HTTPS throughout the external path, cookies preserved, caching disabled |
-| Only saved history | Open the chat in the original desktop App and confirm owner connectivity |
+| Only saved history | Desktop: open the chat in its original App and confirm owner connectivity. CLI: choose **Continue chat** to connect or resume |
 | Tunnel fails but LAN works | Outbound network restrictions, executable path and tunnel logs |
 | QR login shows `CERTIFICATE_VERIFY_FAILED` | Update to beta.4 or later, which bundles trusted CA roots. If it persists, check system time, HTTPS interception and the domain's certificate chain; keep verification enabled. Restart the gateway for ntfy to use the updated TLS implementation |
 | ntfy receives but chat link fails | Notification click URL, gateway availability and phone network reachability |

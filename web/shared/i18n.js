@@ -650,6 +650,7 @@ const en={
 "首条消息":"First message",
 "创建并发送":"Create and send",
 "请填写聊天名称和首条消息":"Enter a conversation name and first message",
+"请输入首条消息":"Enter a first message",
 "请输入聊天名称":"Enter a conversation name",
 "账号登录与接入设置请在对应桌面应用中管理。":"Manage sign-in and connection settings in the corresponding desktop app.",
 "进入会话后查看该会话的可用模型与思考强度。":"Open a conversation to view its available models and reasoning effort.",
@@ -1090,6 +1091,9 @@ const en={
 "应用到此会话":"Apply to this session",
 "沿用桌面项目的配置":"Use the desktop project settings",
 "请先在桌面客户端创建一个项目会话":"Create a project session in the desktop client first",
+"沿用所选项目与客户端配置":"Use the selected project and client settings",
+"请先在客户端创建一个项目会话":"Create a project chat in the client first",
+"结果待核对，请检查原会话列表":"Result unconfirmed. Check the original chat list",
 
 "请填写 Harness 程序、工作目录和数据目录":"Fill in the Harness executable, working directory and data directory",
 "Harness 程序或工作目录不存在":"The Harness executable or working directory does not exist",

@@ -62,6 +62,10 @@ class RemoteWorkerContract(unittest.TestCase):
         self.assertEqual(len(detail['events']), 2)
         self.assertEqual(detail['cwd'], str(self.cwd))
         self.assertTrue(self.run_worker({'operation': 'auth', 'origin': profile['origin']})['value']['ready'])
+        project_probe = self.run_worker({'operation': 'projects'})['value']
+        self.assertEqual(project_probe['profile']['origin'], profile['origin'])
+        self.assertTrue(project_probe['authReady'])
+        self.assertEqual(len(project_probe['sessions']), 1)
         self.assertFalse((self.config/'mobile-bridge').exists())
 
     def test_upload_is_private_immutable_and_bound_to_remote_profile(self):
@@ -165,6 +169,16 @@ class RemoteAdapterContract(unittest.TestCase):
             result = self.cli.call('detail', row['id'], {})
         self.assertEqual(result['session']['contextUsage']['usedTokens'], 15)
         self.assertEqual(result['session']['contextUsage']['model'], 'remote-model')
+
+    def test_project_discovery_uses_one_bounded_host_probe(self):
+        self.hosts.projects.return_value = [{'host': 'ssh:test', 'cwd': '/remote/project'}]
+        with patch.object(remote, '_remote', return_value={
+                'profile': {'origin': self.row['origin']}, 'authReady': True,
+                'sessions': [self.row]}) as request:
+            projects = self.cli.projects()
+        self.assertEqual(len(projects), 1)
+        self.assertEqual(projects[0]['cwd'], '/remote/project')
+        request.assert_called_once_with('fixture-loopback', {'operation': 'projects'}, timeout=12)
 
     def test_offline_host_refresh_does_not_block_cached_list_or_live_controls(self):
         row = self.cli._row('ssh:test', self.hosts.hosts()['ssh:test'], self.row)

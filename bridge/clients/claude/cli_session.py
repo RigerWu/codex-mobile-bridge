@@ -6,6 +6,7 @@ import os
 import re
 import shutil
 import subprocess
+import sys
 import threading
 import time
 import uuid
@@ -27,6 +28,33 @@ PERMISSION_OPTIONS = (
     ('auto', '自动模式', '由 Claude 判断可自动执行的操作'),
     ('bypassPermissions', '完全访问', '跳过权限确认'),
 )
+_MANAGED_API_ROUTING = {
+    'CLAUDE_CODE_PROVIDER_MANAGED_BY_HOST',
+    'CLAUDE_CODE_USE_ANTHROPIC_AWS',
+    'CLAUDE_CODE_USE_BEDROCK',
+    'CLAUDE_CODE_USE_FOUNDRY',
+    'CLAUDE_CODE_USE_MANTLE',
+    'CLAUDE_CODE_USE_VERTEX',
+}
+
+
+def managed_api_env(source=None):
+    """Keep ambient provider credentials and routing out of a selected API profile."""
+    source = os.environ if source is None else source
+    return {key: value for key, value in source.items()
+            if not key.startswith('ANTHROPIC_') and key not in _MANAGED_API_ROUTING}
+
+
+def _permission_prompt_args(binary, env):
+    """Claude 2.1.168 routes stdio prompts before --permission-prompts existed."""
+    try:
+        version = subprocess.run([binary, '--version'], env=env, capture_output=True,
+                                 text=True, encoding='utf-8', errors='replace', timeout=5)
+        if version.returncode == 0 and re.match(r'\A2\.1\.168(?:\s|\Z)', version.stdout):
+            return []
+    except (OSError, subprocess.SubprocessError):
+        pass
+    return ['--permission-prompts', 'host']
 
 
 def _skill_catalog(catalog):
@@ -65,9 +93,9 @@ def _profile():
         origin = 'default:' + str(directory)
         cockpit = Path.home()/'.cockpit_tools'
         try:
-            selected = json.loads((cockpit/'provider_current_accounts.json').read_text())['current_accounts']['claude_code_account']
-            accounts = json.loads((cockpit/'claude_accounts.json').read_text())['accounts']
-            instances = json.loads((cockpit/'claude_instances.json').read_text())['instances']
+            selected = json.loads((cockpit/'provider_current_accounts.json').read_text(encoding='utf-8'))['current_accounts']['claude_code_account']
+            accounts = json.loads((cockpit/'claude_accounts.json').read_text(encoding='utf-8'))['accounts']
+            instances = json.loads((cockpit/'claude_instances.json').read_text(encoding='utf-8'))['instances']
             if any(item.get('id') == selected for item in accounts):
                 instance = next(item for item in instances if item.get('bindAccountId') == selected
                                 and item.get('launchMode') == 'cli')
@@ -84,13 +112,12 @@ def _profile():
 
 
 def _auth_ready(profile):
-    env = os.environ.copy()
-    if profile.get('managedApi'):
-        env = {key: value for key, value in env.items() if not key.startswith('ANTHROPIC_')}
+    env = managed_api_env() if profile.get('managedApi') else os.environ.copy()
     env['CLAUDE_CONFIG_DIR'] = str(profile['directory'])
     try:
         process = subprocess.run([profile['binary'], 'auth', 'status', '--json'],
-                                 env=env, capture_output=True, text=True, timeout=5)
+                                 env=env, capture_output=True, text=True, encoding='utf-8',
+                                 errors='replace', timeout=5)
         return process.returncode == 0 and json.loads(process.stdout).get('loggedIn') is True
     except (OSError, subprocess.SubprocessError, ValueError):
         return False
@@ -100,7 +127,7 @@ def _events(path):
     if path.stat().st_size > 20_000_000:
         raise ValueError('Claude 会话记录过大，无法读取')
     result = []
-    with path.open(errors='replace') as source:
+    with path.open(encoding='utf-8', errors='replace') as source:
         for line in source:
             try:
                 event = json.loads(line)
@@ -190,7 +217,6 @@ class _Owned:
         self.responses = {}
         self.pending = {}
         self.events = []
-        self.user_acks = set()
         self.active = False
         self.model = None
         self.permission = None
@@ -198,7 +224,24 @@ class _Owned:
         self.error = None
         self.preflight = None
         self.finished = False
+        self.native_process = None
         threading.Thread(target=self._read, daemon=True, name='claude-cli-reader').start()
+
+    def bind_native_process(self):
+        if sys.platform != 'win32':
+            return
+        from bridge.platforms.windows import claude_process
+        pid = self.catalog.get('pid')
+        try:
+            if self.process.poll() is not None:
+                raise OSError('Claude CLI launcher exited before process binding')
+            start = (claude_process.process_start_filetime(pid) if pid == self.process.pid
+                     else claude_process.owned_child_start_filetime(pid, self.process.pid))
+        except OSError as exc:
+            raise BridgeUnavailable('无法确认 Claude Code 原生进程身份') from exc
+        if start is None:
+            raise BridgeUnavailable('Claude Code 原生进程已关闭')
+        self.native_process = (pid, start)
 
     def _read(self):
         try:
@@ -209,6 +252,7 @@ class _Owned:
                     continue
                 if not isinstance(event, dict):
                     continue
+                mismatched = False
                 with self.condition:
                     kind = event.get('type')
                     if kind == 'bridge_preflight':
@@ -228,7 +272,7 @@ class _Owned:
                     elif kind == 'system' and event.get('subtype') == 'init':
                         if event.get('session_id') != self.native or event.get('cwd') != self.cwd:
                             self.error = 'Claude 会话身份或工作目录不一致'
-                            self.process.terminate()
+                            mismatched = True
                         self.model = event.get('model') or self.model
                         self.permission = event.get('permissionMode') or self.permission
                     elif kind == 'system' and event.get('subtype') == 'status':
@@ -240,12 +284,11 @@ class _Owned:
                         self.active = False
                         self.pending.clear()
                         self.events.append(event)
-                    elif kind == 'user':
-                        if event.get('isReplay') is True and isinstance(event.get('uuid'), str):
-                            self.user_acks.add(event['uuid'])
                     elif kind == 'assistant':
                         self.events.append(event)
                     self.condition.notify_all()
+                if mismatched and (sys.platform != 'win32' or self.native_process is not None):
+                    self.close()
         finally:
             with self.condition:
                 self.finished = True
@@ -274,13 +317,20 @@ class _Owned:
         return response.get('response') or {}
 
     def close(self):
-        if self.process.poll() is None:
-            self.process.terminate()
-            try:
-                self.process.wait(timeout=3)
-            except subprocess.TimeoutExpired:
-                self.process.kill()
-                self.process.wait(timeout=3)
+        try:
+            if self.native_process is not None:
+                from bridge.platforms.windows import claude_process
+                pid, start = self.native_process
+                claude_process.terminate_matching_process(pid, start)
+                self.native_process = None
+        finally:
+            if self.process.poll() is None:
+                self.process.terminate()
+                try:
+                    self.process.wait(timeout=3)
+                except subprocess.TimeoutExpired:
+                    self.process.kill()
+                    self.process.wait(timeout=3)
 
 
 class ClaudeCli:
@@ -401,14 +451,12 @@ class ClaudeCli:
             raise ValueError('原项目目录不可用')
         native = str(uuid.uuid4())
         sid = model.gateway_id('cli:' + origin, native)
-        env = os.environ.copy()
-        if profile.get('managedApi'):
-            env = {key: value for key, value in env.items() if not key.startswith('ANTHROPIC_')}
+        env = managed_api_env() if profile.get('managedApi') else os.environ.copy()
         env['CLAUDE_CONFIG_DIR'] = str(profile['directory'])
         command = [profile['binary'], '-p', '--session-id', native, '--input-format', 'stream-json',
                    '--output-format', 'stream-json', '--verbose', '--replay-user-messages',
                    '--setting-sources', 'user,project,local', '--permission-prompt-tool', 'stdio',
-                   '--permission-prompts', 'host', '--allow-dangerously-skip-permissions']
+                   *_permission_prompt_args(profile['binary'], env), '--allow-dangerously-skip-permissions']
         if self.upload_root is not None:
             upload_dir = self.upload_root/DesktopUploads.scope('claude', sid)
             upload_dir.mkdir(parents=True, exist_ok=True, mode=0o700)
@@ -419,10 +467,12 @@ class ClaudeCli:
         if not fresh or fresh['origin'] != origin:
             raise BridgeUnavailable('原 Claude Code 账号配置已变化或不可用')
         process = subprocess.Popen(command, cwd=str(project), env=env, stdin=subprocess.PIPE,
-                                   stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True, bufsize=1)
+                                   stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True,
+                                   encoding='utf-8', errors='replace', bufsize=1)
         owned = _Owned(process, origin, native, str(project))
         try:
             owned.catalog = owned.control({'subtype': 'initialize', 'hooks': None}, timeout=30)
+            owned.bind_native_process()
             if owned.error:
                 raise BridgeUnavailable(owned.error)
             owned.permission = owned.catalog.get('current_permission_mode')
@@ -433,19 +483,19 @@ class ClaudeCli:
                 owned.active = True
                 owned.write({'type': 'user', 'uuid': message_id,
                              'message': {'role': 'user', 'content': message}})
-                acknowledged = owned.condition.wait_for(
-                    lambda: message_id in owned.user_acks or owned.finished or owned.error,
-                    timeout=20)
-                if not acknowledged or message_id not in owned.user_acks:
-                    raise BridgeUnavailable('Claude Code 新建消息结果不明，请检查会话列表')
-            deadline = time.monotonic() + 10
+            deadline = time.monotonic() + 20
             while time.monotonic() < deadline:
                 self.listing()
                 with self.lock:
-                    if sid in self.index:
+                    row = self.index.get(sid)
+                    if row and any(event.get('type') == 'user' and event.get('uuid') == message_id
+                                   for event in row['events']):
                         return {'status': 'ready', 'result': {'id': sid}}
+                with owned.condition:
+                    if owned.error or owned.finished:
+                        break
                 time.sleep(.1)
-            raise BridgeUnavailable('Claude Code 新建记录尚未出现，请检查会话列表')
+            raise BridgeUnavailable('Claude Code 新建消息结果不明，请检查会话列表')
         except Exception:
             if native not in self.owned:
                 owned.close()
@@ -516,15 +566,12 @@ class ClaudeCli:
                     cwd = str(Path(row['cwd']).resolve(strict=True))
                 except OSError as exc:
                     raise ResumePreflightBlocked('原项目目录不可用，请在电脑端检查') from exc
-                env = os.environ.copy()
-                if profile.get('managedApi'):
-                    env = {key: value for key, value in env.items() if not key.startswith('ANTHROPIC_')}
+                env = managed_api_env() if profile.get('managedApi') else os.environ.copy()
                 env['CLAUDE_CONFIG_DIR'] = str(profile['directory'])
                 command = [profile['binary'], '-p', '--resume', native, '--input-format', 'stream-json',
                            '--output-format', 'stream-json', '--verbose', '--replay-user-messages',
                            '--setting-sources', 'user,project,local', '--permission-mode', row['permissionMode'],
-                           '--permission-prompt-tool', 'stdio', '--permission-prompts', 'host',
-                           '--allow-dangerously-skip-permissions']
+                           '--permission-prompt-tool', 'stdio', '--allow-dangerously-skip-permissions']
                 if self.upload_root is not None:
                     upload_dir = self.upload_root/DesktopUploads.scope('claude', sid)
                     upload_dir.mkdir(parents=True, exist_ok=True, mode=0o700)
@@ -533,15 +580,18 @@ class ClaudeCli:
                     command.extend(('--add-dir', str(upload_dir.resolve())))
                 if row['model']:
                     command.extend(('--model', row['model']))
+                command.extend(_permission_prompt_args(profile['binary'], env))
                 try:
                     assert_session_closed(profile['directory'], native)
                 except BridgeUnavailable as exc:
                     raise ResumePreflightBlocked(str(exc)) from exc
                 process = subprocess.Popen(command, cwd=cwd, env=env, stdin=subprocess.PIPE,
-                                           stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True, bufsize=1)
+                                           stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True,
+                                           encoding='utf-8', errors='replace', bufsize=1)
                 owned = _Owned(process, profile['origin'], native, cwd)
                 try:
                     owned.catalog = owned.control({'subtype': 'initialize', 'hooks': None}, timeout=30)
+                    owned.bind_native_process()
                     if owned.error:
                         raise BridgeUnavailable(owned.error)
                     owned.permission = owned.catalog.get('current_permission_mode') or row['permissionMode']
@@ -593,11 +643,7 @@ class ClaudeCli:
                 if result.get('mode') != mode:
                     raise BridgeUnavailable('Claude Code 未确认权限模式')
                 with owned.condition:
-                    deadline = time.monotonic() + 5
-                    while owned.permission != mode and owned.process.poll() is None and time.monotonic() < deadline:
-                        owned.condition.wait(max(0, deadline-time.monotonic()))
-                    if owned.permission != mode:
-                        raise BridgeUnavailable('Claude Code 尚未报告生效的权限模式，请刷新检查')
+                    owned.permission = mode
             elif action == 'respond':
                 rid = body.get('requestId')
                 with owned.condition:

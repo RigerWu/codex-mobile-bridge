@@ -68,6 +68,29 @@ class RemoteWorkerContract(unittest.TestCase):
         self.assertEqual(len(project_probe['sessions']), 1)
         self.assertFalse((self.config/'mobile-bridge').exists())
 
+    def test_worker_reads_utf8_chinese_history_independent_of_host_locale(self):
+        path = self.root/'中文记录.jsonl'
+        event = {'type': 'user', 'cwd': '/项目/中文目录',
+                 'message': {'role': 'user', 'content': '中文标题\n正文内容'}}
+        path.write_text(json.dumps(event, ensure_ascii=False)+'\n', encoding='utf-8')
+        original = Path.open
+        reads = []
+
+        def opening(target, *args, **kwargs):
+            if target == path:
+                reads.append(kwargs.get('encoding'))
+            return original(target, *args, **kwargs)
+
+        with patch.object(Path, 'open', opening):
+            self.assertEqual(remote_worker.events(path), [event])
+        self.assertEqual(reads, ['utf-8'])
+        saved_path = self.root/'中文项目'/(self.native + '.jsonl')
+        saved_path.parent.mkdir()
+        saved_path.write_text(path.read_text(encoding='utf-8'), encoding='utf-8')
+        saved = remote_worker.saved(saved_path, {'origin': 'fixture'}, include_events=True)
+        self.assertEqual((saved['title'], saved['cwd']), ('中文标题', '/项目/中文目录'))
+        self.assertEqual(saved['events'], [event])
+
     def test_upload_is_private_immutable_and_bound_to_remote_profile(self):
         profile = self.run_worker({'operation': 'list'})['value']['profile']
         scope, identifier = str(uuid.uuid4()), str(uuid.uuid4())
@@ -85,23 +108,24 @@ class RemoteWorkerContract(unittest.TestCase):
         found = {'directory': str(self.config)}
         pid = 32123
         registry = self.config/'sessions'/(str(pid)+'.json')
-        entry = {'sessionId': self.native, 'pid': pid, 'procStart': 'Wed Oct 14 10:00:00 2026',
-                 'pidDomain': 'darwin:machine:pid:[123]'}
+        entry = {'sessionId': self.native, 'pid': pid, 'procStart': '123456',
+                 'pidDomain': 'linux:machine:pid:[123]'}
         registry.write_text(json.dumps(entry))
-        with patch.object(remote_worker, 'pid_domain', return_value=entry['pidDomain']), \
-             patch.object(remote_worker.os, 'kill', return_value=None), \
-             patch.object(remote_worker.subprocess, 'run', return_value=SimpleNamespace(
-                 returncode=0, stdout='Wed Oct 14 10:00:00 2026\n')):
-            with self.assertRaisesRegex(ValueError, '其他终端运行'):
+        with patch.object(remote_worker.sys, 'platform', 'linux'), \
+             patch.object(remote_worker, 'pid_domain', return_value=entry['pidDomain']):
+            with patch.object(remote_worker, 'linux_process_start', return_value='123456'):
+                with self.assertRaisesRegex(ValueError, '其他终端运行'):
+                    remote_worker.assert_session_closed(found, self.native)
+            for token in (None, '123457'):
+                with patch.object(remote_worker, 'linux_process_start', return_value=token):
+                    remote_worker.assert_session_closed(found, self.native)
+            entry['procStart'] = 'Wed Oct 14 10:00:00 2026'
+            registry.write_text(json.dumps(entry))
+            with self.assertRaisesRegex(ValueError, '无法核验'):
                 remote_worker.assert_session_closed(found, self.native)
-        with patch.object(remote_worker, 'pid_domain', return_value=entry['pidDomain']), \
-             patch.object(remote_worker.os, 'kill', return_value=None), \
-             patch.object(remote_worker.subprocess, 'run', return_value=SimpleNamespace(
-                 returncode=0, stdout='Wed Oct 14 11:00:00 2026\n')):
-            remote_worker.assert_session_closed(found, self.native)
-        entry['pidDomain'] = 'darwin:other:pid:[456]'
+        entry['pidDomain'] = 'linux:other:pid:[456]'
         registry.write_text(json.dumps(entry))
-        with patch.object(remote_worker, 'pid_domain', return_value='darwin:machine:pid:[123]'):
+        with patch.object(remote_worker, 'pid_domain', return_value='linux:machine:pid:[123]'):
             with self.assertRaisesRegex(ValueError, '无法核验'):
                 remote_worker.assert_session_closed(found, self.native)
 
@@ -110,7 +134,7 @@ class RemoteWorkerContract(unittest.TestCase):
         with patch.object(remote_worker.sys, 'platform', 'linux'), \
              patch.object(remote_worker.Path, 'read_text', return_value='machine-id\n'), \
              patch.object(remote_worker.os, 'readlink', return_value='pid:[123]'):
-            self.assertEqual(remote_worker.pid_domain(), 'darwin:machine-id:pid:[123]')
+            self.assertEqual(remote_worker.pid_domain(), 'linux:machine-id:pid:[123]')
         self.assertEqual(remote_worker.sys.platform, original)
 
     def test_remote_origin_tracks_account_without_rotating_stable_identity(self):
@@ -141,6 +165,14 @@ class RemoteAdapterContract(unittest.TestCase):
         self.row = {'nativeId': self.native, 'origin': 'default:/remote/.claude:abc',
                     'cwd': '/remote/project', 'model': 'fixture-model', 'permissionMode': 'plan',
                     'permissionKnown': True, 'updatedAt': 1, 'title': 'remote fixture'}
+
+    def test_ssh_json_uses_utf8_for_unicode_requests(self):
+        with patch.object(remote, '_command', return_value=['ssh', 'fixture']), \
+             patch.object(remote.subprocess, 'run', return_value=SimpleNamespace(
+                 returncode=0, stdout='{"ok":true,"value":{}}')) as run:
+            self.assertEqual(remote._remote('fixture', {'cwd': '/项目'}), {})
+        self.assertEqual(run.call_args.kwargs['encoding'], 'utf-8')
+        self.assertIn('/项目', run.call_args.kwargs['input'])
 
     def test_host_and_profile_scope_and_passive_listing(self):
         with patch.object(remote, '_remote', return_value={'sessions': [self.row]}) as request, \

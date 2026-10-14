@@ -51,7 +51,8 @@ class MockAPI(BaseHTTPRequestHandler):
         self.credentials.append(credential)
         body = json.loads(self.rfile.read(int(self.headers['Content-Length'])))
         self.bodies.append(body)
-        latest = json.dumps(body.get('messages', [])[-1:])
+        latest = json.dumps(next((message for message in reversed(body.get('messages', []))
+                                  if message.get('role') == 'user'), {}))
         tool = 'REQUEST_BASH_APPROVAL' in latest and not type(self).approval_sent
         slow = 'SLOW_TURN' in latest and not type(self).slow_sent
         if tool:

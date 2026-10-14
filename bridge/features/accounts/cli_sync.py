@@ -2,9 +2,8 @@
 
 import hashlib
 import json
-import os
-import socket
 import subprocess
+import tempfile
 from pathlib import Path
 
 from bridge.clients.desktop_app import DesktopApp
@@ -36,16 +35,8 @@ class LocalCliSync:
                 raise ValueError('请先结束或断开本机 Codex CLI 会话后再切换接入')
         if self._accounts().blockers():
             raise ValueError('有任务或待发送消息，请先处理后再切换接入')
-        path = Path(cli.client.socket_path)
-        if path.exists():
-            with socket.socket(socket.AF_UNIX) as probe:
-                probe.settimeout(.25)
-                try:
-                    probe.connect(str(path))
-                except (OSError, TimeoutError):
-                    pass  # Stale socket is not a running daemon.
-                else:
-                    raise ValueError('本机 Codex CLI 后台服务仍在运行，请先正常结束后再切换')
+        if cli.daemon_may_be_running():
+            raise ValueError('本机 Codex CLI 后台服务仍在运行或状态未知，请先正常结束后再切换')
 
     def _claude_dir(self, row):
         candidate = Path(row['directory']).expanduser()
@@ -67,7 +58,7 @@ class LocalCliSync:
         base = (self.bridge.data_dir/'cli-access'/'claude').resolve()
         if path.parent.parent != base or path.parent.name != row['id'] or path.name != 'api.json':
             raise ValueError('Claude API 密钥不属于本机接入管理器')
-        key = json.loads(path.read_text())['key']
+        key = json.loads(path.read_text(encoding='utf-8'))['key']
         if not isinstance(key, str) or not key:
             raise ValueError('Claude Code API Key 不可用')
         return key
@@ -79,7 +70,7 @@ class LocalCliSync:
     @staticmethod
     def _claude_settings(directory):
         path = directory/'settings.json'
-        settings = json.loads(path.read_text()) if path.is_file() else {}
+        settings = json.loads(path.read_text(encoding='utf-8')) if path.is_file() else {}
         if not isinstance(settings, dict) or not isinstance(settings.get('env', {}), dict):
             raise ValueError('Claude Code 设置无法安全合并')
         return path, settings
@@ -103,21 +94,46 @@ class LocalCliSync:
 
     @staticmethod
     def _claude_auth(directory, expected):
-        from bridge.clients.claude.cli_session import _profile
+        from bridge.clients.claude.cli_session import _profile, managed_api_env
         profile = _profile()
         if not profile:
             raise ValueError('找不到 Claude Code CLI')
-        env = {key: value for key, value in os.environ.items() if not key.startswith('ANTHROPIC_')}
+        env = managed_api_env() if expected else None
+        if env is None:
+            import os
+            env = os.environ.copy()
         env['CLAUDE_CONFIG_DIR'] = str(directory)
         try:
             result = subprocess.run([profile['binary'], 'auth', 'status', '--json'],
-                                    env=env, capture_output=True, text=True, timeout=10)
+                                    env=env, capture_output=True, text=True, encoding='utf-8', timeout=10)
             status = json.loads(result.stdout)
         except (OSError, subprocess.SubprocessError, ValueError) as exc:
             raise ValueError('Claude Code CLI 认证状态无法核验') from exc
+        if not isinstance(status, dict):
+            raise ValueError('Claude Code CLI 认证状态无法核验')
         if (result.returncode or status.get('loggedIn') is not True
                 or expected and status.get('authMethod') != expected):
             raise ValueError('Claude Code CLI 未识别所选认证方式')
+        if 'configDirectory' not in status:
+            # Older Claude Code versions omit the directory in auth status.
+            # Require a negative control to prove this invocation uses the
+            # selected CLAUDE_CONFIG_DIR rather than another local profile.
+            try:
+                with tempfile.TemporaryDirectory(prefix='.cmb-claude-auth-', dir=directory.parent) as control_dir:
+                    control_env = {**env, 'CLAUDE_CONFIG_DIR': control_dir}
+                    control = subprocess.run([profile['binary'], 'auth', 'status', '--json'],
+                                             env=control_env, capture_output=True, text=True, encoding='utf-8', timeout=10)
+                    control_status = json.loads(control.stdout)
+            except (OSError, subprocess.SubprocessError, ValueError) as exc:
+                raise ValueError('Claude Code CLI 认证状态无法核验') from exc
+            if (control.returncode != 1 or not isinstance(control_status, dict)
+                    or control_status.get('loggedIn') is not False
+                    or control_status.get('authMethod') != 'none'):
+                raise ValueError('Claude Code CLI 配置目录无法核验')
+        else:
+            config_dir = status['configDirectory']
+            if not isinstance(config_dir, str) or Path(config_dir).resolve() != directory.resolve():
+                raise ValueError('Claude Code CLI 配置目录无法核验')
         return status
 
     def preflight(self, provider):
@@ -234,14 +250,16 @@ class LocalCliSync:
             if (config.get('model_provider') or 'openai') != expected:
                 raise ValueError('本机 Codex CLI 模型提供商未生效')
             if row['kind'] == 'chatgpt':
-                tokens = json.loads((accounts.home/'auth.json').read_text()).get('tokens') or {}
-                if auth.get('email') != row.get('email') or token_owner({'tokens': tokens}) != row.get('tokenOwner'):
+                tokens = json.loads((accounts.home/'auth.json').read_text(encoding='utf-8')).get('tokens') or {}
+                if (auth.get('type') != 'chatgpt' or auth.get('email') != row.get('email')
+                        or token_owner({'tokens': tokens}) != row.get('tokenOwner')):
                     raise ValueError('本机 Codex CLI 账号身份未生效')
             else:
                 provider_config = (config.get('model_providers') or {}).get('bridge_api') or {}
-                secret = json.loads((accounts.directory(row['id'])/'api.json').read_text())['key']
-                actual = json.loads((accounts.home/'auth.json').read_text()).get('OPENAI_API_KEY')
+                secret = json.loads((accounts.directory(row['id'])/'api.json').read_text(encoding='utf-8'))['key']
+                actual = json.loads((accounts.home/'auth.json').read_text(encoding='utf-8')).get('OPENAI_API_KEY')
                 if (auth.get('type') != 'apiKey' or provider_config.get('base_url') != row['baseUrl']
+                        or config.get('openai_base_url') != row['baseUrl']
                         or config.get('model') != row['model'] or actual != secret):
                     raise ValueError('本机 Codex CLI API 接入未生效')
             return {'status': 'verified', 'sharedWithDesktop': True}
@@ -313,10 +331,10 @@ class LocalCliSync:
         saved, path = store._account(desktop_id)
         if saved['kind'] != 'api':
             raise ValueError('Claude Desktop 官方登录不能复制到 CLI')
-        gateway = json.loads((path/'gateway.json').read_text())
+        gateway = json.loads((path/'gateway.json').read_text(encoding='utf-8'))
         config = gateway['config']
         digest = hashlib.sha256(json.dumps(config, sort_keys=True, separators=(',', ':')).encode()).hexdigest()
-        manifest = json.loads((path/'manifest.json').read_text())
+        manifest = json.loads((path/'manifest.json').read_text(encoding='utf-8'))
         if digest != saved.get('fingerprint') or manifest.get('fingerprint') != digest:
             raise ValueError('Claude Desktop API 快照与当前接入不一致')
         auth = config.get('inferenceGatewayAuthScheme')

@@ -47,6 +47,23 @@ launch scripts during discovery, and ignores non-executable files and standalone
 `codex` / `claude` CLI binaries. Claude's native Console auto-connection helper
 currently supports macOS and Windows only; Linux reports that limitation.
 
+## CLI validation for the v2.1.0 candidate
+
+Real Linux x64 SSH acceptance now covers Codex CLI 0.160.0 warm join,
+closed-session resume, new chats, permission changes and Goal controls. Ubuntu
+22.04.5 x64 with Claude Code 2.1.287 covers closed-session resume, new chats,
+send, model/permission controls, Skills, file uploads, approval refusal and
+interrupt. Linux Claude writer checks use its native machine/PID namespace
+and `/proc` process-start token; live or unverifiable writers remain blocked.
+
+Both clients passed isolated API profile switching, effective endpoint/model
+checks and rollback after an injected verification failure. These runs used
+native CLIs and loopback mock APIs on real Linux hosts. They did not use paid
+credentials or validate a new Linux GUI package, ARM64, Desktop account restart,
+or physical-phone operation. Claude Desktop Console auto-connection remains
+unavailable on Linux; Claude Code CLI is a separate integration. See
+[verification](../VERIFICATION.md) for the current platform matrix.
+
 ## Build on the Target Architecture
 
 Use Ubuntu 22.04 or a compatible build environment, Node.js 24, Python 3.9+

@@ -1,5 +1,6 @@
 import json
 import os
+import queue
 import tempfile
 import threading
 import unittest
@@ -10,10 +11,11 @@ from unittest.mock import Mock, patch
 
 from bridge.clients.claude import model
 from bridge.clients.claude.adapter import Claude
-from bridge.clients.claude.cli_session import ClaudeCli, ResumePreflightBlocked, _Owned, _skill_catalog, _auth_ready
+from bridge.clients.claude.cli_session import ClaudeCli, ResumePreflightBlocked, _Owned, _skill_catalog, _auth_ready, _events, _saved, _permission_prompt_args
 from bridge.clients.errors import BridgeUnavailable
 from bridge.clients.manager import DesktopSessions
 from bridge.clients.uploads import DesktopUploads
+from bridge.platforms.windows import claude_process
 
 
 class ClaudeCliContract(unittest.TestCase):
@@ -39,8 +41,11 @@ class ClaudeCliContract(unittest.TestCase):
         self.profile = {'binary': '/fixture/claude', 'directory': self.config, 'origin': 'fixture:account'}
         self.profile_patch = patch('bridge.clients.claude.cli_session._profile', return_value=self.profile)
         self.auth_patch = patch('bridge.clients.claude.cli_session._auth_ready', return_value=True)
-        self.profile_patch.start(); self.auth_patch.start()
+        self.prompt_patch = patch('bridge.clients.claude.cli_session._permission_prompt_args',
+                                  return_value=['--permission-prompts', 'host'])
+        self.profile_patch.start(); self.auth_patch.start(); self.prompt_patch.start()
         self.addCleanup(self.profile_patch.stop); self.addCleanup(self.auth_patch.stop)
+        self.addCleanup(self.prompt_patch.stop)
         self.cli = ClaudeCli(self.root/'uploads')
 
     def test_saved_list_and_detail_are_passive_and_closed(self):
@@ -95,6 +100,53 @@ class ClaudeCliContract(unittest.TestCase):
         self.path.write_text('\n'.join(events) + '\n')
         self.assertEqual(self.cli.listing()['sessions'][0]['title'], 'Claude Code 会话')
 
+    def test_utf8_history_keeps_chinese_filename_cwd_title_and_body(self):
+        path = self.root/'中文记录.jsonl'
+        event = {'type': 'user', 'cwd': '/项目/中文目录',
+                 'message': {'role': 'user', 'content': '中文标题\n正文内容'}}
+        path.write_text(json.dumps(event, ensure_ascii=False)+'\n', encoding='utf-8')
+        original = Path.open
+        reads = []
+
+        def opening(target, *args, **kwargs):
+            if target == path:
+                reads.append(kwargs.get('encoding'))
+            return original(target, *args, **kwargs)
+
+        with patch.object(Path, 'open', opening):
+            self.assertEqual(_events(path), [event])
+        self.assertEqual(reads, ['utf-8'])
+        saved_path = self.root/'中文项目'/(self.native + '.jsonl')
+        saved_path.parent.mkdir()
+        saved_path.write_text(path.read_text(encoding='utf-8'), encoding='utf-8')
+        saved = _saved(saved_path, self.profile['origin'])
+        self.assertEqual((saved['title'], saved['cwd']), ('中文标题', '/项目/中文目录'))
+
+    def test_create_accepts_durably_saved_user_uuid_without_replay_event(self):
+        process = Mock()
+        process.poll.return_value = None
+        with patch('bridge.clients.claude.cli_session.subprocess.Popen', return_value=process) as popen, \
+             patch('bridge.clients.claude.cli_session._Owned') as owner_type:
+            owner = owner_type.return_value
+            owner.condition = threading.Condition()
+            owner.error = None
+            owner.finished = False
+            owner.catalog = {}
+            owner.control.return_value = {}
+
+            def save_user(frame):
+                native = owner_type.call_args.args[2]
+                path = self.path.parent/(native + '.jsonl')
+                path.write_text(json.dumps({'type': 'user', 'uuid': frame['uuid'],
+                                            'cwd': str(self.cwd), 'permissionMode': 'default',
+                                            'message': frame['message']}) + '\n')
+
+            owner.write.side_effect = save_user
+            created = self.cli.create(str(self.cwd), self.profile['origin'], 'First request')
+        self.assertEqual(created['status'], 'ready')
+        self.assertEqual(popen.call_args.kwargs['encoding'], 'utf-8')
+        owner.write.assert_called_once()
+
     def test_resume_uses_original_config_cwd_model_permission_and_no_prompt(self):
         process = Mock()
         process.poll.return_value = None
@@ -118,6 +170,7 @@ class ClaudeCliContract(unittest.TestCase):
             owner.control.assert_called_once_with({'subtype': 'initialize', 'hooks': None}, timeout=30)
             args, kwargs = popen.call_args
             self.assertEqual(kwargs['cwd'], str(self.cwd.resolve()))
+            self.assertEqual(kwargs['encoding'], 'utf-8')
             self.assertEqual(kwargs['env']['CLAUDE_CONFIG_DIR'], str(self.config))
             self.assertEqual(args[0][args[0].index('--permission-mode') + 1], 'plan')
             self.assertEqual(args[0][args[0].index('--model') + 1], 'fixture-model')
@@ -130,7 +183,14 @@ class ClaudeCliContract(unittest.TestCase):
     def test_managed_api_ignores_ambient_anthropic_overrides(self):
         self.profile['managedApi'] = True
         with patch.dict(os.environ, {'ANTHROPIC_API_KEY': 'wrong', 'ANTHROPIC_BASE_URL': 'https://wrong.invalid',
-                                     'ANTHROPIC_AUTH_TOKEN': 'wrong', 'KEEP_ME': 'yes'}), \
+                                     'ANTHROPIC_AUTH_TOKEN': 'wrong',
+                                     'CLAUDE_CODE_USE_BEDROCK': '1',
+                                     'CLAUDE_CODE_USE_ANTHROPIC_AWS': '1',
+                                     'CLAUDE_CODE_USE_FOUNDRY': '1',
+                                     'CLAUDE_CODE_USE_MANTLE': '1',
+                                     'CLAUDE_CODE_USE_VERTEX': '1',
+                                     'CLAUDE_CODE_PROVIDER_MANAGED_BY_HOST': '1',
+                                     'KEEP_ME': 'yes'}), \
              patch('bridge.clients.claude.cli_session.subprocess.run') as run:
             run.return_value.returncode = 0
             run.return_value.stdout = '{"loggedIn": true}'
@@ -139,6 +199,10 @@ class ClaudeCliContract(unittest.TestCase):
             self.assertNotIn('ANTHROPIC_API_KEY', environment)
             self.assertNotIn('ANTHROPIC_BASE_URL', environment)
             self.assertNotIn('ANTHROPIC_AUTH_TOKEN', environment)
+            for key in ('CLAUDE_CODE_USE_BEDROCK', 'CLAUDE_CODE_USE_ANTHROPIC_AWS',
+                        'CLAUDE_CODE_USE_FOUNDRY', 'CLAUDE_CODE_USE_MANTLE',
+                        'CLAUDE_CODE_USE_VERTEX', 'CLAUDE_CODE_PROVIDER_MANAGED_BY_HOST'):
+                self.assertNotIn(key, environment)
             self.assertEqual(environment['CLAUDE_CONFIG_DIR'], str(self.config))
             self.assertEqual(environment['KEEP_ME'], 'yes')
             process = Mock();process.poll.return_value = None;process.stdout = iter(())
@@ -154,6 +218,10 @@ class ClaudeCliContract(unittest.TestCase):
                 self.assertNotIn('ANTHROPIC_API_KEY', environment)
                 self.assertNotIn('ANTHROPIC_BASE_URL', environment)
                 self.assertNotIn('ANTHROPIC_AUTH_TOKEN', environment)
+                for key in ('CLAUDE_CODE_USE_BEDROCK', 'CLAUDE_CODE_USE_ANTHROPIC_AWS',
+                            'CLAUDE_CODE_USE_FOUNDRY', 'CLAUDE_CODE_USE_MANTLE',
+                            'CLAUDE_CODE_USE_VERTEX', 'CLAUDE_CODE_PROVIDER_MANAGED_BY_HOST'):
+                    self.assertNotIn(key, environment)
                 self.assertEqual(environment['CLAUDE_CONFIG_DIR'], str(self.config))
                 self.assertEqual(environment['KEEP_ME'], 'yes')
 
@@ -279,7 +347,7 @@ class ClaudeCliContract(unittest.TestCase):
         owner.condition = threading.Condition()
         owner.error = None
         owner.control.return_value = {'mode': 'default'}
-        owner.control.side_effect = lambda request: (setattr(owner, 'permission', request['mode']) or {'mode': request['mode']}) if request['subtype'] == 'set_permission_mode' else {}
+        owner.control.side_effect = lambda request: {'mode': request['mode']} if request['subtype'] == 'set_permission_mode' else {}
         self.cli.owned[self.native] = owner
         self.assertEqual(self.cli.call('send', self.sid, {'text': 'new fixture message'})['status'], 'accepted')
         self.assertTrue(self.cli.busy())
@@ -291,6 +359,7 @@ class ClaudeCliContract(unittest.TestCase):
         owner.control.assert_called_with({'subtype': 'set_model', 'model': 'fixture-model'})
         self.cli.call('access', self.sid, {'mode': 'default'})
         owner.control.assert_called_with({'subtype': 'set_permission_mode', 'mode': 'default'})
+        self.assertEqual(owner.permission, 'default')
         owner.pending['request-1'] = {'request': {'tool_name': 'Bash', 'input': {'command': 'fixture'}}}
         self.cli.call('respond', self.sid, {'requestId': 'request-1', 'decision': 'decline'})
         self.assertNotIn('request-1', owner.pending)
@@ -393,6 +462,7 @@ class ClaudeCliContract(unittest.TestCase):
 
     def test_native_init_identity_mismatch_terminates_owned_process(self):
         process = Mock()
+        process.poll.return_value = None
         process.stdout = iter([json.dumps({'type': 'system', 'subtype': 'init',
                                            'session_id': str(uuid.uuid4()), 'cwd': str(self.cwd)})])
         owned = _Owned(process, self.profile['origin'], self.native, str(self.cwd))
@@ -400,6 +470,32 @@ class ClaudeCliContract(unittest.TestCase):
             owned.condition.wait_for(lambda: owned.error is not None, timeout=1)
         self.assertIn('身份', owned.error)
         process.terminate.assert_called_once()
+
+    def test_windows_init_identity_mismatch_closes_bound_native_child(self):
+        lines = queue.Queue()
+
+        def stream():
+            while True:
+                line = lines.get()
+                if line is None:
+                    return
+                yield line
+
+        process = Mock()
+        process.poll.return_value = None
+        process.stdout = stream()
+        owned = _Owned(process, self.profile['origin'], self.native, str(self.cwd))
+        owned.native_process = (1234, 5678)
+        with patch('bridge.clients.claude.cli_session.sys.platform', 'win32'), \
+             patch.object(claude_process, 'terminate_matching_process', return_value=True) as terminate:
+            lines.put(json.dumps({'type': 'system', 'subtype': 'init',
+                                  'session_id': str(uuid.uuid4()), 'cwd': str(self.cwd)}))
+            with owned.condition:
+                self.assertTrue(owned.condition.wait_for(lambda: owned.error is not None, timeout=1))
+            lines.put(None)
+            with owned.condition:
+                self.assertTrue(owned.condition.wait_for(lambda: owned.finished, timeout=1))
+        terminate.assert_called_once_with(1234, 5678)
 
     def test_native_cancel_and_terminal_result_clear_pending_approval(self):
         for ending in ({'type': 'control_cancel_request', 'request_id': 'pending'},
@@ -415,3 +511,31 @@ class ClaudeCliContract(unittest.TestCase):
             self.assertFalse(owned.active)
             self.assertEqual([event['type'] for event in owned.events],
                              ['result'] if ending['type'] == 'result' else [])
+
+    def test_windows_owned_close_terminates_exact_native_child(self):
+        process = Mock()
+        process.pid = 5555
+        process.stdout = iter(())
+        process.poll.return_value = None
+        owned = _Owned(process, self.profile['origin'], self.native, str(self.cwd))
+        owned.catalog = {'pid': 1234}
+        with patch('bridge.clients.claude.cli_session.sys.platform', 'win32'), \
+             patch.object(claude_process, 'owned_child_start_filetime', return_value=5678) as bind, \
+             patch.object(claude_process, 'terminate_matching_process', return_value=True) as terminate:
+            owned.bind_native_process()
+            owned.close()
+        bind.assert_called_once_with(1234, 5555)
+        terminate.assert_called_once_with(1234, 5678)
+        process.terminate.assert_called_once()
+
+
+class ClaudeCliVersionContract(unittest.TestCase):
+    def test_native_legacy_stdio_routing_and_newer_host_routing(self):
+        with patch('bridge.clients.claude.cli_session.subprocess.run') as run:
+            run.return_value.returncode = 0
+            run.return_value.stdout = '2.1.168 (Claude Code)\n'
+            self.assertEqual(_permission_prompt_args('claude.cmd', {}), [])
+            run.return_value.stdout = '2.1.287 (Claude Code)\n'
+            self.assertEqual(_permission_prompt_args('claude.cmd', {}),
+                             ['--permission-prompts', 'host'])
+            self.assertEqual(run.call_args.kwargs['encoding'], 'utf-8')

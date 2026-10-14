@@ -5,6 +5,7 @@ const connectionExpanded=new Map();
 const connectionAdvancedExpanded=new Map();
 function connectionLabel(mode){return t({quick:'临时 HTTPS · Cloudflare',cloudflare:'固定域名 · Cloudflare Tunnel',server:'固定域名 · 自有服务器 + SSH',external:'已有穿透 / 反向代理',nas:'已有穿透 / 反向代理',tailscale:'固定 HTTPS · Tailscale'}[mode]);}
 function normalizeExternalUrl(value){const trimmed=value.trim();return /^[^\s/:?#@]+(?::\d+)?$/.test(trimmed)?'https://'+trimmed:trimmed;}
+function connectionCheckIdentity(row){return JSON.stringify([snapshot?.dataDir,snapshot?.runtime.instanceId,snapshot?.runtime.running,row]);}
 function connectionSummary(row){return [row.name,row.publicUrl||'',t(row.enabled?(connectionSetupState.get(row.id)||snapshot?.externalStatus?.[row.id]?.message||'已启用'):'未启用')].filter(Boolean).join(' · ');}
 function setupGuide(link,mode){
   link.className='setup-guide';link.textContent=t('在线指引');
@@ -56,9 +57,9 @@ function renderConnections(){
     function action(label,method,callback){
       const button=document.createElement('button');button.type='button';button.textContent=t(label);button.dataset.connectionAction=method;button.dataset.connection=row.id;button.dataset.key=row.id+':'+method;
       button.onclick=async()=>{
-        const key=button.dataset.key;if(dirty||busyActions.size)return;busyActions.add(key);updateDirty();
-        try{if(!['clearCredentials','diagnostics'].includes(method))await saveConnectionCredentials(row.id);const result=await callback();if(result?.message)feedback(result.message);}
-        catch(e){showError(e);connectionSetupState.set(row.id,e.message);}
+        const key=button.dataset.key;if(dirty||busyActions.size)return;const target=method==='checkEntry'?connectionCheckIdentity(row):null;const current=()=>target===null||target===connectionCheckIdentity(connectionDraft.find(c=>c.id===row.id));busyActions.add(key);updateDirty();
+        try{if(!['clearCredentials','diagnostics'].includes(method))await saveConnectionCredentials(row.id);const result=await callback();if(!current())return;if(method==='checkEntry')connectionSetupState.set(row.id,result?.message||'');if(result?.message)feedback(result.message);}
+        catch(e){if(current()){e.message=e.message.replace(/^Error invoking remote method '[^']+': (?:Error: )?/,'');showError(e);connectionSetupState.set(row.id,e.message);}}
         finally{busyActions.delete(key);renderConnections();updateDirty();}
       };return button;
     }

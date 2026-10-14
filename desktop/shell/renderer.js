@@ -100,7 +100,7 @@ function renderGatewayActions(){
 function render(value,watchRevision=watchPanel.revision){
   $('login-startup-setting').hidden=$('login-startup-hint').hidden=!value.loginStartup?.supported;
   $('login-startup-hint').textContent=t(value.loginStartup?.requiresApproval?'请在系统设置的登录项中允许此应用。':'开启后，登录电脑时自动启动网关。');
-  if(snapshot&&(snapshot.runtime.instanceId!==value.runtime.instanceId||snapshot.dataDir!==value.dataDir))resetPairing();
+  if(snapshot&&(snapshot.runtime.instanceId!==value.runtime.instanceId||snapshot.dataDir!==value.dataDir)){resetPairing();connectionSetupState.clear();}
   if(snapshot&&snapshot.dataDir!==value.dataDir){resetSecretFields();harnessPanel?.clear();if(activeTab==='accounts')harnessPanel?.refresh();watchPanel.clear();watchRevision=watchPanel.revision;devicesState=null;devicesDirty=false;$('device-list').replaceChildren();$('auto-blocks').replaceChildren();}
   snapshot=value;const running=value.runtime.running;
   if(running||value.runtime.portOccupied)startingUntil=0;
@@ -144,7 +144,7 @@ function render(value,watchRevision=watchPanel.revision){
     $('login-startup').checked=!!(value.loginStartup?.enabled||value.loginStartup?.requiresApproval);$('auto-start').checked=p.autoStart;$('auto-start').disabled=!!(value.loginStartup?.enabled||value.loginStartup?.requiresApproval);$('lan').checked=p.lan;
     $('local-access').checked=p.localAccess!==false;input('lan-scope',p.lanAddresses==null?'all':'selected');
     lanDraft=p.lanAddresses==null?(value.networkInterfaces||[]).map(row=>row.address):[...p.lanAddresses];savedLan=JSON.stringify(lanDraft);
-    if(!document.activeElement?.closest('#connections')||JSON.stringify(p.connections||[])!==savedConnections){connectionDraft=JSON.parse(JSON.stringify(p.connections||[]));savedConnections=JSON.stringify(connectionDraft);renderConnections();}
+    if(!document.activeElement?.closest('#connections')||JSON.stringify(p.connections||[])!==savedConnections){const next=JSON.parse(JSON.stringify(p.connections||[]));for(const row of connectionDraft)if(JSON.stringify(row)!==JSON.stringify(next.find(c=>c.id===row.id)))connectionSetupState.delete(row.id);connectionDraft=next;savedConnections=JSON.stringify(connectionDraft);renderConnections();}
     const fixed=connectionDraft.filter(c=>c.enabled).map(c=>c.publicUrl);
     input('origins',value.origins.filter(o=>!fixed.includes(o)).join('\n'));input('auth-mode',value.auth.mode);input('session-hours',value.auth.sessionHours??12);input('username',value.auth.username);
     $('mobile-enabled').checked=!!n.mobileEnabled;$('mobile-app-links').checked=!!n.mobileAppLinks;

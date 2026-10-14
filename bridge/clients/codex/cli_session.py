@@ -89,8 +89,8 @@ def _local_cli(home, configured):
         if path.is_file() and os.access(path, os.X_OK):
             return str(path)
         raise AppServerUnavailable('Configured Codex CLI is unavailable')
-    candidates = (shutil.which('codex'), Path.home()/'.local/bin/codex',
-                  _managed_cli(home))
+    candidates = (_managed_cli(home), shutil.which('codex'),
+                  Path.home()/'.local/bin/codex')
     for candidate in candidates:
         if candidate and Path(candidate).is_file() and os.access(candidate, os.X_OK):
             return str(candidate)
@@ -132,6 +132,35 @@ class CliSessions:
 
     def available(self):
         return self.alias is not None or Path(self.client.socket_path).exists() or _managed_cli(self.home) is not None
+
+    def daemon_status(self):
+        """Return running, stopped or unknown without starting the local daemon."""
+        if self.alias is not None:
+            raise ValueError('Local Codex daemon status requires a local CLI')
+        socket_path = Path(self.client.socket_path)
+        state = self.home / 'app-server-daemon'
+        if not socket_path.exists() and not any(os.path.lexists(state / name) for name in
+                ('daemon.pid', 'app-server.pid')):
+            return 'stopped'
+        try:
+            executable = _local_cli(self.home, self.configured_cli)
+            environment = os.environ.copy()
+            environment['CODEX_HOME'] = str(self.home)
+            options = {'creationflags': subprocess.CREATE_NO_WINDOW} if os.name == 'nt' else {}
+            result = subprocess.run([executable, 'app-server', 'daemon', 'version'],
+                                    env=environment, stdin=subprocess.DEVNULL,
+                                    capture_output=True, text=True, timeout=5, **options)
+            if result.returncode == 0:
+                report = json.loads(result.stdout)
+                if isinstance(report, dict) and report.get('status') == 'running':
+                    return 'running'
+        except (AppServerUnavailable, OSError, subprocess.TimeoutExpired, ValueError):
+            pass
+        return 'unknown'
+
+    def daemon_may_be_running(self):
+        """Fail closed on unknown native status before a local account change."""
+        return self.daemon_status() != 'stopped'
 
     def create(self, cwd, title, on_start=None, on_created=None):
         """An explicit new CLI chat; no turn is started."""
@@ -205,8 +234,9 @@ class CliSessions:
             command = _ssh_daemon_start_command(self.alias)
             environment = None
         try:
+            options = {'creationflags': subprocess.CREATE_NO_WINDOW} if os.name == 'nt' else {}
             result = subprocess.run(command, env=environment, stdin=subprocess.DEVNULL,
-                                    capture_output=True, text=True, timeout=25)
+                                    capture_output=True, text=True, timeout=25, **options)
         except (OSError, subprocess.TimeoutExpired) as exc:
             raise AppServerUnavailable('Could not start the existing Codex CLI daemon') from exc
         if result.returncode:

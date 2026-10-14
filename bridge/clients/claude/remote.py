@@ -30,7 +30,7 @@ def _command(alias):
 def _remote(alias, request, timeout=30):
     try:
         result = subprocess.run(_command(alias), input=json.dumps(request, ensure_ascii=False)+'\n',
-                                capture_output=True, text=True, timeout=timeout)
+                                capture_output=True, text=True, encoding='utf-8', timeout=timeout)
         if result.returncode != 0:
             raise BridgeUnavailable('SSH Claude Code 主机不可用，请检查连接')
         value = json.loads(result.stdout.strip())
@@ -249,7 +249,7 @@ class RemoteClaudeCli:
         native = str(uuid.uuid4())
         sid = model.gateway_id('cli:ssh:'+host_id+':'+origin, native)
         process = subprocess.Popen(_command(alias), stdin=subprocess.PIPE, stdout=subprocess.PIPE,
-                                   stderr=subprocess.DEVNULL, text=True, bufsize=1)
+                                   stderr=subprocess.DEVNULL, text=True, encoding='utf-8', bufsize=1)
         try:
             process.stdin.write(json.dumps({'operation': 'create', 'origin': origin,
                 'native': native, 'cwd': cwd, 'scope': DesktopUploads.scope('claude', sid)})+'\n')
@@ -381,7 +381,7 @@ class RemoteClaudeCli:
                     raise ResumePreflightBlocked('无法确认原会话权限模式')
                 process = subprocess.Popen(_command(row['alias']), stdin=subprocess.PIPE,
                                            stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
-                                           text=True, bufsize=1)
+                                           text=True, encoding='utf-8', bufsize=1)
                 try:
                     process.stdin.write(json.dumps({'operation': 'resume', 'origin': row['origin'],
                         'native': row['nativeId'], 'cwd': row['cwd'], 'model': row['model'],

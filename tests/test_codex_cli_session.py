@@ -746,6 +746,45 @@ class CliSessionTests(unittest.TestCase):
                 patch('bridge.clients.codex.cli_session.Path.home', return_value=self.home):
             self.assertEqual(_local_cli(self.home, 'codex'), str(runtime))
 
+    def test_local_proxy_prefers_selected_daemon_package_over_another_path_cli(self):
+        runtime = self.home / 'packages/app-server-daemon/current/bin/codex'
+        runtime.parent.mkdir(parents=True)
+        runtime.write_text('#!/bin/sh\n')
+        runtime.chmod(0o700)
+        with patch('bridge.clients.codex.cli_session.shutil.which', return_value='/other/codex'):
+            self.assertEqual(_local_cli(self.home, 'codex'), str(runtime))
+
+    def test_local_daemon_status_uses_native_read_only_probe(self):
+        report = {'status': 'running', 'socketPath': self.fake.socket_path}
+        with patch('bridge.clients.codex.cli_session._local_cli', return_value='/fixture/codex'), \
+                patch('bridge.clients.codex.cli_session.subprocess.run',
+                      return_value=subprocess.CompletedProcess([], 0, json.dumps(report))) as run:
+            self.assertEqual(self.sessions.daemon_status(), 'running')
+            self.assertTrue(self.sessions.daemon_may_be_running())
+        self.assertEqual(run.call_args.args[0], ['/fixture/codex', 'app-server', 'daemon', 'version'])
+        self.assertEqual(run.call_args.kwargs['env']['CODEX_HOME'], str(self.home))
+
+    def test_local_daemon_status_only_reports_stopped_without_runtime_evidence(self):
+        Path(self.fake.socket_path).unlink()
+        with patch('bridge.clients.codex.cli_session.subprocess.run') as run:
+            self.assertEqual(self.sessions.daemon_status(), 'stopped')
+            self.assertFalse(self.sessions.daemon_may_be_running())
+            run.assert_not_called()
+        state = self.home / 'app-server-daemon'
+        state.mkdir()
+        (state / 'app-server.pid').touch()
+        with patch('bridge.clients.codex.cli_session._local_cli',
+                   side_effect=AppServerUnavailable('no binary')):
+            self.assertEqual(self.sessions.daemon_status(), 'unknown')
+            self.assertTrue(self.sessions.daemon_may_be_running())
+
+    def test_local_daemon_probe_error_fails_closed(self):
+        with patch('bridge.clients.codex.cli_session._local_cli', return_value='/fixture/codex'), \
+                patch('bridge.clients.codex.cli_session.subprocess.run',
+                      return_value=subprocess.CompletedProcess([], 1, '')):
+            self.assertEqual(self.sessions.daemon_status(), 'unknown')
+            self.assertTrue(self.sessions.daemon_may_be_running())
+
     def test_missing_daemon_package_does_not_start_or_install(self):
         self.socket = Path(self.fake.socket_path)
         self.socket.unlink()

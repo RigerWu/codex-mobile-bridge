@@ -22,7 +22,7 @@ class RemoteWorkerContract(unittest.TestCase):
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()
         self.addCleanup(self.temp.cleanup)
-        self.root = Path(self.temp.name)
+        self.root = Path(self.temp.name).resolve()
         self.config = self.root/'remote-profile'; self.config.mkdir()
         self.cwd = self.root/'remote-project'; self.cwd.mkdir()
         self.native = str(uuid.uuid4())
@@ -43,12 +43,13 @@ class RemoteWorkerContract(unittest.TestCase):
             binary.write_text('#!/bin/sh\nif [ "$1" = auth ]; then printf \'{"loggedIn":true}\\n\'; fi\n')
             binary.chmod(0o700)
         self.env = {**os.environ, 'HOME': str(self.root), 'CLAUDE_CONFIG_DIR': str(self.config),
+                    'PYTHONIOENCODING': 'utf-8',
                     'PATH': str(bindir)+os.pathsep+os.environ.get('PATH', '')}
         self.binary = binary
 
     def run_worker(self, request):
         process = subprocess.run([sys.executable, '-u', '-c', source_text('clients/claude/remote_worker.py')],
-                                 input=json.dumps(request)+'\n', text=True, capture_output=True,
+                                 input=json.dumps(request)+'\n', text=True, encoding='utf-8', capture_output=True,
                                  env=self.env, timeout=5)
         self.assertEqual(process.returncode, 0, process.stderr)
         return json.loads(process.stdout)

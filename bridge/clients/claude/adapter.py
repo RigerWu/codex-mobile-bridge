@@ -586,6 +586,8 @@ class Claude:
             return {'connected': cli['connected'], 'sessions': cli['sessions'],
                     'coverage': {'code': False, 'cowork': False, 'cli': cli['connected']},
                     'complete': cli['connected']}
+        if action == 'resume':
+            return await asyncio.to_thread(self.cli.call, action, sid, body)
         if sid and await asyncio.to_thread(self.cli.contains, sid):
             return await asyncio.to_thread(self.cli.call, action, sid, body)
         if not self.status()['connected']:
@@ -732,6 +734,8 @@ class Claude:
                 return {'connected': cli['connected'], 'sessions': cli['sessions'],
                         'coverage': {'code': False, 'cowork': False, 'cli': cli['connected']},
                         'complete': cli['connected']}
+            if action == 'resume':
+                return self.cli.call(action, sid, body or {})
             if sid and self.cli.contains(sid):
                 return self.cli.call(action, sid, body or {})
             raise BridgeUnavailable(self.status()['reason'])

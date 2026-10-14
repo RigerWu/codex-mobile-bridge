@@ -18,6 +18,10 @@ from bridge.clients.errors import BridgeUnavailable
 MODES = {'default', 'acceptEdits', 'plan', 'dontAsk', 'auto', 'bypassPermissions'}
 
 
+class ResumePreflightBlocked(BridgeUnavailable):
+    """The resume process has definitely not been started."""
+
+
 def _profile():
     binary = shutil.which('claude')
     if not binary:
@@ -138,6 +142,7 @@ class _Owned:
         self.permission = None
         self.catalog = {}
         self.error = None
+        self.finished = False
         threading.Thread(target=self._read, daemon=True, name='claude-cli-reader').start()
 
     def _read(self):
@@ -156,6 +161,8 @@ class _Owned:
                         self.responses[response.get('request_id')] = response
                     elif kind == 'control_request' and (event.get('request') or {}).get('subtype') == 'can_use_tool':
                         self.pending[event.get('request_id')] = event
+                    elif kind == 'control_cancel_request':
+                        self.pending.pop(event.get('request_id'), None)
                     elif kind == 'system' and event.get('subtype') == 'init':
                         if event.get('session_id') != self.native or event.get('cwd') != self.cwd:
                             self.error = 'Claude 会话身份或工作目录不一致'
@@ -164,11 +171,14 @@ class _Owned:
                         self.permission = event.get('permissionMode') or self.permission
                     elif kind == 'result':
                         self.active = False
+                        self.pending.clear()
+                        self.events.append(event)
                     elif kind == 'assistant':
                         self.events.append(event)
                     self.condition.notify_all()
         finally:
             with self.condition:
+                self.finished = True
                 self.condition.notify_all()
 
     def write(self, frame):
@@ -229,8 +239,12 @@ class ClaudeCli:
 
     def busy(self):
         with self.lock:
-            return any(owned.process.poll() is None and (owned.active or owned.pending)
-                       for owned in self.owned.values())
+            for owned in self.owned.values():
+                if owned.process.poll() is None:
+                    with owned.condition:
+                        if owned.active or owned.pending:
+                            return True
+            return False
 
     def listing(self):
         profile = _profile()
@@ -280,7 +294,7 @@ class ClaudeCli:
         with self.lock:
             cached = self.index.get(sid)
         row = None
-        if cached and profile and cached['origin'] == profile['origin']:
+        if cached and profile and cached['origin'] == profile['origin'] and not cached['path'].is_symlink():
             row = _saved(cached['path'], profile['origin'])
             if row:
                 with self.lock:
@@ -297,20 +311,26 @@ class ClaudeCli:
         profile = _profile()
         with self.lock:
             row = self.index.get(sid)
-        if row and profile and row['origin'] == profile['origin'] and row['path'].is_file():
+        if row and profile and row['origin'] == profile['origin'] and not row['path'].is_symlink() and row['path'].is_file():
             return True
         self.listing()
         return sid in self.index
 
     def call(self, action, sid, body):
-        row = self._get(sid)
+        try:
+            row = self._get(sid)
+        except (ValueError, BridgeUnavailable) as exc:
+            if action == 'resume':
+                raise ResumePreflightBlocked(str(exc)) from exc
+            raise
         native = row['nativeId']
         with self.lock:
             owned = self.owned.get(native)
             if owned and owned.error and owned.process.poll() is None:
-                raise BridgeUnavailable(owned.error)
+                raise (ResumePreflightBlocked if action == 'resume' else BridgeUnavailable)(owned.error)
             if owned and owned.origin != row['origin'] and owned.process.poll() is None:
-                raise BridgeUnavailable('此会话已由另一 Claude Code 配置继续，请先结束该连接')
+                raise (ResumePreflightBlocked if action == 'resume' else BridgeUnavailable)(
+                    '此会话已由另一 Claude Code 配置继续，请先结束该连接')
             if owned and (owned.origin != row['origin'] or owned.process.poll() is not None):
                 owned = None
             public = self._public(row)
@@ -326,11 +346,12 @@ class ClaudeCli:
                 can_resume = (not live and row['permissionKnown'] and self._ready(_profile())
                               and Path(row['cwd']).is_dir())
                 return {'connected': True, 'session': public, 'messages': list(unique.values()),
-                        'turns': model.turns(row['events']),
+                        'turns': model.turns(events),
                         'notice': '无法确认原会话权限模式，请在电脑端继续' if not live and not row['permissionKnown'] else '',
                         'capabilities': {
                             'resume': can_resume,
-                            'send': live, 'models': live, 'permissions': live, 'stop': live,
+                            'send': live and public['connectionState'] == 'ready',
+                            'models': live, 'permissions': live, 'stop': live,
                             'attachments': False, 'queue': False, 'steer': False, 'skills': False}}
             if action == 'catalog':
                 if not live:
@@ -350,10 +371,13 @@ class ClaudeCli:
                     return {'status': 'ready'}
                 profile = _profile()
                 if not profile or profile['origin'] != row['origin'] or not self._ready(profile, fresh=True):
-                    raise BridgeUnavailable('原 Claude Code 账号配置已变化或不可用')
+                    raise ResumePreflightBlocked('原 Claude Code 账号配置已变化或不可用')
                 if not row['permissionKnown'] or row['permissionMode'] not in MODES:
-                    raise BridgeUnavailable('无法确认原会话权限模式，请在电脑端继续')
-                cwd = str(Path(row['cwd']).resolve(strict=True))
+                    raise ResumePreflightBlocked('无法确认原会话权限模式，请在电脑端继续')
+                try:
+                    cwd = str(Path(row['cwd']).resolve(strict=True))
+                except OSError as exc:
+                    raise ResumePreflightBlocked('原项目目录不可用，请在电脑端检查') from exc
                 env = os.environ.copy()
                 env['CLAUDE_CONFIG_DIR'] = str(profile['directory'])
                 command = [profile['binary'], '-p', '--resume', native, '--input-format', 'stream-json',
@@ -362,7 +386,10 @@ class ClaudeCli:
                            '--permission-prompt-tool', 'stdio', '--permission-prompts', 'host']
                 if row['model']:
                     command.extend(('--model', row['model']))
-                assert_session_closed(profile['directory'], native)
+                try:
+                    assert_session_closed(profile['directory'], native)
+                except BridgeUnavailable as exc:
+                    raise ResumePreflightBlocked(str(exc)) from exc
                 process = subprocess.Popen(command, cwd=cwd, env=env, stdin=subprocess.PIPE,
                                            stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True, bufsize=1)
                 owned = _Owned(process, profile['origin'], native, cwd)
@@ -384,6 +411,8 @@ class ClaudeCli:
                 if body.get('resolvedImages') or body.get('plugins') or body.get('mode') in ('queue', 'steer'):
                     raise ValueError('Claude Code CLI 暂不支持此发送选项')
                 with owned.condition:
+                    if owned.active or owned.pending:
+                        raise BridgeUnavailable('请等待当前 Claude Code 任务结束后再发送')
                     owned.active = True
                     owned.write({'type': 'user', 'message': {'role': 'user', 'content': body['text']}})
             elif action == 'stop':

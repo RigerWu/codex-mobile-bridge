@@ -14,6 +14,7 @@ from contextlib import contextmanager, nullcontext
 from concurrent.futures import Future
 
 from bridge.clients.claude.adapter import Claude
+from bridge.clients.claude.cli_session import ResumePreflightBlocked
 from bridge.clients.deepseek.adapter import DeepSeek, BRIDGE_REVISION, LIFECYCLE_REVISIONS, UPDATE_REASON
 from bridge.clients.errors import BridgeUnavailable
 from bridge.app.lifecycle import private_json
@@ -256,6 +257,8 @@ class DesktopSessions:
                     raise
             try:
                 result = adapter.call(action, sid, body)
+            except ResumePreflightBlocked as exc:
+                result = {'status': 'blocked', 'id': rid, 'message': str(exc)}
             except Exception as exc:
                 # The desktop may already have accepted a command before a timeout.
                 # Do not turn an uncertain outcome into a safe-to-retry failure.

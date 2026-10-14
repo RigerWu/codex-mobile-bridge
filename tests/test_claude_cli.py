@@ -7,7 +7,7 @@ from pathlib import Path
 from unittest.mock import Mock, patch
 
 from bridge.clients.claude import model
-from bridge.clients.claude.cli_session import ClaudeCli, _Owned
+from bridge.clients.claude.cli_session import ClaudeCli, ResumePreflightBlocked, _Owned
 from bridge.clients.errors import BridgeUnavailable
 from bridge.clients.manager import DesktopSessions
 
@@ -127,6 +127,30 @@ class ClaudeCliContract(unittest.TestCase):
         self.assertEqual(manager.call('claude', 'resume', self.sid, body)['status'], 'ready')
         adapter.call.assert_called_once_with('resume', self.sid, body)
 
+    def test_preflight_block_can_retry_with_new_receipt_after_session_closes(self):
+        manager = DesktopSessions(self.root/'gateway')
+        self.addCleanup(manager.close)
+        adapter = Mock()
+        adapter.call.side_effect = [ResumePreflightBlocked('external writer'), {'status': 'ready'}]
+        manager.adapters['claude'] = adapter
+        first = {'id': str(uuid.uuid4())}
+        second = {'id': str(uuid.uuid4())}
+        self.assertEqual(manager.call('claude', 'resume', self.sid, first)['status'], 'blocked')
+        self.assertEqual(manager.call('claude', 'resume', self.sid, first)['status'], 'blocked')
+        self.assertEqual(manager.call('claude', 'resume', self.sid, second)['status'], 'ready')
+        self.assertEqual(adapter.call.call_count, 2)
+
+    def test_uncertain_resume_is_not_replayed_with_same_receipt(self):
+        manager = DesktopSessions(self.root/'gateway')
+        self.addCleanup(manager.close)
+        adapter = Mock()
+        adapter.call.side_effect = BridgeUnavailable('initialize result uncertain')
+        manager.adapters['claude'] = adapter
+        body = {'id': str(uuid.uuid4())}
+        self.assertEqual(manager.call('claude', 'resume', self.sid, body)['status'], 'unknown')
+        self.assertEqual(manager.call('claude', 'resume', self.sid, body)['status'], 'unknown')
+        adapter.call.assert_called_once()
+
     def test_desktop_quit_guard_sees_owned_cli_task(self):
         manager = DesktopSessions(self.root/'gateway')
         self.addCleanup(manager.close)
@@ -142,19 +166,23 @@ class ClaudeCliContract(unittest.TestCase):
         process.poll.return_value = None
         owner = Mock(origin=self.profile['origin'], process=process, active=False,
                      model=None, permission='plan', events=[])
-        owner.pending = {'request-1': {'request': {'tool_name': 'Bash', 'input': {'command': 'fixture'}}}}
+        owner.pending = {}
         owner.catalog = {'models': [{'value': 'fixture-model', 'displayName': 'Fixture'}]}
         owner.condition = threading.Condition()
         owner.error = None
         owner.control.return_value = {'mode': 'default'}
         self.cli.owned[self.native] = owner
-        self.assertTrue(self.cli.busy())
         self.assertEqual(self.cli.call('send', self.sid, {'text': 'new fixture message'})['status'], 'accepted')
+        self.assertTrue(self.cli.busy())
+        self.assertFalse(self.cli.call('detail', self.sid, {})['capabilities']['send'])
+        with self.assertRaises(BridgeUnavailable):
+            self.cli.call('send', self.sid, {'text': 'overlapping fixture'})
         owner.write.assert_called_with({'type': 'user', 'message': {'role': 'user', 'content': 'new fixture message'}})
         self.cli.call('settings', self.sid, {'model': 'fixture-model'})
         owner.control.assert_called_with({'subtype': 'set_model', 'model': 'fixture-model'})
         self.cli.call('access', self.sid, {'mode': 'default'})
         owner.control.assert_called_with({'subtype': 'set_permission_mode', 'mode': 'default'})
+        owner.pending['request-1'] = {'request': {'tool_name': 'Bash', 'input': {'command': 'fixture'}}}
         self.cli.call('respond', self.sid, {'requestId': 'request-1', 'decision': 'decline'})
         self.assertNotIn('request-1', owner.pending)
         owner.write.assert_called_with({'type': 'control_response', 'response': {'subtype': 'success',
@@ -203,3 +231,18 @@ class ClaudeCliContract(unittest.TestCase):
             owned.condition.wait_for(lambda: owned.error is not None, timeout=1)
         self.assertIn('身份', owned.error)
         process.terminate.assert_called_once()
+
+    def test_native_cancel_and_terminal_result_clear_pending_approval(self):
+        for ending in ({'type': 'control_cancel_request', 'request_id': 'pending'},
+                       {'type': 'result', 'subtype': 'error_during_execution'}):
+            process = Mock()
+            process.stdout = iter([json.dumps({'type': 'control_request', 'request_id': 'pending',
+                         'request': {'subtype': 'can_use_tool', 'tool_name': 'Bash', 'input': {}}}),
+                         json.dumps(ending)])
+            owned = _Owned(process, self.profile['origin'], self.native, str(self.cwd))
+            with owned.condition:
+                self.assertTrue(owned.condition.wait_for(lambda: owned.finished, timeout=1))
+            self.assertFalse(owned.pending)
+            self.assertFalse(owned.active)
+            self.assertEqual([event['type'] for event in owned.events],
+                             ['result'] if ending['type'] == 'result' else [])

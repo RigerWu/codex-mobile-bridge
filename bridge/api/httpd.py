@@ -218,7 +218,8 @@ class Handler(BaseHTTPRequestHandler):
         if not self.server.local_access and (local_host or (self.connection.getsockname()[0] == '127.0.0.1' and host not in self.server.secure_hosts)):
             raise PermissionError('本机网页访问已关闭')
         origin = self.headers.get("Origin")
-        if (origin and origin not in self.server.origins) or (write and not origin):
+        expected_origin = ('https://' if host in self.server.secure_hosts else 'http://') + host
+        if len(self.headers.get_all("Origin", [])) > 1 or (origin and origin != expected_origin) or (write and not origin):
             raise PermissionError("不允许跨站请求")
         # External links may open the public HTML shell. Fetches, embedded pages
         # and API requests must still pass the cross-site restriction.

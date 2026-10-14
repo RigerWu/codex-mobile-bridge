@@ -20,7 +20,7 @@ from bridge.app.lifecycle import private_json
 from bridge.platforms.windows import session as windows_session
 
 READS = {'list', 'detail', 'catalog', 'projects', 'account', 'access'}
-WRITES = {'send', 'stop', 'settings', 'respond', 'create', 'access'}
+WRITES = {'send', 'stop', 'settings', 'respond', 'create', 'access', 'resume'}
 
 
 class TaskStateUnavailable(ValueError):
@@ -447,6 +447,8 @@ class DesktopSessions:
             self.bridge.assert_desktop_idle()
             return
         adapter = self.adapters[provider]
+        if provider == 'claude' and adapter.cli.busy() is True:
+            raise ValueError('有 Claude Code 任务运行或等待确认，请先结束任务再关闭客户端')
         try:
             status = adapter.call('status') if provider == 'deepseek' else adapter.status()
         except (ValueError, OSError, BridgeUnavailable):
@@ -693,6 +695,8 @@ class DesktopSessions:
     def _claude_quit_evidence(self):
         adapter = self.adapters['claude']
         try:
+            if adapter.cli.busy() is True:
+                return {'busy': True, 'unknown': False}
             if not adapter.status().get('connected'):
                 return {'busy': False, 'unknown': True}
             listing = adapter.call('list')  # Fresh safety evidence, never shared.
@@ -835,7 +839,7 @@ class DesktopSessions:
                         private_json(self.config_path, self.config)
                 remembered = bool(binding.get('executable') and verified.get(provider) == binding and
                                   discovered.get(provider, {}).get('installed'))
-                configured = ready or remembered
+                configured = ready or remembered or (provider == 'claude' and status.get('cliAuthReady') is True)
                 if provider == 'deepseek' and (pending_restart or status.get('updateRequired')):
                     configured = False
                 if not connected and remembered and setup_status not in (
@@ -846,7 +850,9 @@ class DesktopSessions:
                     setup_status, reason = 'failed', setup.get('reason', reason)
                 rows.append({'id': provider, 'name': name, 'installed': discovered.get(provider, {}).get('installed', connected),
                              'setupStatus': ('recovered' if provider == 'deepseek' and setup_status == 'recovered' else 'ready') if ready and not pending_restart else setup_status, 'configured': configured, 'connected': connected,
-                             'enabled': self.enabled(provider), 'reason': reason})
+                             'enabled': self.enabled(provider), 'reason': reason,
+                             **({'cliAvailable': status.get('cliAvailable') is True,
+                                 'cliAuthReady': status.get('cliAuthReady') is True} if provider == 'claude' else {})})
             from bridge.clients.lifecycle import inspect_clients
             descriptors = []
             for row in rows:
@@ -881,7 +887,8 @@ class DesktopSessions:
                 elif row['id'] == 'claude':
                     self._claude_progress(row, native_states.get('claude'))
                 # Selection is a startup preference; readiness still requires live evidence.
-                row['selectable'] = bool(row['configured'] or row['installed'] and row['setupStatus'] != 'unsupported')
+                row['selectable'] = bool(row['configured'] or row['installed'] and row['setupStatus'] != 'unsupported'
+                                         or row.get('cliAvailable'))
                 if row['id'] == 'claude':
                     row['initializationMode'] = 'background' if sys.platform == 'win32' else 'foreground'
                     row['reconnectSupported'] = self._claude_reconnect_supported()
@@ -1011,6 +1018,8 @@ class DesktopSessions:
                 elif provider == 'claude':
                     if value.get('initializeDesktop') is True:
                         self.adapters[provider].connect()
+                    elif self.adapters[provider].status().get('cliAvailable') is True:
+                        pass  # CLI-only selection never launches or activates Claude Desktop.
                     elif sys.platform == 'darwin':
                         result = launch_client(descriptor)
                         if not result.get('running'):
@@ -1025,6 +1034,8 @@ class DesktopSessions:
                     if not result.get('running'):
                         raise ValueError('客户端尚未启动，请在电脑端检查后重试')
             else:
+                if provider == 'claude' and self.adapters[provider].cli.busy() is True:
+                    raise ValueError('有 Claude Code 任务运行或等待确认，请先结束任务再关闭客户端')
                 self._stop_client(provider, descriptor, inspect_client(descriptor),
                                   native_confirmation=value.get('quitDesktop') is True,
                                   force=value.get('forceDesktop') is True)

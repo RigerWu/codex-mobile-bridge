@@ -12,6 +12,7 @@ import bridge.clients.claude.model as model
 from bridge.clients.claude.setup import inspect_installation, console_source, developer_mode_enabled, native_action, running_app, claude_data_home, background_running_app
 from bridge.clients.errors import BridgeUnavailable
 from bridge.clients.claude.mailbox import FileDesktop, MAX_REQUEST, CONNECTOR_REVISION
+from bridge.clients.claude.cli_session import ClaudeCli
 from bridge.app.lifecycle import private_json
 from bridge.platforms.windows import session as windows_session
 from bridge.platforms.windows.session import DesktopUnavailable
@@ -22,6 +23,7 @@ DESKTOP_WAIT_STATES = {'needs-screen-saver', 'needs-unlock', 'needs-desktop'}
 class Claude:
     def __init__(self, directory, *, auto_connect=True):
         self.directory = Path(directory)
+        self.cli = ClaudeCli()
         self.desktop = None
         self.index = {}
         self.loop = None
@@ -551,6 +553,7 @@ class Claude:
             result.update(setupState='needs-retry', reason='Claude 连接已中断，请点击连接重试')
         elif not self.discovery:
             result.update(setupState='not-scanned', reason='请扫描本机客户端')
+        result.update(self.cli.status())
         return result
 
     async def listing(self):
@@ -573,10 +576,20 @@ class Claude:
                 'contextUsage': any(method in methods for method in ('getContextUsageSummary', 'getContextUsage'))}
 
     async def dispatch(self, action, sid, body):
+        if action == 'list':
+            cli = await asyncio.to_thread(self.cli.listing)
+            if self.status()['connected']:
+                desktop = await self.listing()
+                return {'connected': True, 'sessions': desktop['sessions'] + cli['sessions'],
+                        'coverage': {**desktop['coverage'], 'cli': cli['connected']},
+                        'complete': desktop['complete']}
+            return {'connected': cli['connected'], 'sessions': cli['sessions'],
+                    'coverage': {'code': False, 'cowork': False, 'cli': cli['connected']},
+                    'complete': cli['connected']}
+        if sid and await asyncio.to_thread(self.cli.contains, sid):
+            return await asyncio.to_thread(self.cli.call, action, sid, body)
         if not self.status()['connected']:
             raise BridgeUnavailable(self.status()['reason'])
-        if action == 'list':
-            return await self.listing()
         if action == 'account':
             return await self.desktop.call('code', 'mobileAccount')
         if action in ('projects', 'create'):
@@ -714,6 +727,13 @@ class Claude:
 
     def call(self, action, sid=None, body=None, *, timeout=100):
         if self.loop is None:
+            if action == 'list':
+                cli = self.cli.listing()
+                return {'connected': cli['connected'], 'sessions': cli['sessions'],
+                        'coverage': {'code': False, 'cowork': False, 'cli': cli['connected']},
+                        'complete': cli['connected']}
+            if sid and self.cli.contains(sid):
+                return self.cli.call(action, sid, body or {})
             raise BridgeUnavailable(self.status()['reason'])
         future = self._submit_call(lambda: self.dispatch(action, sid, body or {}))
         try:
@@ -769,6 +789,7 @@ class Claude:
                     self.pending_calls.discard(future)
 
     def close(self):
+        self.cli.close()
         # Ownership handoff must preserve explicit connection intent. A user's
         # Cancel action persists autoConnect=False instead.
         self.cancel(persist=False)

@@ -24,6 +24,7 @@ from pathlib import Path
 CODEX_KEY = 'synthetic-codex-key'
 CLAUDE_KEY = 'synthetic-claude-key'
 CODEX_MODEL = 'cmb-package-codex-fixture'
+CODEX_MODEL_ALT = 'cmb-package-codex-switched'
 CLAUDE_MODEL = 'cmb-package-claude-fixture'
 PASSWORD = 'synthetic-package-acceptance-password'
 
@@ -54,6 +55,7 @@ class MockServer(ThreadingHTTPServer):
         self.markers = markers
         self.calls = []
         self.lock = threading.Lock()
+        self.switched_model = None
 
     def record(self, **row):
         with self.lock:
@@ -93,7 +95,14 @@ class MockHandler(BaseHTTPRequestHandler):
         key_ok = key == ('Bearer ' + CODEX_KEY if self.server.kind == 'codex' else CLAUDE_KEY)
         model = body.get('model')
         self.server.record(kind='model', path=path, keyMatches=key_ok, model=model)
-        if path != expected or not key_ok or model != (CODEX_MODEL if self.server.kind == 'codex' else CLAUDE_MODEL):
+        if self.server.kind == 'codex':
+            model_ok = model in (CODEX_MODEL, CODEX_MODEL_ALT)
+        else:
+            selected = self.server.switched_model
+            model_ok = model == CLAUDE_MODEL or (selected is not None and
+                (model == selected or isinstance(model, str) and
+                 model.startswith('claude-' + selected + '-')))
+        if path != expected or not key_ok or not model_ok:
             self.send_error(403)
             return
         try:
@@ -129,7 +138,7 @@ class MockHandler(BaseHTTPRequestHandler):
                 'status': 'completed', 'content': [{'type': 'output_text', 'text': response_text,
                                                    'annotations': []}]}
         response = {'id': 'resp_fixture_' + uuid.uuid4().hex, 'object': 'response',
-                    'created_at': 0, 'status': 'completed', 'model': CODEX_MODEL,
+                    'created_at': 0, 'status': 'completed', 'model': body['model'],
                     'output': [item], 'usage': {'input_tokens': 10, 'output_tokens': 5,
                                                 'total_tokens': 15}}
         events = [
@@ -186,7 +195,7 @@ class MockHandler(BaseHTTPRequestHandler):
             else:
                 raise ValueError('Unknown current Claude turn')
         message = {'id': 'msg_fixture_' + uuid.uuid4().hex, 'type': 'message',
-                   'role': 'assistant', 'content': [], 'model': CLAUDE_MODEL,
+                   'role': 'assistant', 'content': [], 'model': body['model'],
                    'stop_reason': None, 'stop_sequence': None,
                    'usage': {'input_tokens': 1, 'output_tokens': 1}}
         if not tool:
@@ -361,7 +370,27 @@ def seed_claude(project):
                 'Native Claude seed reply missing')
         return sid, native
     finally:
+        owned_processes = [owned.process for owned in client.owned.values()]
         client.close()
+        require(all(process.poll() is not None for process in owned_processes),
+                'Native Claude seed process survived its owner close')
+
+
+def verify_native_idle(codex_home, codex_cli, claude_profile):
+    from bridge.clients.claude.session_registry import assert_profile_idle
+    from bridge.clients.codex.cli_session import CliSessions
+    assert_profile_idle(claude_profile)
+    if codex_cli is not None:
+        cli = CliSessions(codex_home, lambda *_: None, lambda: None, cli=str(codex_cli))
+        require(not cli.daemon_may_be_running(),
+                'Task-owned Codex daemon still runs or has unknown native status')
+
+
+def await_native_idle(codex_home, codex_cli, claude_profile):
+    def idle():
+        verify_native_idle(codex_home, codex_cli, claude_profile)
+        return True
+    wait_for(idle, 'task-owned native processes to stop', 12)
 
 
 def verify_codex(http, thread_id, project, server, result):
@@ -371,6 +400,9 @@ def verify_codex(http, thread_id, project, server, result):
     def state_with(marker):
         state = http.checked('GET', path)
         return state if marker in json.dumps(state) else None
+    def state_field(name, value):
+        state = http.checked('GET', path)
+        return state if state.get(name) == value else None
     saved = wait_for(lambda: state_with('CODEX_SEED_REPLY'),
                      'saved Codex history before activation')
     require(saved.get('access', {}).get('source') == 'cli' or saved.get('origin') == 'cli',
@@ -384,16 +416,41 @@ def verify_codex(http, thread_id, project, server, result):
     state = wait_for(connected_state, 'Codex connected state')
     require(state.get('provider') == 'fixture' and Path(state.get('cwd', '')).resolve() == project,
             'Codex provider or cwd changed during resume')
-    require(CODEX_MODEL in json.dumps(state), 'Effective Codex model absent after resume')
-    require('permissionMode' in state or 'currentPermissions' in json.dumps(state),
-            'Effective Codex permission missing after resume')
+    require(state.get('model') == CODEX_MODEL, 'Initial effective Codex model changed')
+    initial_permission = state.get('permissionMode')
+    require(isinstance(initial_permission, str), 'Initial effective Codex permission missing')
+    effort = state.get('effort') if state.get('effort') in (
+        'none', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max', 'ultra') else 'medium'
+    changed_model = http.checked('POST', path+'/settings',
+                                 {'model': CODEX_MODEL_ALT, 'effort': effort})
+    require(changed_model.get('applied') is True and changed_model.get('confirmed') is True,
+            'Native Codex model change was not confirmed')
+    wait_for(lambda: state_field('model', CODEX_MODEL_ALT), 'changed Codex model')
+    options = http.checked('GET', path+'/permissions')
+    alternate = next((row['preset'] for row in options.get('options', [])
+                      if row.get('available') is True and row.get('preset') != initial_permission), None)
+    require(alternate is not None, 'Native Codex offered no alternate permission mode')
+    changed_permission = http.checked('POST', path+'/permissions',
+        {'preset': alternate, 'confirmed': alternate == 'full-access', 'expectedRuntime': 'cli'})
+    require(changed_permission.get('applied') is True and
+            changed_permission.get('confirmed') is True and
+            changed_permission.get('permissionMode') == alternate,
+            'Native Codex permission change was not confirmed')
+    wait_for(lambda: state_field('permissionMode', alternate), 'changed Codex permission')
+    result['codexModelAndPermissionSwitched'] = True
     reply_count = len([row for row in server.calls if row['kind'] == 'model'])
     sent = http.checked('POST', path+'/send', {'text': 'CODEX_HTTP_SEND; synthetic only.',
                                                'id': str(uuid.uuid4())})
     require(sent.get('status') in ('accepted', 'queued'), 'Codex send not accepted')
     wait_for(lambda: len([row for row in server.calls if row['kind'] == 'model']) > reply_count,
              'Codex HTTP model request')
-    wait_for(lambda: state_with('CODEX_HTTP_REPLY'), 'Codex HTTP assistant reply')
+    final_state = wait_for(lambda: state_with('CODEX_HTTP_REPLY'), 'Codex HTTP assistant reply')
+    wait_for(lambda: state_field('status', 'idle'), 'Codex HTTP turn completion')
+    require(final_state.get('model') == CODEX_MODEL_ALT and
+            final_state.get('permissionMode') == alternate and
+            any(row['kind'] == 'model' and row['model'] == CODEX_MODEL_ALT
+                for row in server.calls[reply_count:]),
+            'Codex next turn did not retain selected model and permission')
     result['codexHttpReply'] = True
     goal_id = str(uuid.uuid4())
     goal = http.checked('POST', path+'/send', {'text': 'Synthetic package acceptance goal',
@@ -434,9 +491,41 @@ def verify_claude(http, sid, project, server, markers, result):
     require(detail['session']['model'] == CLAUDE_MODEL and
             detail['session']['permissionMode'] == 'default',
             'Effective Claude model or permission changed')
+    catalog = http.checked('GET', base+'catalog'+query)
+    alternate_model = next((row.get('id') for row in catalog.get('models', [])
+                            if isinstance(row.get('id'), str) and row['id'] != CLAUDE_MODEL and
+                            (row['id'] in ('opus', 'sonnet', 'haiku') or
+                             row['id'].startswith('claude-'))), None)
+    require(alternate_model is not None, 'Native Claude offered no alternate model')
+    changed_model = http.checked('POST', base+'settings',
+        {'sessionId': sid, 'id': str(uuid.uuid4()), 'model': alternate_model})
+    require(changed_model.get('status') == 'accepted', 'Native Claude model change was not accepted')
+    server.switched_model = alternate_model
+    changed_permission = http.checked('POST', base+'access',
+        {'sessionId': sid, 'id': str(uuid.uuid4()), 'mode': 'plan'})
+    require(changed_permission.get('status') == 'accepted',
+            'Native Claude permission change was not accepted')
+    detail = http.checked('GET', base+'detail'+query)
+    access = http.checked('GET', base+'access'+query)
+    require(detail['session']['model'] == alternate_model and
+            detail['session']['permissionMode'] == 'plan' and access.get('mode') == 'plan',
+            'Claude changed model or permission was not effective')
+    restored_permission = http.checked('POST', base+'access',
+        {'sessionId': sid, 'id': str(uuid.uuid4()), 'mode': 'default'})
+    require(restored_permission.get('status') == 'accepted' and
+            http.checked('GET', base+'detail'+query)['session']['permissionMode'] == 'default',
+            'Claude permission was not restored for tool approval checks')
+    result['claudeModelAndPermissionSwitched'] = True
+    before_model_calls = len(server.calls)
     http.checked('POST', base+'send', {'sessionId': sid, 'id': str(uuid.uuid4()),
                                        'text': 'CLAUDE_HTTP_SEND; synthetic only.'})
-    wait_for(lambda: detail_with('CLAUDE_HTTP_REPLY'), 'Claude HTTP assistant reply')
+    detail = wait_for(lambda: detail_with('CLAUDE_HTTP_REPLY'), 'Claude HTTP assistant reply')
+    wait_for(ready_detail, 'Claude HTTP turn completion')
+    require(detail['session']['model'] == alternate_model and
+            any(row['kind'] == 'model' and row['model'] != CLAUDE_MODEL and
+                (row['model'] == alternate_model or row['model'].startswith('claude-' + alternate_model + '-'))
+                for row in server.calls[before_model_calls:]),
+            'Claude next turn did not use the selected native model')
     result['claudeHttpReply'] = True
     for decision in ('decline', 'accept'):
         label = 'DENY' if decision == 'decline' else 'ALLOW'
@@ -452,6 +541,7 @@ def verify_claude(http, sid, project, server, markers, result):
         require(response.get('status') == 'accepted', 'Claude approval was not accepted')
         reply = 'CLAUDE_DENIED_REPLY' if decision == 'decline' else 'CLAUDE_ALLOWED_REPLY'
         wait_for(lambda: detail_with(reply), 'Claude '+label+' final reply')
+        wait_for(ready_detail, 'Claude '+label+' turn completion')
         require((not marker.exists()) if decision == 'decline' else
                 marker.read_text(encoding='utf-8') == 'ALLOWED_MARKER',
                 'Claude '+label+' tool effect incorrect')
@@ -461,7 +551,7 @@ def verify_claude(http, sid, project, server, markers, result):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--gui', type=Path,
-                        help='Optional installed Test controller; proves the gateway belongs to its resources')
+                        help='Optional installed Test controller path check; this worker E2E does not launch the GUI')
     parser.add_argument('--gateway', type=Path, required=True, help='Installed bundled gateway worker')
     parser.add_argument('--codex-cli', type=Path, required=True, help='Installed native Codex CLI')
     parser.add_argument('--codex-package', type=Path,
@@ -546,7 +636,7 @@ def main():
         require(metadata.get('version') == '2.0.3', 'Installed gateway version metadata is not 2.0.3')
         result['checks']['versionMetadata203'] = True
         if args.gui is not None:
-            result['checks']['distinctTestProductBundle'] = True
+            result['checks']['testControllerBundlePath'] = True
         codex_cli = stage_managed_cli(args.codex_cli, codex_home, args.codex_package)
         (codex_home/'config.toml').write_text(
             'model=' + json.dumps(CODEX_MODEL) + '\nmodel_provider="fixture"\n'
@@ -563,6 +653,7 @@ def main():
         codex_lifecycle(codex_cli, codex_home, 'stop', env)
         daemon_started = False
         claude_id, claude_native = seed_claude(project)
+        await_native_idle(codex_home, codex_cli, claude_profile)
         result['checks']['nativeSeedsClosed'] = True
         result['stage'] = 'installed-worker-start'
         settings = worker.call('snapshot')
@@ -572,8 +663,8 @@ def main():
             'ipcPath': str(run/'missing-desktop-ipc')})
         settings['auth']['password'] = PASSWORD
         worker.call('save', settings)
+        started = True  # A timed-out start may still have launched this isolated gateway.
         worker.call('start')
-        started = True
         http = GatewayHTTP(settings['preferences']['port'])
         wait_for(lambda: http.request('GET', '/api/auth')[0] == 200,
                  'installed gateway HTTP start', 40)
@@ -593,8 +684,9 @@ def main():
         worker.call('stop')
         started = False
         codex_lifecycle(codex_cli, codex_home, 'stop', env)
-        worker.call('start')
+        await_native_idle(codex_home, codex_cli, claude_profile)
         started = True
+        worker.call('start')
         http = GatewayHTTP(settings['preferences']['port'])
         wait_for(lambda: http.request('GET', '/api/auth')[0] == 200,
                  'installed gateway restart', 40)
@@ -608,10 +700,14 @@ def main():
                 '/api/desktop-sessions/claude/detail?sessionId='+claude_id)),
                 'Claude native history missing after gateway restart')
         result['checks']['persistedNativeHistory'] = True
-        require(all(row['path'] == '/v1/responses' and row['keyMatches'] and row['model'] == CODEX_MODEL
+        require(all(row['path'] == '/v1/responses' and row['keyMatches'] and
+                    row['model'] in (CODEX_MODEL, CODEX_MODEL_ALT)
                     for row in servers[0].calls if row['kind'] == 'model'),
                 'Codex request escaped fixture endpoint or selected wrong credentials/model')
-        require(all(row['path'] == '/v1/messages' and row['keyMatches'] and row['model'] == CLAUDE_MODEL
+        require(all(row['path'] == '/v1/messages' and row['keyMatches'] and
+                    (row['model'] == CLAUDE_MODEL or row['model'] == servers[1].switched_model or
+                     isinstance(row['model'], str) and
+                     row['model'].startswith('claude-' + servers[1].switched_model + '-'))
                     for row in servers[1].calls if row['kind'] == 'model'),
                 'Claude request escaped fixture endpoint or selected wrong credentials/model')
         require(any(row['kind'] == 'tool-result' and row['denied'] for row in servers[1].calls)
@@ -633,12 +729,20 @@ def main():
                 result['status'] = 'failed'
                 result['cleanupError'] = 'gateway stop: ' + type(exc).__name__
         if codex_cli is not None and (daemon_started or
-                (codex_home/'app-server-control'/'app-server-control.sock').exists()):
+                (codex_home/'app-server-control'/'app-server-control.sock').exists() or
+                any((codex_home/'app-server-daemon'/name).exists() for name in
+                    ('daemon.pid', 'app-server.pid'))):
             try:
                 codex_lifecycle(codex_cli, codex_home, 'stop', env)
             except Exception as exc:
                 result['status'] = 'failed'
                 result['cleanupError'] = 'daemon stop: ' + type(exc).__name__
+        try:
+            await_native_idle(codex_home, codex_cli, claude_profile)
+            result['checks']['ownedNativeRuntimesStopped'] = True
+        except Exception as exc:
+            result['status'] = 'failed'
+            result['cleanupError'] = 'native idle: ' + type(exc).__name__
         for server, thread in zip(servers, threads):
             server.shutdown(); server.server_close(); thread.join(timeout=5)
         result['codexModelPosts'] = sum(row['kind'] == 'model' for row in servers[0].calls)

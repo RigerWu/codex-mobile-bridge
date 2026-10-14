@@ -280,6 +280,7 @@ const en={
 "需要初始化连接":"Connection initialization required",
 "初始化连接":"Initialize connection",
 "尝试重连":"Try reconnecting",
+"重新连接 Desktop":"Reconnect Desktop",
 "重新初始化连接":"Reinitialize connection",
 "连接被其他网关占用":"Connection used by another gateway",
 "Claude 桥接连接被其他网关占用，请先停止旧网关；旧版连接还需重新加载 Claude":"Another gateway is using Claude's bridge. Stop the old gateway first; legacy connections also require reloading Claude.",

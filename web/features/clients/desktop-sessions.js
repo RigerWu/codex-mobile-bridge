@@ -75,7 +75,8 @@ class DesktopSessionsView {
   setClientStates(clients,retry,initialize,refresh,reconnect){
     for(const client of clients){const old=this.clientStates?.find(row=>row.id===client.id);if(old&&(old.enabled!==false&&client.enabled===false||this.sourceReadable(old)&&!this.sourceReadable(client)))this.invalidateReads(client.id);}
     const before=this.clientStates?.find(client=>client.id===this.provider);this.clientStates=clients;this.retryClient=retry;this.initializeClient=initialize;this.refreshClients=refresh;this.reconnectClient=reconnect;
-    if(this.state&&!this.canMutate())this.staleDetail();else this.updateComposer();
+    const selected=clients.find(client=>client.id===this.provider),cliReadable=this.provider==='claude'&&this.state?.backend==='cli'&&selected?.enabled!==false&&this.sourceReadable(selected);
+    if(this.state&&!this.canMutate()&&!cliReadable)this.staleDetail();else this.updateComposer();
     const current=clients.find(client=>client.id===this.provider),wasWaiting=before&&ClientLifecycle.connection(before).waiting;
     this.prefetchLists();
     if(!this.renderConnectionStatus()&&before&&(wasWaiting||(!this.sourceReadable(before)&&this.sourceReadable(current)))){this.listStatus.textContent=this.rows.length?'':BridgeI18n.t('正在读取聊天…');return this.refresh();}

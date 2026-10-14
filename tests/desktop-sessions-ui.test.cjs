@@ -479,6 +479,8 @@ test('Claude CLI history is readable without initializing Desktop and resumes on
  ui.view.setClientStates([cliClient]);await ui.view.choose('claude');await ui.view.open('cli-a');
  assert.match(ui.view.messages.textContent,/Saved CLI reply/);assert.equal(ui.calls.filter(c=>c.body).length,0);
  assert.equal(ui.view.send.disabled,true);assert.equal(ui.view.status.textContent,'历史记录');assert.equal(ui.view.resumeButton.hidden,false);
+ // Unchanged lifecycle polling must retain the freshly read, closed CLI chat.
+ ui.view.setClientStates([cliClient]);assert.equal(ui.view.canResume(),true);assert.equal(ui.view.resumeButton.hidden,false);
  await ui.view.resumeButton.click();await new Promise(setImmediate);
  assert.equal(ui.calls.filter(c=>c.body).length,1);assert.equal(ui.view.send.disabled,false);assert.equal(ui.view.resumeButton.hidden,true);
  assert.equal(ui.view.modelButton.disabled,false);assert.equal(ui.view.permissionsButton.disabled,false);

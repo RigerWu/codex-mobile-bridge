@@ -69,12 +69,19 @@ class MockAPI(BaseHTTPRequestHandler):
         with type(self).lock:
             index = len(type(self).calls)
             phase = PHASES[index] if index < len(PHASES) else 'unexpected'
-            payload = json.dumps(body.get('messages', []), ensure_ascii=False)
+            messages = body.get('messages', [])
+            last = messages[-1] if messages else {}
+            content = last.get('content') if isinstance(last, dict) else None
+            result = next((part for part in content if isinstance(part, dict)
+                           and part.get('type') == 'tool_result'), None) if isinstance(content, list) else None
             type(self).calls.append({'phase': phase, 'path': path,
                 'model': body.get('model'),
                 'keyMatches': self.headers.get('x-api-key') == 'sk-ant-test-isolated',
-                'toolResultSeen': 'tool_result' in payload,
-                'messageCount': len(body.get('messages', []))})
+                'toolResultId': result.get('tool_use_id') if result else None,
+                'toolResultIsError': result.get('is_error') is True if result else None,
+                'toolResultSuccessText': 'File created successfully' in str(result.get('content'))
+                    if result else False,
+                'messageCount': len(messages)})
         if phase == 'unexpected':
             self.send_error(409)
             return
@@ -159,7 +166,7 @@ def main():
              'allowToolResult': False, 'allowFinalReply': False,
              'duplicateRejected': False, 'staleNoSecondEffect': False,
              'providerAndModelCorrect': False, 'nativeHistoryPersisted': False,
-             'cwdCorrect': False, 'ownedWritersClosed': False,
+             'profileCorrect': False, 'cwdCorrect': False, 'ownedWritersClosed': False,
              'listenerClosed': False, 'calls': [], 'error': None}
     cli = resumed = None
     try:
@@ -169,12 +176,20 @@ def main():
                                      text=True, timeout=5, check=True).stdout.strip()
             proof['claudeVersion'] = version
             assert version.startswith('2.1.168'), 'fixture expects the verified native version'
-            proof['cwdCorrect'] = profile['directory'] == PROFILE
+            proof['profileCorrect'] = profile['directory'] == PROFILE
+            assert proof['profileCorrect'], 'isolated config directory not selected'
             cli = ClaudeCli()
             created = cli.create(str(PROJECT), profile['origin'], 'FULL_FIRST')
             sid = created['result']['id']
             proof['created'] = created['status'] == 'ready'
             native = cli._get(sid)['nativeId']
+            row = cli._get(sid)
+            registry = [json.loads(path.read_text(encoding='utf-8'))
+                        for path in (PROFILE/'sessions').glob('*.json')]
+            proof['cwdCorrect'] = (Path(row['cwd']).resolve() == PROJECT
+                and any(entry.get('sessionId') == native and
+                        Path(entry.get('cwd', '')).resolve() == PROJECT for entry in registry))
+            assert proof['cwdCorrect'], 'native session cwd differs from isolated project'
             owner = cli.owned[native]
             assert wait_for(lambda: not owner.active, 25), 'first turn did not finish'
             proof['firstReply'] = text_seen(cli, sid, REPLIES['first'])
@@ -203,7 +218,8 @@ def main():
             resumed.call('respond', sid, {'requestId': deny_id, 'decision': 'decline'})
             assert wait_for(lambda: not owner.active, 25), 'deny turn did not finish'
             proof['denyNoEffect'] = not DENIED.exists()
-            proof['denyToolResult'] = MockAPI.calls[-1]['toolResultSeen']
+            proof['denyToolResult'] = (MockAPI.calls[-1]['toolResultId'] == 'toolu_deny_tool'
+                                       and MockAPI.calls[-1]['toolResultIsError'] is True)
             proof['denyFinalReply'] = text_seen(resumed, sid, REPLIES['deny-result'])
             assert proof['denyNoEffect'] and proof['denyToolResult'] and proof['denyFinalReply']
             resumed.call('send', sid, {'text': 'REQUEST_ALLOW_WRITE'})
@@ -215,7 +231,9 @@ def main():
             resumed.call('respond', sid, {'requestId': allow_id, 'decision': 'accept'})
             assert wait_for(lambda: not owner.active, 25), 'allow turn did not finish'
             proof['allowExactEffect'] = ALLOWED.read_text(encoding='utf-8') == 'ALLOWED_MARKER'
-            proof['allowToolResult'] = MockAPI.calls[-1]['toolResultSeen']
+            proof['allowToolResult'] = (MockAPI.calls[-1]['toolResultId'] == 'toolu_allow_tool'
+                                        and MockAPI.calls[-1]['toolResultIsError'] is False
+                                        and MockAPI.calls[-1]['toolResultSuccessText'])
             proof['allowFinalReply'] = text_seen(resumed, sid, REPLIES['allow-result'])
             assert proof['allowExactEffect'] and proof['allowToolResult'] and proof['allowFinalReply']
             marker_mtime = ALLOWED.stat().st_mtime_ns

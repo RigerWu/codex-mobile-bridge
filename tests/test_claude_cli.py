@@ -224,9 +224,9 @@ class ClaudeCliContract(unittest.TestCase):
             {'name': 'photo.png', 'url': 'data:image/png;base64,aGVsbG8='}],
             'resolvedFiles': [{'name': file.name, 'path': str(file)}]})
         content = owner.write.call_args.args[0]['message']['content']
-        self.assertEqual(content[0], {'type': 'image', 'source': {
+        self.assertEqual(content[1], {'type': 'image', 'source': {
             'type': 'base64', 'media_type': 'image/png', 'data': 'aGVsbG8='}})
-        self.assertIn(str(file), content[1]['text'])
+        self.assertIn(str(file), content[0]['text'])
         self.assertNotIn('fixture bytes', json.dumps(content))
 
     def test_question_approval_forwards_answers_to_owned_tool(self):

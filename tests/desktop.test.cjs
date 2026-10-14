@@ -206,7 +206,7 @@ test('external status updates a folded summary without replacing the focused car
   ui.context.document.querySelectorAll=selector=>selector==='[data-connection-status]'?[status]:[];
   ui.context.document.activeElement={closest:selector=>selector==='#connections'?card:null};
   await ui.poll();
-  assert.match(status.textContent,/保存配置后可检测入口/);
+  assert.match(status.textContent,/保存并启动网关后可检测入口/);
   assert.doesNotMatch(status.textContent,/导出部署包/);
   ui.value.externalStatus={entry:{message:'入口已连接'}};
   await ui.poll();

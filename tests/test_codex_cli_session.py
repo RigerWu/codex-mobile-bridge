@@ -310,7 +310,7 @@ class CliSessionTests(unittest.TestCase):
         failures = 0
         def request(method, params, **kwargs):
             nonlocal failures
-            if method == 'thread/read' and not failures:
+            if method == 'thread/read' and failures < 2:
                 failures += 1
                 failed.set()
                 raise AppServerUnavailable('Codex runtime read timed out')
@@ -318,7 +318,7 @@ class CliSessionTests(unittest.TestCase):
         self.fake.request = request
         self.sessions._queue_refresh('thread-a')
         self.assertTrue(failed.wait(2))
-        deadline = time.monotonic() + 2
+        deadline = time.monotonic() + 3
         while 'thread-a' in self.sessions.refreshing and time.monotonic() < deadline:
             time.sleep(.01)
         self.assertIn('thread-a', self.sessions.joined)

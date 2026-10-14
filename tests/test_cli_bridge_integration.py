@@ -230,6 +230,35 @@ class CliBridgeTests(CliBridgeFixture):
             'status': 'disconnected', 'clientId': 'desktop-owner'}})
         self.assertFalse(session.connected)
 
+    def test_desktop_owner_disconnect_after_goal_has_history_only_window_then_rejoins(self):
+        completed = {**self.native_state, 'threadGoal': {
+            'objective': 'Fixture goal', 'status': 'complete'}}
+        self.desktop_owner(completed)
+        with self.assertLogs('bridge.app.service', level='INFO') as captured:
+            session = self.bridge.activate(self.thread_id)
+            self.assertEqual(session.runtime, 'desktop')
+            deadline = time.monotonic() + 2
+            while session.connecting and time.monotonic() < deadline:
+                time.sleep(.01)
+            self.bridge._event({'method': 'client-status-changed', 'params': {
+                'status': 'disconnected', 'clientId': 'desktop-owner'}})
+            disconnected = self.bridge.view(self.thread_id, attach=False)
+            self.assertFalse(disconnected['connected'])
+            self.assertTrue(disconnected['access']['readOnly'])
+            self.assertEqual(session.desktop_owner_probe, None)
+            self.bridge._refresh_async(session, force=True)
+            deadline = time.monotonic() + 2
+            while not session.connected and time.monotonic() < deadline:
+                time.sleep(.01)
+            self.assertTrue(session.connected)
+            self.assertEqual(session.runtime, 'desktop')
+            self.cli.attach.assert_not_called()
+        transitions = '\n'.join(captured.output)
+        self.assertIn('cause=desktop_client_disconnected', transitions)
+        self.assertEqual(transitions.count('cause=desktop_owner_attached'), 2)
+        self.assertNotIn(self.private_text, transitions)
+        self.assertNotIn('Fixture goal', transitions)
+
     def test_desktop_owner_identity_must_match_saved_cli_cwd_and_provider(self):
         for field, value in [('cwd', '/other/project'), ('modelProvider', 'other'), ('hostId', 'other')]:
             with self.subTest(field=field):

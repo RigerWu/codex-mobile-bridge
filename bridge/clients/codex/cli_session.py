@@ -786,12 +786,29 @@ class CliSessions:
             self.refreshing.add(thread_id)
         def run():
             try:
+                read_retry = False
                 while True:
-                    self.refresh(thread_id)
+                    try:
+                        self.refresh(thread_id)
+                    except AppServerUnavailable:
+                        with self.lock:
+                            still_joined = self.joined.get(thread_id) is self.client.process
+                        if read_retry or not still_joined:
+                            raise
+                        # A single replay-safe retry lets a completed turn
+                        # converge when this was the last native event.
+                        read_retry = True
+                        time.sleep(.25)
+                        continue
+                    read_retry = False
                     with self.lock:
                         if thread_id not in self.refresh_pending:
                             break
                         self.refresh_pending.discard(thread_id)
+            except AppServerUnavailable:
+                # A timed-out read does not revoke the already joined writer.
+                # A real proxy disconnect invokes _disconnect independently.
+                pass
             except AppServerError:
                 self._invalidate(thread_id)
             finally:

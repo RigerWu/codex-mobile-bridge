@@ -1,4 +1,4 @@
-# Codex CLI 会话接入（v2.0.4 待发布）
+# Codex CLI 会话接入（v2.1.0 待发布）
 
 聊天列表纳入现有 Codex CLI 会话。完整可见库存同时包含 APP 与 CLI 会话时，列表显示来源筛选和行标记；来源取自会话的原始记录，接续后的运行方不改变来源。筛选先于分页，搜索或翻页不会让来源选项消失。打开聊天先读已保存历史，并只读查找已有 Codex App 执行连接；不启动 CLI、不向桌面 App 跳转，也不发送模型请求。Codex App 已配置的有效 SSH 连接会参与发现；远端通过用户登录 shell 读取其 `CODEX_HOME`，未设置时使用 `~/.codex`。
 
@@ -16,9 +16,11 @@ macOS 的 Codex CLI **0.162.1** 已分别验证 daemon 正在运行时接入，�
 
 CLI 权限可从聊天中的权限按钮切换；原生 CLI 按执行主机的运行时与策略展示可用选项，App 接续的聊天通过原 owner 更新。保存后从后续回合生效，界面以原生确认结果为准；聊天按钮将完全访问权限简写为“完全访问”，确认说明保持完整。消息编辑/分支、重命名和临时侧边聊天暂不开放。网关关闭或手机页面退出只断开网关连接，不停止 CLI 任务。连接中断或写入结果不确定时不自动重发；先查看原会话历史与运行状态，再决定后续操作。
 
+Codex CLI 接入在 Codex 账号管理中保存；Claude CLI 接入在 Claude 账号管理中保存，两者不会混用配置。桌面切换可选择同时应用到本机 CLI，分别核验桌面和 CLI 结果；Codex 共享配置的影响会明确提示，SSH 配置不随本机切换。Claude Code CLI 可从已有本机或 SSH 项目创建聊天，保留所选配置与目录；这不等于接管任意正在另一终端运行的 Claude 进程。Claude 本机与回环 SSH 创建、历史和上下文用量使用隔离假模型接口验收，未使用真实付费模型、真实手机或远端 Linux 服务器。已知容量显示蓝色圆环，未知容量保持中性，不从累计计费 Token 猜测上下文占比。
+
 ## 会话缺失时
 
-从“设置”中的“连接诊断”查看本机和远端的读取阶段、状态与会话来源计数，可复制摘要或导出 `codex-session-diagnostics.json`。旧版手机 App 可查看和复制；文件导出需更新 App。登录后才能读取诊断。摘要和导出不包含聊天正文、标题、项目路径、SSH 别名或凭据；远端以 `remote-1` 等编号表示。顶部 SSH 错误可关闭：同一故障在自动刷新时不再出现，恢复或错误变化后可重新提示；页面重新加载会重置关闭状态。
+从“设置”中的“SSH 连接诊断”查看本机和远端的读取阶段、状态与会话来源计数，可复制摘要或导出 `codex-session-diagnostics.json`。旧版手机 App 可查看和复制；文件导出需更新 App。登录后才能读取诊断。摘要和导出不包含聊天正文、标题、项目路径、SSH 别名或凭据；远端以 `remote-1` 等编号表示。顶部 SSH 错误可关闭：同一故障在自动刷新时不再出现，恢复或错误变化后可重新提示；页面重新加载会重置关闭状态。
 
 调查某一条会话时，可在已登录的网关地址后访问 `/api/sessions/diagnostics?thread=<会话 UUID>`。额外结果区分数据库中不存在、来源不支持、已归档、内部子任务以及历史文件缺失/不可读等情况；导出不回显该 UUID。其他用户电脑不可达时，需要对方提供此诊断，才能区分 SSH、数据目录和会话过滤问题。
 
@@ -32,4 +34,6 @@ CLI chats appear with a **CLI** badge. Opening one reads saved history and passi
 
 Native CLI controls use the same daemon for catalogs, settings, Skills, modes and Goals. Custom providers accept manually entered model IDs without switching providers. Catalogs load after connection; transient disconnects retain draft text and selected Skills. Permission controls follow the execution runtime and its policy on local and SSH CLI chats; App-owned chats use their existing owner. Changes apply to subsequent turns and require effective runtime confirmation. Editing/forking, rename and side chats remain unavailable for CLI-origin chats.
 
-Warm join and cold resume, including send and streaming replies, passed on macOS with CLI 0.162.1; this does not establish Windows, Linux or every SSH environment as verified. Open **Connection diagnostics** in Settings to read local and remote status and counts, copy the summary, or export a file. Older native apps can read and copy but need an update to export. Diagnostics require login and omit chat text, titles, paths, aliases and credentials. Dismissing an SSH error suppresses the same fault across automatic refreshes until recovery or a changed fault; reloading the page resets that dismissal. Unknown writes are not automatically replayed. The upstream resume API has no atomic identity guard across preflight and resume.
+Codex and Claude CLI access have separate account sections and configurations. Desktop switches offer opt-in local CLI synchronization and separate verification results. Codex shared-configuration effects are stated explicitly; SSH settings remain on their hosts. Claude Code CLI chats can be created from existing local or SSH projects with their selected configuration and directory; this does not claim control of an arbitrary live Claude terminal. Local and loopback SSH creation, history and context usage passed with an isolated mock API, without paid model calls, a physical phone or a remote Linux server. Unknown context capacity remains neutral rather than inferring a percentage from billed tokens.
+
+Warm join and cold resume, including send and streaming replies, passed on macOS with CLI 0.162.1; this does not establish Windows, Linux or every SSH environment as verified. Open **SSH diagnostics** in Settings to read local and remote status and counts, copy the summary, or export a file. Older native apps can read and copy but need an update to export. Diagnostics require login and omit chat text, titles, paths, aliases and credentials. Dismissing an SSH error suppresses the same fault across automatic refreshes until recovery or a changed fault; reloading the page resets that dismissal. Unknown writes are not automatically replayed. The upstream resume API has no atomic identity guard across preflight and resume.

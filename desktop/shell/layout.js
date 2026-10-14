@@ -33,8 +33,8 @@
   let client=null;
   function selectClient(id){client=id;native.classList.toggle('client-config-hidden',!['claude','deepseek'].includes(id));back.hidden=!id;clients.classList.toggle('configuration-open',!!id);document.querySelectorAll('[data-client-config]').forEach(n=>n.classList.toggle('client-config-hidden',n.dataset.clientConfig!==id));if(id)document.querySelector('[data-client-config="'+id+'"]')?.scrollIntoView({block:'start'});document.dispatchEvent(new CustomEvent('bridge-client-config',{detail:id}));}
   back.onclick=()=>selectClient(null);selectClient(null);
-  // Keep device controls visible; connection and notification details stay compact.
-  for(const name of ['network','devices','notifications'])for(const article of document.querySelectorAll('[data-panel="'+name+'"] > article'))compact(article).open=name==='devices';
+  // Keep connection setup and device controls visible; secondary settings stay compact.
+  for(const name of ['network','devices','notifications'])for(const article of document.querySelectorAll('[data-panel="'+name+'"] > article'))compact(article).open=name==='devices'||name==='network'&&article.contains($('connections'));
   const notificationPage=document.querySelector('[data-panel="notifications"]');
   const groups=[['推送通道',['bark-enabled','ntfy-enabled','pushplus-enabled','mobile-enabled']],['通知事件',['security-enabled','address-enabled','watches']],['内容与跳转',['click-base']],['帮助与测试',[]]];
   for(const [title,ids] of groups){const group=document.createElement('div');group.className='module-group';group.append(text('h2',title));notificationPage.append(group);for(const id of ids){const setting=$(id)?.closest('.module-setting');if(setting)group.append(setting);}if(!ids.length)for(const setting of notificationPage.querySelectorAll(':scope > .module-setting'))group.append(setting);}

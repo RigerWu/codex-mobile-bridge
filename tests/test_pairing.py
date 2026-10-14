@@ -201,3 +201,24 @@ class PairingHTTPTests(unittest.TestCase):
         public = self.server.pairing.control({'action': 'create', 'url': 'https://example.com'})
         code, _, cookie = self.request('/api/pair', {'token': public['url'].split('#pair=')[1]}, origin='https://example.com', host='example.com')
         self.assertEqual(code, 200); self.assertIn('Secure', cookie)
+
+    def test_external_proxy_requires_matching_origin_and_preserves_local_access_boundary(self):
+        self.server.local_access = False
+        public = 'https://example.com'
+        self.assertEqual(self.request('/api/auth', origin=public, host='example.com')[0], 200)
+        self.assertEqual(self.request('/api/login', {'username': 'test', 'password': 'test-password-long'},
+                                      origin=public, host='example.com')[0], 200)
+        self.assertEqual(self.request('/api/auth', origin=ORIGIN, host='example.com')[0], 403)
+        self.assertEqual(self.request('/api/login', {'username': 'test', 'password': 'test-password-long'},
+                                      origin=ORIGIN, host='example.com')[0], 403)
+        self.assertEqual(self.request('/api/auth', origin=public, host='192.0.2.1:8787')[0], 403)
+        self.assertEqual(self.request('/api/auth', origin=ORIGIN, host='192.0.2.1:8787')[0], 403)
+        connection = http.client.HTTPConnection('127.0.0.1', self.server.server_port, timeout=3)
+        connection.putrequest('GET', '/api/auth', skip_host=True)
+        connection.putheader('Host', 'example.com')
+        connection.putheader('Origin', public)
+        connection.putheader('Origin', public)
+        connection.endheaders()
+        response = connection.getresponse()
+        self.assertEqual(response.status, 403)
+        response.read(); connection.close()

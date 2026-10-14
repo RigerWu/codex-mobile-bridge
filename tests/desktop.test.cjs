@@ -155,6 +155,65 @@ test('Tailscale detection fills a read-only URL and preserves its unsaved identi
   assert.equal(controls.find(node=>node.dataset.connectionAction==='tailscaleInspect').textContent,'Detect Tailscale and read URL');
 });
 
+test('existing tunnel needs only an HTTPS address and keeps NAS upstream in the advanced location',async()=>{
+  const descendants=node=>[node,...(node.children||[]).flatMap(descendants)];
+  for(const language of ['zh-CN','en']){
+    const ui=await renderer(language);
+    ui.run(`connectionDraft=[{id:'entry',name:'Home',enabled:true,accessMode:'external',publicUrl:'',proxyUpstream:''}];renderConnections();`);
+    let controls=descendants(ui.nodes.get('connections'));
+    const url=controls.find(node=>node.dataset.connectionField==='publicUrl');
+    assert.equal(url.required,true);assert.equal(url.value,'');
+    assert.equal(controls.some(node=>node.dataset.connectionField==='proxyUpstream'),false);
+    assert.equal(controls.some(node=>node.dataset.connectionAction==='exportDeployment'),false);
+    assert.equal(controls.some(node=>node.dataset.connectionAction==='checkEntry'),true);
+    assert.equal(controls.find(node=>node.textContent==='http://127.0.0.1:8787')?.textContent,'http://127.0.0.1:8787');
+    url.value='bridge.example.com:8443';url.oninput();url.onblur();
+    assert.equal(ui.run('connectionDraft[0].publicUrl'),'https://bridge.example.com:8443');
+    assert.equal(ui.run("normalizeExternalUrl('http://bridge.example.com')"),'http://bridge.example.com');
+    assert.equal(ui.run("normalizeExternalUrl('bridge.example.com/path')"),'bridge.example.com/path');
+    const location=controls.find(node=>node.dataset.connectionField==='targetLocation');location.value='nas';location.onchange();
+    assert.equal(ui.run('connectionDraft[0].accessMode'),'nas');
+    controls=descendants(ui.nodes.get('connections'));
+    assert.equal(controls.some(node=>node.dataset.connectionField==='proxyUpstream'),true);
+    assert.equal(controls.some(node=>node.dataset.connectionAction==='exportDeployment'),true);
+    const copy=controls.map(node=>node.textContent).join(' ');
+    assert.match(copy,language==='en'?/Enable LAN access/:/需要开启局域网访问/);
+    assert.doesNotMatch(copy,language==='en'?/[\u4e00-\u9fff]/:/Fixed domain · NAS/);
+  }
+});
+
+test('submitting a focused bare hostname saves a strict HTTPS origin',async()=>{
+  const ui=await renderer();
+  ui.run(`connectionDraft=[{id:'entry',name:'Home',enabled:true,accessMode:'external',publicUrl:''}];renderConnections();`);
+  const descendants=node=>[node,...(node.children||[]).flatMap(descendants)];
+  const url=descendants(ui.nodes.get('connections')).find(node=>node.dataset.connectionField==='publicUrl');
+  url.value='bridge.example.com:8443';url.oninput();
+  let submitted;ui.api.save=async payload=>{submitted=payload;ui.value.preferences={...ui.value.preferences,...payload.preferences};return structuredClone(ui.value);};
+  await ui.nodes.get('settings').onsubmit({preventDefault(){}});
+  assert.equal(submitted.preferences.connections[0].publicUrl,'https://bridge.example.com:8443');
+  assert.equal(ui.value.preferences.connections[0].accessMode,'external');
+});
+
+test('external status updates a folded summary without replacing the focused card',async()=>{
+  const ui=await renderer();
+  ui.value.preferences.connections=[{id:'entry',name:'Home',enabled:true,accessMode:'external',publicUrl:'https://bridge.example.com'}];
+  await ui.poll();
+  const descendants=node=>[node,...(node.children||[]).flatMap(descendants)];
+  const card=ui.nodes.get('connections').children[0],items=descendants(card);
+  const status=items.find(node=>node.dataset.connectionStatus==='entry');
+  const summary=items.find(node=>node.className==='connection-summary');
+  status.closest=()=>({querySelector:()=>summary});
+  ui.context.document.querySelectorAll=selector=>selector==='[data-connection-status]'?[status]:[];
+  ui.context.document.activeElement={closest:selector=>selector==='#connections'?card:null};
+  await ui.poll();
+  assert.match(status.textContent,/保存配置后可检测入口/);
+  assert.doesNotMatch(status.textContent,/导出部署包/);
+  ui.value.externalStatus={entry:{message:'入口已连接'}};
+  await ui.poll();
+  assert.match(summary.textContent,/Home · https:\/\/bridge.example.com · 入口已连接/);
+  assert.equal(ui.nodes.get('connections').children[0],card);
+});
+
 test('changing the Tailscale HTTPS port invalidates the previously detected URL',async()=>{
   const ui=await renderer();
   ui.run(`connectionDraft=[{id:'ts',enabled:true,accessMode:'tailscale',publicUrl:'https://mac.example.ts.net',tailscaleMode:'funnel',tailscalePort:443,tailscaleNodeId:'n123'}];renderConnections();`);
@@ -643,15 +702,15 @@ test('snapshot worker reuses a process and isolates data directory changes',asyn
 });
 
 
-test('native window title ignores page changes and only updates when locale changes',()=>{
+test('native window title and local target copy respect their fixed origins',async()=>{
   const fs=require('node:fs'),vm=require('node:vm'),requireMain=require('node:module').createRequire(path.resolve(__dirname,'../desktop/main.cjs'));
-  const handlers={},events={};let instance,changes=0;
+  const handlers={},events={},copied=[],opened=[];let instance,changes=0;
   class Window {
     constructor(options){instance=this;this.title=options.title;this.webContents={mainFrame:{url:require('node:url').pathToFileURL(path.resolve(__dirname,'../desktop/index.html')).href},setWindowOpenHandler(){},on(){},once(){}};}
     on(name,handler){events[name]=handler;}loadFile(){}getTitle(){return this.title;}setTitle(value){changes++;this.title=value;}
   }
   const context=vm.createContext({__dirname:path.resolve(__dirname,'../desktop'),process:{env:{},platform:'darwin'},require(name){
-    if(name==='electron')return {app:{requestSingleInstanceLock:()=>true,whenReady:()=>({then(){}}),on(){},getPath:()=>'.tmp'},BrowserWindow:Window,ipcMain:{handle:(name,handler)=>handlers[name]=handler}};
+    if(name==='electron')return {app:{requestSingleInstanceLock:()=>true,whenReady:()=>({then(){}}),on(){},getPath:()=>'.tmp'},BrowserWindow:Window,ipcMain:{handle:(name,handler)=>handlers[name]=handler},clipboard:{writeText:value=>copied.push(value)},shell:{openExternal:url=>opened.push(url)}};
     if(name==='node:fs')return {...fs,mkdirSync(){},writeFileSync(){}};
     if(name==='./features/connections/qr.cjs')return {};
     if(name==='./shared/gateway-language.cjs')return {publishLanguage(){}};
@@ -666,6 +725,15 @@ test('native window title ignores page changes and only updates when locale chan
   handlers['bridge:set-language'](event,'zh-CN');assert.equal(changes,0);
   handlers['bridge:set-language'](event,'en');assert.equal(changes,1);
   handlers['bridge:set-language'](event,'en');assert.equal(changes,1);
+  vm.runInContext("lastSnapshot={urls:[],preferences:{port:8787}};updateQuitting=true;updater={status(){return {}}}",context);
+  await handlers['bridge:copy'](event,'http://127.0.0.1:8787');
+  await handlers['bridge:copy'](event,'http://127.0.0.1:8788');
+  assert.deepEqual(copied,['http://127.0.0.1:8787','http://127.0.0.1:8788']);
+  await assert.rejects(handlers['bridge:copy'](event,'http://127.0.0.1:65536'),/地址不可用/);
+  await assert.rejects(handlers['bridge:copy'](event,'http://127.0.0.1:8788/path'),/地址不可用/);
+  await assert.rejects(handlers['bridge:copy'](event,'http://192.168.1.2:8787'),/地址不可用/);
+  await handlers['bridge:open'](event,'setup-external');
+  assert.match(opened[0],/#external$/);
 });
 
 

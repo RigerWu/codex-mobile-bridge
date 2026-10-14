@@ -256,7 +256,7 @@ function register(){
     if(target==='data')return shell.openPath(dataDir);
     if(target==='tailscale-help'||target==='setup-tailscale')return shell.openExternal('https://tailscale.com/docs/how-to/quickstart');
     if(target==='cloudflare-dashboard')return shell.openExternal('https://one.dash.cloudflare.com/');
-    if(['setup-lan','setup-quick','setup-cloudflare','setup-server','setup-nas'].includes(target))return shell.openExternal('https://try2love.github.io/codex-mobile-bridge/setup.html?lang='+(language==='en'?'en':'zh')+'#'+target.slice(6));
+    if(['setup-lan','setup-quick','setup-cloudflare','setup-server','setup-nas','setup-external'].includes(target))return shell.openExternal('https://try2love.github.io/codex-mobile-bridge/setup.html?lang='+(language==='en'?'en':'zh')+'#'+target.slice(6));
     if(target==='cloudflare-domain-help')return shell.openExternal('https://developers.cloudflare.com/cloudflare-one/networks/connectors/cloudflare-tunnel/get-started/create-remote-tunnel/');
     if(target==='server-https-help')return shell.openExternal('https://caddyserver.com/docs/running');
     if(target==='server-ssh-help')return shell.openExternal('https://man.openbsd.org/sshd_config#AllowTcpForwarding');
@@ -277,7 +277,9 @@ function register(){
   });
   ipcMain.handle('bridge:copy',async(event,target)=>{
     authorize(event);const snapshot=await worker('snapshot');
-    if(!snapshot.urls.includes(target))throw Error('地址不可用');
+    const localPort=typeof target==='string'?/^http:\/\/127\.0\.0\.1:([1-9]\d{0,4})$/.exec(target):null;
+    const localTarget=localPort&&Number(localPort[1])<=65535;
+    if(!snapshot.urls.includes(target)&&!localTarget)throw Error('地址不可用');
     clipboard.writeText(target);
   });
 }

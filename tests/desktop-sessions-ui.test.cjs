@@ -466,3 +466,63 @@ test('account invalidation cancels manual feedback and rejects old list contents
  const ui=fixture();await ui.view.choose('claude');let finish;ui.setHandler(()=>new Promise(resolve=>finish=resolve));const old=ui.view.listSync.update(true);ui.view.invalidateReads('claude');assert.equal(ui.view.listHint.hidden,true);
  finish({sessions:[{id:'old',title:'Old account',backend:'code'}]});await old;assert.equal(ui.view.listHint.hidden,true);assert.doesNotMatch(ui.view.rowsRoot.textContent,/Old account/);
 });
+
+function cliDetail(connectionState='closed'){
+ const live=connectionState!=='closed';
+ return {connected:true,session:{id:'cli-a',title:'CLI chat',backend:'cli',connectionState,status:connectionState==='active'||connectionState==='awaiting'?'active':'idle',cwd:'/cli-project',model:'claude-model',permissionMode:'default',requests:[]},messages:[{id:'old',role:'assistant',model:'older-model',text:'Saved CLI reply'}],capabilities:{resume:!live,send:live,models:live,permissions:live,stop:live,attachments:false,queue:false,steer:false}};
+}
+const cliClient={id:'claude',enabled:true,installed:true,connected:false,cliAvailable:true,setupStatus:'needs-initialization'};
+
+test('Claude CLI history is readable without initializing Desktop and resumes only on explicit click',async()=>{
+ const ui=fixture();let detail=cliDetail();
+ ui.setHandler(async(url,body)=>{if(body){assert.match(url,/\/resume$/);assert.equal(body.sessionId,'cli-a');detail=cliDetail('ready');return {status:'ready'};}return url.includes('/detail')?detail:{connected:true,sessions:[detail.session]};});
+ ui.view.setClientStates([cliClient]);await ui.view.choose('claude');await ui.view.open('cli-a');
+ assert.match(ui.view.messages.textContent,/Saved CLI reply/);assert.equal(ui.calls.filter(c=>c.body).length,0);
+ assert.equal(ui.view.send.disabled,true);assert.equal(ui.view.status.textContent,'历史记录');assert.equal(ui.view.resumeButton.hidden,false);
+ // Unchanged lifecycle polling must retain the freshly read, closed CLI chat.
+ ui.view.setClientStates([cliClient]);assert.equal(ui.view.canResume(),true);assert.equal(ui.view.resumeButton.hidden,false);
+ await ui.view.resumeButton.click();await new Promise(setImmediate);
+ assert.equal(ui.calls.filter(c=>c.body).length,1);assert.equal(ui.view.send.disabled,false);assert.equal(ui.view.resumeButton.hidden,true);
+ assert.equal(ui.view.modelButton.disabled,false);assert.equal(ui.view.permissionsButton.disabled,false);
+});
+
+test('cached or disabled Claude CLI details never authorize resume or send',async()=>{
+ const ui=fixture();ui.view.provider='claude';ui.view.sid='cli-a';ui.view.setClientStates([cliClient]);
+ ui.view.applyDetail(cliDetail(),true);assert.equal(ui.view.canResume(),false);await ui.view.mutate('resume',{});
+ ui.view.applyDetail(cliDetail('ready'),true);assert.equal(ui.view.canMutate(),false);await ui.view.mutate('send',{text:'blocked'});
+ ui.view.setClientStates([{...cliClient,enabled:false}]);ui.view.applyDetail(cliDetail());await ui.view.mutate('resume',{});
+ assert.equal(ui.calls.filter(c=>c.body).length,0);assert.equal(ui.view.send.disabled,true);
+});
+
+test('Desktop disconnect does not disable a separately connected Claude CLI chat',async()=>{
+ const ui=fixture();let detail=cliDetail('ready');ui.setHandler(async url=>url.includes('/detail')?detail:{connected:true,sessions:[detail.session]});
+ ui.view.setClientStates([{...cliClient,connected:true}]);await ui.view.choose('claude');await ui.view.open('cli-a');
+ ui.view.setClientStates([cliClient]);assert.equal(ui.view.canMutate(),true);assert.equal(ui.view.send.disabled,false);
+ detail={...detail,session:{...detail.session,backend:'code'}};ui.view.applyDetail(detail);assert.equal(ui.view.canMutate(),false);assert.equal(ui.view.send.disabled,true);
+});
+
+test('Claude CLI source filter stays distinct from Desktop Code and Cowork',async()=>{
+ const ui=fixture();ui.view.provider='claude';ui.view.rows=[{id:'a',backend:'code',title:'Desktop code'},{id:'b',backend:'cowork',title:'Desktop cowork'},{id:'c',backend:'cli',title:'Terminal session'}];
+ ui.view.surface.value='cli';ui.view.renderList();assert.match(ui.view.rowsRoot.textContent,/CLI.*Terminal session/);assert.doesNotMatch(ui.view.rowsRoot.textContent,/Desktop/);
+ ui.run("BridgeI18n.setLanguage('en')");ui.view.sid='c';ui.view.applyDetail(cliDetail());assert.match(ui.view.notice.textContent,/Read the saved history/);assert.equal(ui.view.resumeButton.textContent,'Continue chat');
+});
+
+test('Claude CLI approval and stop use current native request and session despite Desktop being offline',async()=>{
+ const ui=fixture();const detail=cliDetail('awaiting');detail.session.requests=[{id:'native-request-1',tool:'Bash',input:{command:'synthetic command'}}];
+ ui.setHandler(async(url,body)=>body?{status:'accepted'}:url.includes('/detail')?detail:{connected:true,sessions:[detail.session]});
+ ui.view.setClientStates([cliClient]);await ui.view.choose('claude');await ui.view.open('cli-a');
+ assert.match(ui.view.requests.textContent,/synthetic command/);assert.equal(ui.view.stop.hidden,false);assert.equal(ui.view.stop.disabled,false);
+ await ui.view.mutate('respond',{requestId:'native-request-1',decision:'decline'});await new Promise(setImmediate);
+ await ui.view.stop.click();const writes=ui.calls.filter(c=>c.body);assert.equal(writes.length,2);assert.equal(writes[0].body.requestId,'native-request-1');assert.match(writes[1].url,/\/stop$/);assert.equal(writes[1].body.sessionId,'cli-a');
+});
+
+
+test('known preflight rejection permits a new explicit Claude CLI resume attempt',async()=>{
+ const ui=fixture();let attempts=0,detail=cliDetail();
+ ui.setHandler(async(url,body)=>{if(body){attempts++;if(attempts===1)return {status:'blocked',message:'Original terminal is open'};detail=cliDetail('ready');return {status:'ready'};}return url.includes('/detail')?detail:{connected:true,sessions:[detail.session]};});
+ ui.view.setClientStates([cliClient]);await ui.view.choose('claude');await ui.view.open('cli-a');
+ await ui.view.resumeButton.click();await new Promise(setImmediate);
+ assert.equal(attempts,1);assert.equal(ui.view.canResume(),true);assert.equal(ui.view.send.disabled,true);
+ await ui.view.resumeButton.click();await new Promise(setImmediate);
+ const writes=ui.calls.filter(c=>c.body);assert.equal(writes.length,2);assert.notEqual(writes[0].body.id,writes[1].body.id);assert.equal(ui.view.canMutate(),true);
+});

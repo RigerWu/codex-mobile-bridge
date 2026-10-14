@@ -333,6 +333,8 @@ class ClaudeNativeConnection(unittest.TestCase):
         self.addCleanup(self.temp.cleanup)
         self.root = Path(self.temp.name)
         self.adapter = Claude(self.root/'adapter')
+        self.adapter.cli = Mock()
+        self.adapter.cli.status.return_value = {'cliAvailable': False, 'cliAuthReady': False}
         self.adapter.directory.mkdir()
         profile = patch('bridge.clients.claude.setup._running_profiles', return_value=set())
         profile.start(); self.addCleanup(profile.stop)

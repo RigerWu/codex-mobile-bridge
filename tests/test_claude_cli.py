@@ -7,7 +7,7 @@ from pathlib import Path
 from unittest.mock import Mock, patch
 
 from bridge.clients.claude import model
-from bridge.clients.claude.cli_session import ClaudeCli, ResumePreflightBlocked, _Owned
+from bridge.clients.claude.cli_session import ClaudeCli, ResumePreflightBlocked, _Owned, _skill_catalog
 from bridge.clients.errors import BridgeUnavailable
 from bridge.clients.manager import DesktopSessions
 
@@ -196,6 +196,38 @@ class ClaudeCliContract(unittest.TestCase):
                                                                              'message': '用户拒绝了本次操作'}}})
         self.cli.call('stop', self.sid, {})
         owner.control.assert_called_with({'subtype': 'interrupt'})
+
+    def test_catalog_finds_real_skill_files_and_send_invokes_native_command(self):
+        user = self.config/'skills'/'review'
+        project = self.cwd/'.claude'/'skills'/'private'
+        plugin = self.root/'plugin'/'skills'/'check'
+        for folder, name, selectable in ((user, 'review', True), (project, 'private', False),
+                                         (plugin, 'check', True)):
+            folder.mkdir(parents=True)
+            (folder/'SKILL.md').write_text('---\nname: '+name+'\ndescription: Fixture '+name+
+                                          '\nuser-invocable: '+str(selectable).lower()+'\n---\nInstructions\n')
+        (self.config/'plugins').mkdir()
+        (self.config/'plugins'/'installed_plugins.json').write_text(json.dumps({'plugins': {
+            'sample@market': [{'installPath': str(self.root/'plugin')}]}}))
+        names = {row['id']: row for row in _skill_catalog(self.profile, str(self.cwd))}
+        self.assertEqual(set(names), {'review', 'private', 'sample:check'})
+        self.assertFalse(names['private']['selectable'])
+        process = Mock()
+        process.poll.return_value = None
+        owner = Mock(origin=self.profile['origin'], process=process, active=False,
+                     model=None, permission='plan', events=[])
+        owner.pending = {}
+        owner.catalog = {'models': []}
+        owner.condition = threading.Condition()
+        owner.error = None
+        self.cli.owned[self.native] = owner
+        self.assertTrue(self.cli.call('detail', self.sid, {})['capabilities']['skills'])
+        self.assertEqual({row['id'] for row in self.cli.call('catalog', self.sid, {})['skills']}, set(names))
+        with self.assertRaisesRegex(ValueError, '不可用'):
+            self.cli.call('send', self.sid, {'text': 'try', 'plugins': ['private']})
+        self.cli.call('send', self.sid, {'text': 'review this', 'plugins': ['sample:check']})
+        owner.write.assert_called_with({'type': 'user', 'message': {'role': 'user',
+                                       'content': '/sample:check review this'}})
 
     def test_question_approval_forwards_answers_to_owned_tool(self):
         process = Mock()

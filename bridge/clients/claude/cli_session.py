@@ -181,21 +181,22 @@ def _message_content(body):
     files = body.get('resolvedFiles') or []
     if not images and not files:
         return body['text']
-    blocks = []
-    if body['text'].strip():
-        blocks.append({'type': 'text', 'text': body['text']})
-    for image in images:
-        match = IMAGE_URL.fullmatch(image.get('url', '')) if isinstance(image, dict) else None
-        if not match:
-            raise ValueError('图片附件格式无效')
-        blocks.append({'type': 'image', 'source': {'type': 'base64', 'media_type': match[1], 'data': match[2]}})
+    text = body['text']
     if files:
         references = []
         for item in files:
             if not isinstance(item, dict) or not isinstance(item.get('path'), str) or not Path(item['path']).is_absolute() or not isinstance(item.get('name'), str):
                 raise ValueError('文件附件格式无效')
             references.append({'name': item['name'], 'path': item['path']})
-        blocks.append({'type': 'text', 'text': '请读取并参考这些已上传的本机文件：\n'+json.dumps(references, ensure_ascii=False)})
+        text += ('\n\n' if text.strip() else '') + '请读取并参考这些已上传的本机文件：\n' + json.dumps(references, ensure_ascii=False)
+    # Claude parses slash invocations from a single text block. Keep file
+    # references with that text so adding an attachment preserves the Skill.
+    blocks = [{'type': 'text', 'text': text}] if text.strip() else []
+    for image in images:
+        match = IMAGE_URL.fullmatch(image.get('url', '')) if isinstance(image, dict) else None
+        if not match:
+            raise ValueError('图片附件格式无效')
+        blocks.append({'type': 'image', 'source': {'type': 'base64', 'media_type': match[1], 'data': match[2]}})
     return blocks
 
 

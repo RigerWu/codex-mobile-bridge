@@ -7,9 +7,11 @@ import threading
 import uuid
 from contextlib import ExitStack
 from pathlib import Path
+from urllib.parse import urlsplit
 
 from bridge.clients.claude.cli_session import _auth_ready, _profile
 from bridge.features.accounts.accounts import private_json
+from bridge.features.accounts.models import model_ids
 from bridge.features.notifications.channels import read_json
 
 
@@ -163,6 +165,8 @@ class CliAccess:
         if not isinstance(value, dict) or value.get('provider') not in ('codex', 'claude'):
             raise ValueError('CLI 接入请求无效')
         provider, action = value['provider'], value.get('action')
+        if action in ('models', 'test'):
+            return self._probe_api(provider, value)
         saved_id = None
         with ExitStack() as locks:
             # ClaudeCli.call holds cli.lock while resolving this manager's
@@ -226,6 +230,35 @@ class CliAccess:
             if saved_id:
                 result['savedId'] = saved_id
             return result
+
+    def _probe_api(self, provider, value):
+        if set(value) != {'provider', 'action', 'id'}:
+            raise ValueError('CLI 接入请求无效')
+        if provider == 'codex':
+            accounts = self.bridge.accounts
+            with accounts.lock:
+                row = dict(accounts.row(value['id']))
+                if row['kind'] != 'api':
+                    raise ValueError('请选择已保存的 API 接入')
+                url, key = accounts.api_credentials({'id': row['id'], 'baseUrl': row['baseUrl'], 'apiKey': ''})
+            models = model_ids(url, key)
+        else:
+            from bridge.features.accounts.cli_sync import LocalCliSync
+            with self.lock:
+                row = dict(self._claude_row(value['id']))
+                if row['kind'] != 'api':
+                    raise ValueError('请选择已保存的 API 接入')
+                key = LocalCliSync(self.bridge)._claude_key(row)
+            url = row['baseUrl'].rstrip('/')
+            if not urlsplit(url).path.rstrip('/').endswith('/v1'):
+                url += '/v1'
+            auth = {'Authorization': 'Bearer '+key} if row['authScheme'] == 'bearer' else {'x-api-key': key}
+            models = model_ids(url, key, headers={**auth, 'anthropic-version': '2023-06-01'})
+        result = self.public()
+        result['probe'] = {'provider': provider, 'id': row['id'], 'status': 'reachable',
+                           'scope': 'models', 'models': models if value['action'] == 'models' else None,
+                           'modelCount': len(models)}
+        return result
 
     def control(self, value):
         return self.public() if value.get('action') == 'list' else self.change(value)

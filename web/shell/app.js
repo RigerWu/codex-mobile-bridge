@@ -9,6 +9,7 @@ function takePairingToken(){
 let initialPairingToken=takePairingToken();
 const $ = id => document.getElementById(id),t=BridgeI18n.t;
 let csrf='', currentId=null, state=null, listOffset=0, listQuery='', approvalStamp='', sending=false;
+let claudeCliAccessPanel=null;
 let currentHost='local', listRows=[], listGeneration=0, listHasMore=false, listArchived=false, listRenderStamp='';
 let chatTimeline=null,reconnectFailure=null;
 const dismissedHostFaults=new Map();
@@ -94,7 +95,7 @@ function renderLoginStatus(status=loginStatus){
   $('login-attempts').textContent=loginStatus.blocked?t('此 IP 已被封禁，请在电脑网关 App 的“登录设备”中解除。'):t('剩余尝试次数：')+loginStatus.attemptsRemaining+'/'+loginStatus.attemptLimit+t('；连续输错 5 次将封禁此 IP。');
   $('login-button').disabled=loginStatus.blocked;
 }
-function showLogin(passwordless=false,status){window.BridgeDownloads?.clear();$('mobile-binding-status').hidden=true;if(typeof cliAccessPanel!=='undefined')cliAccessPanel?.clear();if(window.BridgeSharedRelay){location.replace((window.BridgeRelayBase||'')+'/relay/');return;}desktopSessions.clear();workbench.reset();if(typeof accountsPanel!=='undefined')accountsPanel?.clear();accountPanel.clear();chatTimeline?.dispose();chatTimeline=null;document.querySelectorAll('dialog[open]').forEach(d=>d.close());$('app').hidden=true;$('login').hidden=false;$('credentials').hidden=passwordless;$('noauth').hidden=!passwordless;$('username').required=!passwordless;$('password').required=!passwordless;$('password').value='';$('remember-login').parentElement.hidden=passwordless||BridgeHost.isNativeApp();$('login-attempts').hidden=passwordless;renderLoginStatus(status);$('bootstrap-status').hidden=true;window.BridgeBootstrap?.ready();}
+function showLogin(passwordless=false,status){window.BridgeDownloads?.clear();$('mobile-binding-status').hidden=true;if(typeof codexCliAccessPanel!=='undefined')codexCliAccessPanel?.clear();claudeCliAccessPanel?.clear();if(window.BridgeSharedRelay){location.replace((window.BridgeRelayBase||'')+'/relay/');return;}desktopSessions.clear();workbench.reset();if(typeof accountsPanel!=='undefined')accountsPanel?.clear();accountPanel.clear();chatTimeline?.dispose();chatTimeline=null;document.querySelectorAll('dialog[open]').forEach(d=>d.close());$('app').hidden=true;$('login').hidden=false;$('credentials').hidden=passwordless;$('noauth').hidden=!passwordless;$('username').required=!passwordless;$('password').value='';$('remember-login').parentElement.hidden=passwordless||BridgeHost.isNativeApp();$('login-attempts').hidden=passwordless;renderLoginStatus(status);$('bootstrap-status').hidden=true;window.BridgeBootstrap?.ready();}
 async function start(pairingToken=null){
   window.BridgeBootstrap?.waitingForAuth();
   const auth=await api('/api/auth');
@@ -840,15 +841,17 @@ async function notificationChannelAction(test){
 $('pushplus-form').onsubmit=event=>{event.preventDefault();return notificationChannelAction(false);};
 $('pushplus-test').onclick=()=>notificationChannelAction(true);
 
-const cliAccessPanel=typeof CliAccessPanel==='undefined'?null:new CliAccessPanel({root:$('cli-access-content'),read:()=>api('/api/cli-access'),request:value=>api('/api/cli-access',value)});
-if(cliAccessPanel){$('cli-access-dialog').addEventListener('close',()=>cliAccessPanel.clear());$('open-cli-access').onclick=()=>{$('appearance-dialog').close();$('cli-access-dialog').showModal();cliAccessPanel.refresh();};}
+const codexCliRoot=el('div');
+const codexCliDetails=el('details','account-compact');codexCliDetails.append(el('summary','',t('Codex CLI 接入')),codexCliRoot);$('accounts-dialog').append(codexCliDetails);
+const codexCliAccessPanel=typeof CliAccessPanel==='undefined'?null:new CliAccessPanel({root:codexCliRoot,provider:'codex',read:()=>api('/api/cli-access'),request:value=>api('/api/cli-access',value)});
+$('accounts-dialog').addEventListener('close',()=>codexCliAccessPanel?.clear());
 const accountsPanel=window.BridgeSharedRelay||typeof AccountsPanel==='undefined'?null:new AccountsPanel({root:$('accounts-content'),toolbar:$('accounts-heading'),read:()=>api('/api/accounts'),request:({action,...value})=>action==='ignoreSubmission'?ignoreSubmission(value):api(action==='account'?'/api/accounts/account':action==='details'?'/api/accounts/details':action==='reminders'?'/api/accounts/reminders':action==='checkDesktopUpdate'||action==='requestDesktopUpdate'?'/api/accounts/desktop-update':'/api/accounts/switch',action==='checkDesktopUpdate'||action==='requestDesktopUpdate'?{action,...value}:value),onReset:async()=>{$('account-details').open=true;await accountPanel.refresh();$('account-content').querySelector('.account-cards')?.scrollIntoView({block:'nearest'});},onChanged:()=>{accountPanel.clear();resetModelCatalog();},onUpdate:value=>{accountPanel.schedule();const official=value.current?.kind==='chatgpt';$('account-button').hidden=!official;if(!official)$('account-details').open=false;const label='账号管理';$('accounts-button').setAttribute('data-i18n',label);$('accounts-button').textContent=t(label);}});
 function openCurrentAccounts(){
   const provider=clientNavigation.provider;
   if(!provider)return false;
   if(provider==='codex'){
     if(!accountsPanel)return false;
-    $('accounts-dialog').showModal();accountsPanel.refresh();return true;
+    $('accounts-dialog').showModal();accountsPanel.refresh();codexCliAccessPanel?.refresh();return true;
   }
   const name=clientNavigation.clients.find(row=>row.id===provider)?.name||provider;
   const dialog=desktopSessions.dialog('账号与接入'),content=el('div','provider-account');
@@ -859,7 +862,12 @@ function openCurrentAccounts(){
     readModels:()=>api('/api/desktop-sessions/'+provider+'/account'),
     onChanged:(value,previous)=>desktopSessions.accountChanged(provider,previous,value)
   });
-  dialog.addEventListener('close',()=>panel.dispose());dialog.showModal();panel.resume();
+  if(provider==='claude'&&typeof CliAccessPanel!=='undefined'){
+    const details=el('details','account-compact'),root=el('div');details.append(el('summary','',t('Claude Code CLI 接入')),root);dialog.append(details);
+    claudeCliAccessPanel=new CliAccessPanel({root,provider:'claude',read:()=>api('/api/cli-access'),request:value=>api('/api/cli-access',value)});
+    claudeCliAccessPanel.refresh();
+  }
+  dialog.addEventListener('close',()=>{panel.dispose();claudeCliAccessPanel?.dispose();claudeCliAccessPanel=null;});dialog.showModal();panel.resume();
   return true;
 }
 $('accounts-button').onclick=openCurrentAccounts;

@@ -104,6 +104,37 @@ class CliBridgeTests(CliBridgeFixture):
         self.bridge.ipc.connect.assert_not_called()
         self.bridge.ipc.follow.assert_not_called()
 
+    def test_passive_cli_timeline_follows_later_terminal_turns(self):
+        self.bridge.view(self.thread_id, background=True)
+        self.wait_for_background_read()
+        first = self.bridge.timeline_read(self.thread_id)
+        rollout = self.home / 'sessions' / 'rollout.jsonl'
+        with rollout.open('a') as stream:
+            for record in (
+                {'type': 'event_msg', 'payload': {'type': 'task_started', 'turn_id': 'later'}},
+                {'type': 'turn_context', 'payload': {'turn_id': 'later', 'model': 'actual-model'}},
+                {'type': 'response_item', 'payload': {'type': 'message', 'role': 'user', 'content': [{'type': 'text', 'text': 'later request'}]}},
+                {'type': 'response_item', 'payload': {'type': 'message', 'role': 'assistant', 'content': [{'type': 'text', 'text': 'later reply'}]}},
+                {'type': 'event_msg', 'payload': {'type': 'task_complete', 'turn_id': 'later'}},
+            ):
+                stream.write(json.dumps(record) + '\n')
+        self.bridge.live[self.thread_id].retry_at = 0
+        self.bridge.timeline_read(self.thread_id)
+        self.wait_for_background_read()
+        later = self.bridge.timeline_read(self.thread_id, 'changes', after=first['sequence'], epoch=first['epoch'], start=first['before'])
+        self.assertIn('later reply', [row['text'] for row in later['rows']])
+        self.assertIn(self.private_text, [row['text'] for row in self.bridge.timeline_read(self.thread_id)['rows']])
+        sequence = later['sequence']
+        saved_view = self.bridge.live[self.thread_id].saved_view
+        self.bridge.live[self.thread_id].retry_at = 0
+        self.bridge.timeline_read(self.thread_id)
+        self.wait_for_background_read()
+        unchanged = self.bridge.timeline_read(self.thread_id, 'changes', after=sequence, epoch=first['epoch'], start=first['before'])
+        self.assertIs(self.bridge.live[self.thread_id].saved_view, saved_view)
+        self.assertEqual(unchanged['rows'], [])
+        self.cli.attach.assert_not_called()
+        self.cli.call.assert_not_called()
+
     def test_desktop_snapshot_with_same_id_cannot_take_over_cli(self):
         session = self.bridge.activate(self.thread_id)
         original = session.state

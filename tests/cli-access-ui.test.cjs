@@ -7,7 +7,7 @@ const accessCode=extract('function sessionAccess(access){','function renderList(
 const listCode=extract('function renderList(){','async function loadList(');
 const stateCode=extract('function renderState(view){',"$('send-mode').onchange");
 const reconnectCode=extract("$('reconnect').onclick=", "document.querySelectorAll('[data-close]')");
-const permissionCode=extract("$('permissions-button').onclick=",'if(accountsPanel)');
+const permissionCode=extract("$('permissions-button').onclick=",'const fileTransferSettings=');
 const newChatTypeCode=extract("$('new-chat-type').onchange=", "$('new-chat-project').onchange=");
 test('CLI creation picker enables only a known CLI folder and uses an accurate action',()=>{
   const nodes=new Map(),$=id=>{if(!nodes.has(id))nodes.set(id,{value:'',textContent:'',disabled:false,children:[],replaceChildren(){this.children=[];this.value='';},append(option){this.children.push(option);this.value=option.value;},onchange(){}});return nodes.get(id);};

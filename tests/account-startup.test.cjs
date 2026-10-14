@@ -3,7 +3,7 @@ const test=require('node:test'),assert=require('node:assert/strict');
 const fs=require('node:fs'),path=require('node:path'),vm=require('node:vm');
 const official={visible:true,loginType:'chatgpt',accountKey:'a'.repeat(64),limits:[],resetCredits:null,canReset:false,updatedAt:1900000000};
 
-async function fixture(read,kind='chatgpt',catalog=null,gatewayLanguage){
+async function fixture(read,kind='chatgpt',catalog=null,gatewayLanguage,accountSnapshot=null){
   const nodes=new Map(),timers=new Map(),requests=[],intervals=[],events={},responses=[];let timerId=0,delayNextSkill=null,failNextSkill=false;
   const node=(tag='div')=>({tagName:tag.toUpperCase(),getBoundingClientRect(){return {width:0};},value:'',checked:false,disabled:false,hidden:false,open:false,textContent:'',dataset:{},options:[],children:[],style:{setProperty(k,v){this[k]=v;}},scrollTop:0,parentElement:{},
     classList:{add(){},remove(){},toggle(){},contains(){return false;}},addEventListener(){},setAttribute(k,v){this[k]=v;},closest(selector){return selector==='dialog'?nodes.get('accounts-dialog'):null;},
@@ -23,8 +23,7 @@ async function fixture(read,kind='chatgpt',catalog=null,gatewayLanguage){
       requests.push(url);
       if(url==='/api/auth')return response({authenticated:true,csrf:'fixture',uiLanguage:gatewayLanguage});
       if(url.startsWith('/api/sessions?'))return response({sessions:[]});
-      if(url==='/api/account'||url==='/api/account?cached=1')return read(response);
-      if(url==='/api/accounts')return response({accounts:[],activeId:null,current:{kind,status:'ready',name:'Fixture'},switch:{phase:'idle'}});
+      if(url==='/api/accounts')return response(accountSnapshot||{accounts:[],activeId:null,current:{kind,status:'ready',name:'Fixture'},switch:{phase:'idle'}});
       if(url.includes('/catalog?kind=skills')){
         if(failNextSkill){failNextSkill=false;return response({error:'Skill fixture error'},500);}
         if(delayNextSkill){const wait=delayNextSkill;delayNextSkill=null;await wait.promise;}
@@ -47,36 +46,34 @@ async function fixture(read,kind='chatgpt',catalog=null,gatewayLanguage){
     async retry(){const entry=[...timers.entries()].find(([,t])=>t.delay<=5000);assert.ok(entry,'Account read should retry promptly without user input');timers.delete(entry[0]);await entry[1].fn();await new Promise(setImmediate);}};
 }
 
-test('official and API connections share one fixed clickable entry without querying quota on startup',async()=>{
- for(const [kind,label] of [['chatgpt','账号与额度'],['api','API 接入']]){
+test('official and API connections have no current-account fallback outside saved cards',async()=>{
+ const desktopHtml=fs.readFileSync(path.join(__dirname,'../desktop/index.html'),'utf8');
+ assert.doesNotMatch(desktopHtml,/id="account-(?:details|button|content)"/);
+ for(const kind of ['chatgpt','api']){
   const ui=await fixture(r=>r(official),kind);
   assert.equal(ui.nodes.get('accounts-button').textContent,'账号管理');
-  assert.equal(ui.nodes.has('account-status'),false);assert.equal(ui.nodes.has('account-dialog'),false);
+  for(const id of ['account-status','account-dialog','account-details','account-button','account-content'])assert.equal(ui.nodes.has(id),false,id);
   assert.equal(ui.requests.filter(url=>url==='/api/account').length,0);
   ui.nodes.get('accounts-button').onclick();await new Promise(setImmediate);
   assert.equal(ui.nodes.get('accounts-dialog').open,true);
-  assert.equal(ui.nodes.get('account-button').hidden,kind!=='chatgpt');
-  assert.equal(ui.requests.filter(url=>url==='/api/account').length,0);
+  assert.equal(ui.requests.some(url=>url==='/api/account'||url==='/api/account?cached=1'),false);
  }
 });
-test('quota updates on opening details, and only after five minutes while visible',async()=>{
+test('saved official card retains its direct reset action without a second quota panel',async()=>{
+ const account={id:'official',kind:'chatgpt',name:'Official',details:{usage:{status:'ready',checkedAt:Date.now()/1000,limits:[],resetCredits:{availableCount:1}}}};
+ const ui=await fixture(r=>r(official),'chatgpt',null,null,{accounts:[account],activeId:account.id,current:{id:account.id,kind:'chatgpt',status:'ready',name:account.name},switch:{phase:'idle'},blockers:[]});
+ ui.nodes.get('accounts-button').onclick();await new Promise(setImmediate);
+ const all=node=>[node,...node.children.flatMap(all)];
+ const card=all(ui.nodes.get('accounts-content')).find(node=>node.className==='account-bucket');
+ assert.ok(card);assert.ok(all(card).some(node=>node.tagName==='BUTTON'&&node.textContent==='使用重置卡'));
+ assert.equal(ui.nodes.has('account-details'),false);
+ assert.equal(ui.requests.some(url=>url==='/api/account'||url==='/api/account?cached=1'),false);
+});
+test('opening, refreshing and logging out never read the old current-account endpoint',async()=>{
  const ui=await fixture(r=>r(official));
  ui.nodes.get('accounts-button').onclick();await new Promise(setImmediate);
- ui.nodes.get('account-details').open=true;ui.nodes.get('account-details').ontoggle();await new Promise(setImmediate);
- const quota=[...ui.timers.values()].find(i=>i.delay>299000);assert.ok(quota);
- assert.equal(ui.requests.filter(u=>u==='/api/account').length,1);
- ui.run('accountPanel.checkedAt=Date.now()-300001');quota.fn();await new Promise(setImmediate);
- assert.equal(ui.requests.filter(u=>u.startsWith('/api/account')&&!u.startsWith('/api/accounts')).length,2);
- ui.run('accountPanel.checkedAt=0;document.hidden=true');quota.fn();
- ui.run('document.hidden=false');ui.nodes.get('accounts-dialog').open=false;quota.fn();
- ui.events.focus();await new Promise(setImmediate);assert.equal(ui.requests.filter(u=>u.startsWith('/api/account')&&!u.startsWith('/api/accounts')).length,2);
-});
-test('read failure does not start repeated automatic quota queries',async()=>{
- const ui=await fixture(r=>r({error:'offline'},409));
- ui.nodes.get('account-details').open=true;ui.nodes.get('account-details').ontoggle();await new Promise(setImmediate);
- assert.equal(ui.requests.filter(u=>u==='/api/account').length,1);
- assert.equal([...ui.timers.values()].filter(t=>t.delay<2000).length,0);
- ui.run('showLogin()');assert.equal(ui.nodes.get('account-button').hidden,true);
+ await ui.run('accountsPanel.refresh()');ui.run('showLogin()');
+ assert.equal(ui.requests.some(url=>url==='/api/account'||url==='/api/account?cached=1'),false);
 });
 test('computer approval buttons send precisely the selected persistence and retain their original chat',async()=>{
  const ui=await fixture(r=>r(official));

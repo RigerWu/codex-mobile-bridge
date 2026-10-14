@@ -1,7 +1,7 @@
 /* Shared account selector; enrollment controls exist only in the desktop host. */
 class AccountsPanel {
-  constructor({root,read,request,desktop=false,toolbar=null,onChanged=()=>{},onUpdate=()=>{},onReset=null}){
-    Object.assign(this,{root,read,request,desktop,toolbar,onChanged,onUpdate,onReset});this.value=null;this.busy=false;this.timer=null;this.generation=0;this.operationError=false;this.expandedModels=new Set();this.syncLocalCliIds=new Set();
+  constructor({root,read,request,desktop=false,toolbar=null,onChanged=()=>{},onUpdate=()=>{}}){
+    Object.assign(this,{root,read,request,desktop,toolbar,onChanged,onUpdate});this.value=null;this.busy=false;this.timer=null;this.generation=0;this.operationError=false;this.expandedModels=new Set();this.syncLocalCliIds=new Set();
     this.build();
   }
   text(value){return typeof BridgeI18n==='undefined'?value:BridgeI18n.t(value);}
@@ -219,10 +219,8 @@ class AccountsPanel {
         if(row.details?.usage?.planType||row.planType)title.append(this.node('span',row.details?.usage?.planType||row.planType,'accounts-plan'));
         const usage=row.details?.usage;
         const count=usage?.resetCredits?.availableCount;
-        if(this.onReset){
-          const reset=this.button('使用重置卡',()=>this.openReset(row));reset.classList.add('accounts-reset');reset.disabled=this.busy||switching;
-          reset.setAttribute('aria-label',this.text('查看并使用所选账号的重置卡'));title.append(reset);
-        }
+        const reset=this.button('使用重置卡',()=>this.openReset(row));reset.classList.add('accounts-reset');reset.disabled=this.busy||switching;
+        reset.setAttribute('aria-label',this.text('查看并使用所选账号的重置卡'));title.append(reset);
         if(usage?.resetCredits)title.append(this.node('span',this.text('重置卡')+' · '+(count??this.text('暂未提供')),'accounts-credit'));
       }
       name.append(title,this.node('p',row.kind==='chatgpt'?(row.email||this.text('官方 ChatGPT 账号')):(row.baseUrl+' · '+row.model),'account-muted'));

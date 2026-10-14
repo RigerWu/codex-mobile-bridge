@@ -126,7 +126,8 @@ class LocalCliSync:
                     control_status = json.loads(control.stdout)
             except (OSError, subprocess.SubprocessError, ValueError) as exc:
                 raise ValueError('Claude Code CLI 认证状态无法核验') from exc
-            if (not isinstance(control_status, dict) or control_status.get('loggedIn') is not False
+            if (control.returncode != 1 or not isinstance(control_status, dict)
+                    or control_status.get('loggedIn') is not False
                     or control_status.get('authMethod') != 'none'):
                 raise ValueError('Claude Code CLI 配置目录无法核验')
         else:

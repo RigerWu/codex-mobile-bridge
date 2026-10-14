@@ -18,6 +18,7 @@ class ClaudeContract(unittest.IsolatedAsyncioTestCase):
         self.temp = tempfile.TemporaryDirectory(dir=ROOT/'.tmp'); self.addCleanup(self.temp.cleanup)
         self.adapter = Claude(Path(self.temp.name)/'adapter')
         self.adapter.cli = Mock()
+        self.adapter.cli.profile_resolver.return_value = None
         self.adapter.cli.listing.return_value = {'connected': False, 'sessions': []}
         self.adapter.cli.contains.return_value = False
         self.adapter.cli.status.return_value = {'cliAvailable': False, 'cliAuthReady': False}
@@ -89,6 +90,8 @@ class ClaudeContract(unittest.IsolatedAsyncioTestCase):
         await self.adapter.dispatch('create', None, {'projectKey': project['key'], 'title': 'Test', 'firstMessage': 'Hello'})
         args = next(args for kind, method, args in self.calls if method == 'start')[0]
         self.assertEqual(args['message'], 'Hello'); self.assertEqual(args['userSelectedFolders'], ['/host/project']); self.assertNotIn('cwd', args)
+        self.adapter.cli.create.assert_not_called()
+        self.adapter.cli.listing.assert_not_called()
 
     async def test_account_has_no_session_dependency(self):
         value = await self.adapter.dispatch('account', None, {})

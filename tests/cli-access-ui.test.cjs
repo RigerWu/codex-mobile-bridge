@@ -8,6 +8,21 @@ const listCode=extract('function renderList(){','async function loadList(');
 const stateCode=extract('function renderState(view){',"$('send-mode').onchange");
 const reconnectCode=extract("$('reconnect').onclick=", "document.querySelectorAll('[data-close]')");
 const permissionCode=extract("$('permissions-button').onclick=",'if(accountsPanel)');
+const newChatTypeCode=extract("$('new-chat-type').onchange=", "$('new-chat-project').onchange=");
+test('CLI creation picker enables only a known CLI folder and uses an accurate action',()=>{
+  const nodes=new Map(),$=id=>{if(!nodes.has(id))nodes.set(id,{value:'',textContent:'',disabled:false,children:[],replaceChildren(){this.children=[];this.value='';},append(option){this.children.push(option);this.value=option.value;},onchange(){}});return nodes.get(id);};
+  const ctx={$,listRows:[],currentId:null,currentHost:'local',newChatProjects:[],Option:class{constructor(text,value){this.text=text;this.value=value;}},t:key=>({'创建聊天':'Create chat','创建并打开':'Create and open'}[key]||key)};
+  vm.createContext(ctx);vm.runInContext(newChatTypeCode,ctx);
+  $('new-chat-type').value='cli';$('new-chat-type').onchange();
+  assert.equal($('new-chat-submit').disabled,true);
+  assert.equal($('new-chat-submit').textContent,'Create chat');
+  ctx.newChatProjects=[{type:'cli',host:'local',key:'cli|local|folder',name:'agent_chat',cwd:'/fixture/agent_chat'}];
+  $('new-chat-type').onchange();
+  assert.equal($('new-chat-project').value,'cli|local|folder');
+  assert.equal($('new-chat-submit').disabled,false);
+  $('new-chat-type').value='desktop';$('new-chat-type').onchange();
+  assert.equal($('new-chat-submit').textContent,'Create and open');
+});
 function node(){return {hidden:false,disabled:false,value:'',textContent:'',title:'',children:[],scrollTop:0,classList:{toggle(){}},append(...parts){this.children.push(...parts);},replaceChildren(...parts){this.children=parts;},querySelector(){return node();}};}
 function fixture(){
   const nodes=new Map();const $=id=>{if(!nodes.has(id))nodes.set(id,node());return nodes.get(id);};

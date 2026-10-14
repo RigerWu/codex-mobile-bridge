@@ -85,23 +85,24 @@ class RemoteWorkerContract(unittest.TestCase):
         found = {'directory': str(self.config)}
         pid = 32123
         registry = self.config/'sessions'/(str(pid)+'.json')
-        entry = {'sessionId': self.native, 'pid': pid, 'procStart': 'Wed Oct 14 10:00:00 2026',
-                 'pidDomain': 'darwin:machine:pid:[123]'}
+        entry = {'sessionId': self.native, 'pid': pid, 'procStart': '123456',
+                 'pidDomain': 'linux:machine:pid:[123]'}
         registry.write_text(json.dumps(entry))
-        with patch.object(remote_worker, 'pid_domain', return_value=entry['pidDomain']), \
-             patch.object(remote_worker.os, 'kill', return_value=None), \
-             patch.object(remote_worker.subprocess, 'run', return_value=SimpleNamespace(
-                 returncode=0, stdout='Wed Oct 14 10:00:00 2026\n')):
-            with self.assertRaisesRegex(ValueError, '其他终端运行'):
+        with patch.object(remote_worker.sys, 'platform', 'linux'), \
+             patch.object(remote_worker, 'pid_domain', return_value=entry['pidDomain']):
+            with patch.object(remote_worker, 'linux_process_start', return_value='123456'):
+                with self.assertRaisesRegex(ValueError, '其他终端运行'):
+                    remote_worker.assert_session_closed(found, self.native)
+            for token in (None, '123457'):
+                with patch.object(remote_worker, 'linux_process_start', return_value=token):
+                    remote_worker.assert_session_closed(found, self.native)
+            entry['procStart'] = 'Wed Oct 14 10:00:00 2026'
+            registry.write_text(json.dumps(entry))
+            with self.assertRaisesRegex(ValueError, '无法核验'):
                 remote_worker.assert_session_closed(found, self.native)
-        with patch.object(remote_worker, 'pid_domain', return_value=entry['pidDomain']), \
-             patch.object(remote_worker.os, 'kill', return_value=None), \
-             patch.object(remote_worker.subprocess, 'run', return_value=SimpleNamespace(
-                 returncode=0, stdout='Wed Oct 14 11:00:00 2026\n')):
-            remote_worker.assert_session_closed(found, self.native)
-        entry['pidDomain'] = 'darwin:other:pid:[456]'
+        entry['pidDomain'] = 'linux:other:pid:[456]'
         registry.write_text(json.dumps(entry))
-        with patch.object(remote_worker, 'pid_domain', return_value='darwin:machine:pid:[123]'):
+        with patch.object(remote_worker, 'pid_domain', return_value='linux:machine:pid:[123]'):
             with self.assertRaisesRegex(ValueError, '无法核验'):
                 remote_worker.assert_session_closed(found, self.native)
 
@@ -110,7 +111,7 @@ class RemoteWorkerContract(unittest.TestCase):
         with patch.object(remote_worker.sys, 'platform', 'linux'), \
              patch.object(remote_worker.Path, 'read_text', return_value='machine-id\n'), \
              patch.object(remote_worker.os, 'readlink', return_value='pid:[123]'):
-            self.assertEqual(remote_worker.pid_domain(), 'darwin:machine-id:pid:[123]')
+            self.assertEqual(remote_worker.pid_domain(), 'linux:machine-id:pid:[123]')
         self.assertEqual(remote_worker.sys.platform, original)
 
     def test_remote_origin_tracks_account_without_rotating_stable_identity(self):

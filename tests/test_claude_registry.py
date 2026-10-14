@@ -66,28 +66,47 @@ class ClaudeRegistryTests(unittest.TestCase):
             assert_profile_idle(self.config)
 
     def test_linux_native_domain_and_start_time_guard(self):
-        domain = 'darwin:machine-id:pid:[123]'
-        self.entry(pidDomain=domain)
+        from bridge.platforms.linux import claude_process as linux_process
+        domain = 'linux:machine-id:pid:[123]'
+        self.entry(pidDomain=domain, procStart='123456')
         with patch.object(session_registry.sys, 'platform', 'linux'), \
              patch.object(session_registry.Path, 'read_text', return_value='machine-id\n'), \
              patch.object(session_registry.os, 'readlink', return_value='pid:[123]'):
             self.assertEqual(session_registry._pid_domain(), domain)
-        with patch.object(session_registry, '_pid_domain', return_value=domain), \
-             patch.object(session_registry.os, 'kill'), \
-             patch.object(session_registry.subprocess, 'run', return_value=SimpleNamespace(
-                 returncode=0, stdout=self.start+'\n')) as run:
-            with self.assertRaisesRegex(BridgeUnavailable, '仍在其他终端运行'):
-                assert_session_closed(self.config, self.session_id)
-            self.assertEqual(run.call_args.kwargs['env']['LC_ALL'], 'C')
-            self.assertEqual(run.call_args.kwargs['env']['TZ'], 'UTC')
-        with patch.object(session_registry, '_pid_domain', return_value=domain), \
-             patch.object(session_registry.os, 'kill'), \
-             patch.object(session_registry.subprocess, 'run', return_value=SimpleNamespace(
-                 returncode=0, stdout='Wed Oct 14 01:00:00 2026\n')):
-            assert_session_closed(self.config, self.session_id)
-        with patch.object(session_registry, '_pid_domain', return_value='darwin:other:pid:[123]'):
+        with patch.object(session_registry.sys, 'platform', 'linux'), \
+             patch.object(session_registry, '_pid_domain', return_value=domain):
+            with patch.object(linux_process, 'process_start_ticks', return_value='123456'):
+                with self.assertRaisesRegex(BridgeUnavailable, '仍在其他终端运行'):
+                    assert_session_closed(self.config, self.session_id)
+            for token in (None, '123457'):
+                with patch.object(linux_process, 'process_start_ticks', return_value=token):
+                    assert_session_closed(self.config, self.session_id)
+            with patch.object(linux_process, 'process_start_ticks', side_effect=PermissionError):
+                with self.assertRaises(BridgeUnavailable):
+                    assert_session_closed(self.config, self.session_id)
+            self.entry(pidDomain=domain, procStart='Wed Oct 14 01:00:00 2026')
             with self.assertRaises(BridgeUnavailable):
                 assert_session_closed(self.config, self.session_id)
+        with patch.object(session_registry, '_pid_domain', return_value='linux:other:pid:[123]'):
+            with self.assertRaises(BridgeUnavailable):
+                assert_session_closed(self.config, self.session_id)
+
+    def test_linux_proc_stat_parser_handles_comm_and_unknown_records(self):
+        from bridge.platforms.linux import claude_process as linux_process
+        from bridge.clients.claude import remote_worker
+        stat = '1234 (test ) process) ' + ' '.join(['S'] + ['0'] * 18 + ['123456'])
+        for reader in (linux_process.process_start_ticks, remote_worker.linux_process_start):
+            with patch.object(Path, 'read_text', return_value=stat):
+                self.assertEqual(reader(1234), '123456')
+            with patch.object(Path, 'read_text', side_effect=FileNotFoundError):
+                self.assertIsNone(reader(1234))
+            with patch.object(Path, 'read_text', side_effect=PermissionError):
+                with self.assertRaises(OSError):
+                    reader(1234)
+            for malformed in ('1234 (short) S 0', stat.replace('123456', 'unknown')):
+                with patch.object(Path, 'read_text', return_value=malformed):
+                    with self.assertRaises((OSError, ValueError)):
+                        reader(1234)
 
     def test_windows_2168_native_start_ticks_guard(self):
         start = '638960923680000000'

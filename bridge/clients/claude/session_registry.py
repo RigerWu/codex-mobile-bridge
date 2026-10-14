@@ -24,12 +24,19 @@ def _pid_domain():
         except OSError as exc:
             raise BridgeUnavailable(_UNKNOWN) from exc
         if machine and re.fullmatch(r'pid:\[\d+\]', namespace):
-            # Claude Code 2.1.287 uses this historical prefix on Linux too.
-            return 'darwin:' + machine + ':' + namespace
+            return 'linux:' + machine + ':' + namespace
     raise BridgeUnavailable(_UNKNOWN)
 
 
 def _native_writer(pid, proc_start):
+    if sys.platform == 'linux':
+        from bridge.platforms.linux.claude_process import process_start_ticks
+        if not re.fullmatch(r'[0-9]+', proc_start):
+            raise BridgeUnavailable(_UNKNOWN)
+        try:
+            return process_start_ticks(pid) == proc_start
+        except OSError as exc:
+            raise BridgeUnavailable(_UNKNOWN) from exc
     try:
         os.kill(pid, 0)
     except ProcessLookupError:

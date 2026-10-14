@@ -155,10 +155,23 @@ def pid_domain():
         namespace = os.readlink('/proc/self/ns/pid')
         if not machine or not re.fullmatch(r'pid:\[\d+\]', namespace):
             raise ValueError('Linux 进程身份不可验证')
-        return 'darwin:' + machine + ':' + namespace
+        return 'linux:' + machine + ':' + namespace
     if sys.platform == 'darwin':
         return 'darwin'
     raise ValueError('当前系统的 Claude 进程身份不可验证')
+
+
+def linux_process_start(pid):
+    # Kept standalone for SSH injection; matches platforms/linux/claude_process.py.
+    try:
+        stat = Path(f'/proc/{pid}/stat').read_text()
+    except FileNotFoundError:
+        return None
+    fields = stat.rpartition(')')[2].split()
+    if (not stat.startswith(f'{pid} (') or len(fields) < 20 or
+            not re.fullmatch(r'[0-9]+', fields[19])):
+        raise ValueError('无法核验 Claude Code 原会话是否仍在运行')
+    return fields[19]
 
 
 def assert_session_closed(found, native):
@@ -181,6 +194,12 @@ def assert_session_closed(found, native):
         if (type(pid) is not int or pid <= 0 or path.stem != str(pid) or
                 not isinstance(start, str) or not start or entry.get('pidDomain') != domain):
             raise ValueError('无法核验 Claude Code 原会话是否仍在运行')
+        if sys.platform == 'linux':
+            if not re.fullmatch(r'[0-9]+', start):
+                raise ValueError('无法核验 Claude Code 原会话是否仍在运行')
+            if linux_process_start(pid) == start:
+                raise ValueError('原 Claude Code 会话仍在其他终端运行')
+            continue
         try:
             os.kill(pid, 0)
         except ProcessLookupError:

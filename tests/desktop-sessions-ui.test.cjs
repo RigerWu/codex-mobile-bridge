@@ -59,8 +59,9 @@ test('Claude session list exposes the confirmed initialization flow without runn
 test('prepared Claude lists offer separate reconnect and reinitialization actions',async()=>{
  const ui=fixture(),client={id:'claude',name:'Claude',enabled:true,installed:true,connected:false,setupStatus:'needs-initialization',reconnectSupported:true,canReconnect:true},reconnects=[],initializations=[];
  ui.view.setClientStates([client],undefined,id=>initializations.push(id),undefined,id=>reconnects.push(id));await ui.view.choose('claude');
- assert.equal(ui.view.connectionReconnect.hidden,false);assert.equal(ui.view.connectionInitialize.hidden,false);
+ assert.equal(ui.view.connectionReconnect.hidden,false);assert.equal(ui.view.connectionReconnect.textContent,'重新连接 Desktop');assert.equal(ui.view.connectionInitialize.hidden,false);
  assert.equal(ui.view.connectionInitialize.textContent,'重新初始化连接');
+ ui.run("BridgeI18n.setLanguage('en')");ui.view.renderConnectionStatus();assert.equal(ui.view.connectionReconnect.textContent,'Reconnect Desktop');ui.run("BridgeI18n.setLanguage('zh')");
  await ui.view.connectionReconnect.click();assert.deepEqual(reconnects,['claude']);assert.deepEqual(initializations,[]);
  await ui.view.connectionInitialize.click();assert.deepEqual(initializations,['claude']);
  ui.view.setClientStates([{...client,operationUncertain:true}],undefined,()=>{throw Error('unexpected initialize');},undefined,()=>{throw Error('unexpected reconnect');});

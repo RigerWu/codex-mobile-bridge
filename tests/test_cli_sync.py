@@ -105,6 +105,7 @@ class LocalCliSyncTests(unittest.TestCase):
         control_dirs = []
         control_logged_in = [False]
         def native_status(*_, **kwargs):
+            self.assertEqual(kwargs['encoding'], 'utf-8')
             selected = kwargs['env']['CLAUDE_CONFIG_DIR']
             if selected == str(directory):
                 return SimpleNamespace(returncode=0, stdout=json.dumps({

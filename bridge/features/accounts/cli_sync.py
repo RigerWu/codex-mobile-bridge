@@ -58,7 +58,7 @@ class LocalCliSync:
         base = (self.bridge.data_dir/'cli-access'/'claude').resolve()
         if path.parent.parent != base or path.parent.name != row['id'] or path.name != 'api.json':
             raise ValueError('Claude API 密钥不属于本机接入管理器')
-        key = json.loads(path.read_text())['key']
+        key = json.loads(path.read_text(encoding='utf-8'))['key']
         if not isinstance(key, str) or not key:
             raise ValueError('Claude Code API Key 不可用')
         return key
@@ -70,7 +70,7 @@ class LocalCliSync:
     @staticmethod
     def _claude_settings(directory):
         path = directory/'settings.json'
-        settings = json.loads(path.read_text()) if path.is_file() else {}
+        settings = json.loads(path.read_text(encoding='utf-8')) if path.is_file() else {}
         if not isinstance(settings, dict) or not isinstance(settings.get('env', {}), dict):
             raise ValueError('Claude Code 设置无法安全合并')
         return path, settings
@@ -105,7 +105,7 @@ class LocalCliSync:
         env['CLAUDE_CONFIG_DIR'] = str(directory)
         try:
             result = subprocess.run([profile['binary'], 'auth', 'status', '--json'],
-                                    env=env, capture_output=True, text=True, timeout=10)
+                                    env=env, capture_output=True, text=True, encoding='utf-8', timeout=10)
             status = json.loads(result.stdout)
         except (OSError, subprocess.SubprocessError, ValueError) as exc:
             raise ValueError('Claude Code CLI 认证状态无法核验') from exc
@@ -122,7 +122,7 @@ class LocalCliSync:
                 with tempfile.TemporaryDirectory(prefix='.cmb-claude-auth-', dir=directory.parent) as control_dir:
                     control_env = {**env, 'CLAUDE_CONFIG_DIR': control_dir}
                     control = subprocess.run([profile['binary'], 'auth', 'status', '--json'],
-                                             env=control_env, capture_output=True, text=True, timeout=10)
+                                             env=control_env, capture_output=True, text=True, encoding='utf-8', timeout=10)
                     control_status = json.loads(control.stdout)
             except (OSError, subprocess.SubprocessError, ValueError) as exc:
                 raise ValueError('Claude Code CLI 认证状态无法核验') from exc
@@ -250,14 +250,14 @@ class LocalCliSync:
             if (config.get('model_provider') or 'openai') != expected:
                 raise ValueError('本机 Codex CLI 模型提供商未生效')
             if row['kind'] == 'chatgpt':
-                tokens = json.loads((accounts.home/'auth.json').read_text()).get('tokens') or {}
+                tokens = json.loads((accounts.home/'auth.json').read_text(encoding='utf-8')).get('tokens') or {}
                 if (auth.get('type') != 'chatgpt' or auth.get('email') != row.get('email')
                         or token_owner({'tokens': tokens}) != row.get('tokenOwner')):
                     raise ValueError('本机 Codex CLI 账号身份未生效')
             else:
                 provider_config = (config.get('model_providers') or {}).get('bridge_api') or {}
-                secret = json.loads((accounts.directory(row['id'])/'api.json').read_text())['key']
-                actual = json.loads((accounts.home/'auth.json').read_text()).get('OPENAI_API_KEY')
+                secret = json.loads((accounts.directory(row['id'])/'api.json').read_text(encoding='utf-8'))['key']
+                actual = json.loads((accounts.home/'auth.json').read_text(encoding='utf-8')).get('OPENAI_API_KEY')
                 if (auth.get('type') != 'apiKey' or provider_config.get('base_url') != row['baseUrl']
                         or config.get('openai_base_url') != row['baseUrl']
                         or config.get('model') != row['model'] or actual != secret):
@@ -331,10 +331,10 @@ class LocalCliSync:
         saved, path = store._account(desktop_id)
         if saved['kind'] != 'api':
             raise ValueError('Claude Desktop 官方登录不能复制到 CLI')
-        gateway = json.loads((path/'gateway.json').read_text())
+        gateway = json.loads((path/'gateway.json').read_text(encoding='utf-8'))
         config = gateway['config']
         digest = hashlib.sha256(json.dumps(config, sort_keys=True, separators=(',', ':')).encode()).hexdigest()
-        manifest = json.loads((path/'manifest.json').read_text())
+        manifest = json.loads((path/'manifest.json').read_text(encoding='utf-8'))
         if digest != saved.get('fingerprint') or manifest.get('fingerprint') != digest:
             raise ValueError('Claude Desktop API 快照与当前接入不一致')
         auth = config.get('inferenceGatewayAuthScheme')

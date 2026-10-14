@@ -136,6 +136,33 @@ class ClaudeRegistryTests(unittest.TestCase):
                 assert_session_closed(self.config, self.session_id)
         lookup.assert_not_called()
 
+    def test_windows_2168_native_record_without_start_only_confirms_absent(self):
+        entry = {'pid': 1234, 'sessionId': self.session_id, 'cwd': '/fixture/project',
+                 'startedAt': 1791984471710, 'version': '2.1.168',
+                 'peerProtocol': 1, 'kind': 'interactive', 'entrypoint': 'sdk-cli'}
+        (self.registry/'1234.json').write_text(json.dumps(entry))
+        with patch.object(session_registry.sys, 'platform', 'win32'), \
+             patch.object(session_registry.os, 'kill', side_effect=AssertionError('Windows must not signal PID')) as kill, \
+             patch.object(claude_process, 'process_start_ticks', return_value=None) as lookup:
+            assert_profile_idle(self.config)
+        kill.assert_not_called()
+        lookup.assert_called_once_with(1234)
+        with patch.object(session_registry.sys, 'platform', 'win32'), \
+             patch.object(claude_process, 'process_start_ticks', return_value='638960923680000000'):
+            with self.assertRaisesRegex(BridgeUnavailable, '无法确认'):
+                assert_profile_idle(self.config)
+        with patch.object(session_registry.sys, 'platform', 'win32'), \
+             patch.object(claude_process, 'process_start_ticks', side_effect=PermissionError):
+            with self.assertRaisesRegex(BridgeUnavailable, '无法确认'):
+                assert_profile_idle(self.config)
+        entry['procStart'] = 638960923680000000
+        (self.registry/'1234.json').write_text(json.dumps(entry))
+        with patch.object(session_registry.sys, 'platform', 'win32'), \
+             patch.object(claude_process, 'process_start_ticks') as lookup:
+            with self.assertRaisesRegex(BridgeUnavailable, '无法确认'):
+                assert_profile_idle(self.config)
+        lookup.assert_not_called()
+
     def test_windows_unverified_newer_registry_fails_closed(self):
         entry = {'sessionId': self.session_id, 'pid': 1234, 'version': '2.1.287',
                  'procStartFt': '134057862268120000', 'pidDomain': 'windows:machine-guid'}

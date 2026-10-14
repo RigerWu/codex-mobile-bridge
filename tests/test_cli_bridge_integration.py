@@ -843,11 +843,35 @@ class CliModelAttributionTests(unittest.TestCase):
                             'turn': {'id': 'live', 'status': 'inProgress'}}})
             adapter._event({'method': 'thread/settings/updated', 'params': {'threadId': thread_id,
                             'threadSettings': {'model': 'future-model'}}})
+            adapter.client.request.return_value['thread']['model'] = 'future-model'
             adapter._event({'method': 'turn/completed', 'params': {'threadId': thread_id,
                             'turn': {'id': 'live', 'status': 'completed'}}})
+            native = adapter.client.request.return_value['thread']
+            native['turns'].append({'id': 'live', 'status': 'completed', 'items': [
+                {'id': 'c', 'type': 'agentMessage', 'text': 'live'}]})
+            adapter.refresh(thread_id)
+            adapter.refresh(thread_id)
             session.state = adapter.states[thread_id]
             self.assertEqual([turn['model'] for turn in session.view()['turns']],
                              ['model-old', 'model-new', 'model-current'])
+            adapter._event({'method': 'turn/started', 'params': {'threadId': thread_id,
+                            'turn': {'id': 'later', 'status': 'inProgress'}}})
+            adapter._event({'method': 'thread/settings/updated', 'params': {'threadId': thread_id,
+                            'threadSettings': {'model': 'next-model'}}})
+            adapter._event({'method': 'turn/completed', 'params': {'threadId': thread_id,
+                            'turn': {'id': 'later', 'status': 'completed'}}})
+            native['turns'].append({'id': 'later', 'status': 'completed', 'items': [
+                {'id': 'd', 'type': 'agentMessage', 'text': 'later'}]})
+            adapter.refresh(thread_id)
+            adapter.refresh(thread_id)
+            session.state = adapter.states[thread_id]
+            self.assertEqual([turn['model'] for turn in session.view()['turns']],
+                             ['model-old', 'model-new', 'model-current', 'future-model'])
+            native['turns'][-1]['model'] = 'native-per-turn'
+            adapter.refresh(thread_id)
+            session.state = adapter.states[thread_id]
+            self.assertEqual([turn['model'] for turn in session.view()['turns']],
+                             ['model-old', 'model-new', 'model-current', 'native-per-turn'])
 
 
 if __name__ == '__main__':

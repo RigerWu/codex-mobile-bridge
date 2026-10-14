@@ -286,6 +286,12 @@ class CliSessions:
             pending = list(self.requests.get(thread_id, {}).values())
             state = self._state(thread, pending, metadata)
             previous = self.states.get(thread_id) or {}
+            previous_turns = {turn.get('turnId'): turn for turn in previous.get('turns', [])
+                              if turn.get('turnId')}
+            for turn in state['turns']:
+                prior = previous_turns.get(turn.get('turnId')) or {}
+                if not (turn.get('params') or {}).get('model') and (prior.get('params') or {}).get('model'):
+                    turn['params'] = copy.deepcopy(prior['params'])
             if thread.get('model') is None and previous.get('latestModel'):
                 state['latestModel'] = previous['latestModel']
             if 'reasoningEffort' not in thread and 'latestReasoningEffort' in previous:

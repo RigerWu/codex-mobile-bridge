@@ -268,7 +268,8 @@ class CliSessions:
             starting = self.states.get(thread_id) or {}
             starting_model = starting.get('latestModel')
             starting_effort = starting.get('latestReasoningEffort')
-            starting_turn_ids = {turn.get('turnId') for turn in starting.get('turns', [])}
+            starting_turn_status = {turn.get('turnId'): turn.get('status')
+                                    for turn in starting.get('turns', [])}
         result = self.client.request('thread/read', {'threadId': thread_id, 'includeTurns': True},
                                      replay_safe=True)
         thread = result.get('thread') or {}
@@ -292,13 +293,23 @@ class CliSessions:
             previous_turns = {turn.get('turnId'): turn for turn in previous.get('turns', [])
                               if turn.get('turnId')}
             read_turn_ids = {turn.get('turnId') for turn in state['turns']}
-            for turn in state['turns']:
-                prior = previous_turns.get(turn.get('turnId')) or {}
+            newer_turn_event = any(turn_id not in starting_turn_status or
+                                   prior.get('status') != starting_turn_status[turn_id]
+                                   for turn_id, prior in previous_turns.items())
+            for index, turn in enumerate(state['turns']):
+                turn_id = turn.get('turnId')
+                prior = previous_turns.get(turn_id) or {}
+                if turn_id in previous_turns and (turn_id not in starting_turn_status or
+                        prior.get('status') != starting_turn_status[turn_id]):
+                    state['turns'][index] = copy.deepcopy(prior)
+                    continue
                 if not (turn.get('params') or {}).get('model') and (prior.get('params') or {}).get('model'):
                     turn['params'] = copy.deepcopy(prior['params'])
             for turn_id, prior in previous_turns.items():
-                if turn_id not in starting_turn_ids and turn_id not in read_turn_ids:
+                if turn_id not in starting_turn_status and turn_id not in read_turn_ids:
                     state['turns'].append(copy.deepcopy(prior))
+            if newer_turn_event:
+                state['threadRuntimeStatus'] = copy.deepcopy(previous['threadRuntimeStatus'])
             if previous.get('latestModel') != starting_model:
                 state['latestModel'] = previous.get('latestModel')
             elif thread.get('model') is None and previous.get('latestModel'):

@@ -10,6 +10,7 @@ from unittest.mock import Mock, patch
 
 from bridge.clients.codex.app_server import AppServerError, AppServerUnavailable, AppServerUnsupported, AppServerUnknownResult
 from bridge.features.sessions.goal import GoalUnavailable, GoalUnsupported
+from bridge.features.sessions.model import normalize_state
 from bridge.clients.codex.cli_session import CliSessions, _local_cli, _managed_cli, _ssh_daemon_start_command, _ssh_proxy_command
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -345,11 +346,39 @@ class CliSessionTests(unittest.TestCase):
         self.assertEqual(state['latestReasoningEffort'], 'high')
         self.assertEqual(state['turns'][-1]['turnId'], 'new-turn')
         self.assertEqual(state['turns'][-1]['params']['model'], 'new-model')
+        self.assertEqual(normalize_state(state)['status'], 'active')
         self.fake.thread['model'] = 'later-native-model'
         self.fake.thread['reasoningEffort'] = 'low'
         state = self.sessions.refresh('thread-a')
         self.assertEqual(state['latestModel'], 'later-native-model')
         self.assertEqual(state['latestReasoningEffort'], 'low')
+
+    def test_old_native_read_cannot_reopen_completed_turn(self):
+        self.fake.thread['status'] = {'type': 'active'}
+        self.fake.thread['turns'] = [{'id': 'turn-1', 'status': 'inProgress', 'items': []}]
+        self.sessions.attach('thread-a', explicit=True)
+        original = self.fake.request
+        started = threading.Event()
+        release = threading.Event()
+        old_thread = self.fake.thread.copy()
+        def request(method, params, **kwargs):
+            if method == 'thread/read' and not started.is_set():
+                started.set()
+                release.wait(2)
+                return {'thread': old_thread}
+            return original(method, params, **kwargs)
+        self.fake.request = request
+        worker = threading.Thread(target=lambda: self.sessions.refresh('thread-a'))
+        worker.start()
+        self.assertTrue(started.wait(2))
+        self.sessions._event({'method': 'turn/completed', 'params': {
+            'threadId': 'thread-a', 'turn': {'id': 'turn-1', 'status': 'completed'}}})
+        release.set()
+        worker.join(2)
+        self.assertFalse(worker.is_alive())
+        state = self.sessions.states['thread-a']
+        self.assertEqual(normalize_state(state)['status'], 'idle')
+        self.assertEqual(state['turns'][-1]['status'], 'completed')
 
     def test_resume_projects_persisted_mode_tier_and_goal(self):
         original = self.fake.request

@@ -611,9 +611,12 @@ class CliSessions:
         status = thread.get('status') or {'type': 'idle'}
         turns = []
         for turn in thread.get('turns') or []:
-            turns.append({'turnId': turn.get('id'), 'status': turn.get('status'),
+            row = {'turnId': turn.get('id'), 'status': turn.get('status'),
                           'turnStartedAtMs': (turn.get('startedAt') or 0) * 1000,
-                          'items': turn.get('items') or [], 'error': turn.get('error')})
+                          'items': turn.get('items') or [], 'error': turn.get('error')}
+            if turn.get('model'):
+                row['params'] = {'model': turn['model'], 'effort': turn.get('reasoningEffort')}
+            turns.append(row)
         state = {'id': thread['id'], 'title': thread.get('name') or thread.get('preview') or '未命名聊天',
                 'cwd': thread.get('cwd') or metadata['cwd'],
                 'modelProvider': thread.get('modelProvider') or metadata['modelProvider'],
@@ -704,6 +707,13 @@ class CliSessions:
                 if row is None:
                     row = {'turnId': turn.get('id'), 'items': []}
                     state['turns'].append(row)
+                if method == 'turn/started':
+                    model = turn.get('model') or state.get('latestModel')
+                    effort = turn.get('reasoningEffort') or state.get('latestReasoningEffort')
+                    if model:
+                        row['params'] = {'model': model, 'effort': effort}
+                elif turn.get('model'):
+                    row['params'] = {'model': turn['model'], 'effort': turn.get('reasoningEffort')}
                 row.update(status=turn.get('status'), error=turn.get('error'))
                 state['threadRuntimeStatus'] = {'type': 'active' if method == 'turn/started' else 'idle'}
                 if turn.get('items'):

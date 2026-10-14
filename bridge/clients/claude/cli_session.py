@@ -189,6 +189,7 @@ class _Owned:
         self.responses = {}
         self.pending = {}
         self.events = []
+        self.user_acks = set()
         self.active = False
         self.model = None
         self.permission = None
@@ -234,6 +235,9 @@ class _Owned:
                         self.active = False
                         self.pending.clear()
                         self.events.append(event)
+                    elif kind == 'user':
+                        if event.get('isReplay') is True and isinstance(event.get('uuid'), str):
+                            self.user_acks.add(event['uuid'])
                     elif kind == 'assistant':
                         self.events.append(event)
                     self.condition.notify_all()

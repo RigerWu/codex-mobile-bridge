@@ -14,6 +14,38 @@ from pathlib import Path
 MODES = {'default', 'acceptEdits', 'plan', 'dontAsk', 'auto', 'bypassPermissions'}
 
 
+def auth_status(binary, directory):
+    env = os.environ.copy()
+    env['CLAUDE_CONFIG_DIR'] = str(directory)
+    try:
+        result = subprocess.run([binary, 'auth', 'status', '--json'], env=env,
+                                capture_output=True, text=True, timeout=5)
+        value = json.loads(result.stdout)
+        return value if result.returncode == 0 and isinstance(value, dict) else {}
+    except (OSError, subprocess.SubprocessError, ValueError):
+        return {}
+
+
+def auth_fingerprint(binary, directory):
+    status = auth_status(binary, directory)
+    stable = {key: status[key] for key in ('authMethod', 'apiProvider', 'email', 'accountId',
+              'accountUuid', 'organizationId', 'organizationUuid', 'orgId', 'workspaceId')
+              if isinstance(status.get(key), str) and status[key]}
+    credentials = Path(directory)/'.credentials.json'
+    ambient = {key: os.environ[key] for key in ('ANTHROPIC_API_KEY', 'ANTHROPIC_AUTH_TOKEN',
+               'CLAUDE_CODE_OAUTH_TOKEN', 'ANTHROPIC_BASE_URL', 'ANTHROPIC_CUSTOM_HEADERS')
+               if os.environ.get(key)}
+    identity = {'loggedIn': status.get('loggedIn') is True, 'stable': stable,
+                'ambient': ambient}
+    if not any(key in stable for key in ('email', 'accountId', 'accountUuid',
+                                        'organizationId', 'organizationUuid', 'orgId', 'workspaceId')):
+        try:
+            identity['credentials'] = hashlib.sha256(credentials.read_bytes()).hexdigest()
+        except OSError:
+            identity['credentials'] = 'none'
+    return hashlib.sha256(json.dumps(identity, sort_keys=True).encode()).hexdigest()
+
+
 def profile():
     binary = shutil.which('claude') or next((str(p) for p in
         (Path.home()/'.local/bin/claude', Path('/usr/local/bin/claude'))
@@ -26,19 +58,14 @@ def profile():
         digest = hashlib.sha256((directory/'settings.json').read_bytes()).hexdigest()
     except OSError:
         digest = 'none'
-    return {'binary': str(Path(binary).resolve()), 'directory': str(directory),
-            'origin': ('environment:' if explicit else 'default:') + str(directory) + ':' + digest}
+    binary = str(Path(binary).resolve())
+    auth = auth_fingerprint(binary, directory)
+    return {'binary': binary, 'directory': str(directory),
+            'origin': ('environment:' if explicit else 'default:') + str(directory) + ':' + digest + ':' + auth}
 
 
 def auth_ready(found):
-    env = os.environ.copy()
-    env['CLAUDE_CONFIG_DIR'] = found['directory']
-    try:
-        result = subprocess.run([found['binary'], 'auth', 'status', '--json'], env=env,
-                                capture_output=True, text=True, timeout=5)
-        return result.returncode == 0 and json.loads(result.stdout).get('loggedIn') is True
-    except (OSError, subprocess.SubprocessError, ValueError):
-        return False
+    return auth_status(found['binary'], found['directory']).get('loggedIn') is True
 
 
 def events(path):
@@ -242,6 +269,8 @@ def resume(request):
         raise ValueError('原项目目录不可用')
     assert_session_closed(found, row['nativeId'])
     directory = upload_root(found, request['scope'])
+    if profile() != found:
+        raise ValueError('原 Claude Code 配置已变化或不可用')
     arguments = [found['binary'], '-p', '--resume', row['nativeId'], '--input-format', 'stream-json',
                  '--output-format', 'stream-json', '--verbose', '--replay-user-messages',
                  '--setting-sources', 'user,project,local', '--permission-mode', row['permissionMode'],

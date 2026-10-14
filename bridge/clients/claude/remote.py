@@ -1,6 +1,7 @@
 """Selected-host Claude Code CLI sessions over SSH stdio."""
 
 import base64
+from concurrent.futures import ThreadPoolExecutor, as_completed
 import hashlib
 import json
 import shlex
@@ -44,7 +45,12 @@ class RemoteClaudeCli:
         self.hosts = hosts
         self.lock = threading.RLock()
         self.index = {}
+        self.history = {}
         self.listed = False
+        self.refreshing = False
+        self.last_refresh = 0
+        self.host_snapshot = {}
+        self.complete = False
         self.owned = {}
         self.closed = False
 
@@ -68,27 +74,64 @@ class RemoteClaudeCli:
                 'hostLabel': host.get('displayName') or host['alias'], 'alias': host['alias'],
                 'archived': False}
 
+    def _fetch(self, item):
+        host_id, host = item
+        try:
+            result = _remote(host['alias'], {'operation': 'list'}, timeout=20)
+            if not isinstance(result, dict):
+                raise ValueError('SSH Claude Code 列表格式无效')
+            return host_id, host, result
+        except (BridgeUnavailable, ValueError):
+            return host_id, host, None
+
+    def _refresh(self, hosts):
+        rows = {}
+        complete = True
+        with ThreadPoolExecutor(max_workers=min(4, max(1, len(hosts)))) as pool:
+            futures = [pool.submit(self._fetch, item) for item in hosts.items()]
+            for future in as_completed(futures):
+                host_id, host, result = future.result()
+                with self.lock:
+                    previous = dict(self.index)
+                if result is None:
+                    complete = False
+                    rows.update({sid: row for sid, row in previous.items()
+                                 if row['host'] == host_id and row['alias'] == host['alias']})
+                    continue
+                for item in result.get('sessions') or []:
+                    if isinstance(item, dict) and item.get('nativeId') and item.get('origin'):
+                        row = self._row(host_id, host, item)
+                        rows[row['id']] = row
+                origin = (result.get('profile') or {}).get('origin')
+                with self.lock:
+                    rows.update({sid: row for sid, row in previous.items()
+                                 if row['host'] == host_id and row['alias'] == host['alias']
+                                 and row['origin'] == origin and sid in self.owned
+                                 and self.owned[sid].process.poll() is None})
+        with self.lock:
+            trusted = self.hosts.hosts() if self.hosts else {}
+            self.index = {sid: row for sid, row in rows.items()
+                          if row['host'] in trusted and trusted[row['host']]['alias'] == row['alias']}
+            self.history = {sid: events for sid, events in self.history.items() if sid in self.index}
+            self.host_snapshot = hosts
+            self.last_refresh = time.monotonic()
+            self.complete = complete
+            self.listed = True
+            self.refreshing = False
+
     def listing(self):
         if self.closed or self.hosts is None:
             return {'connected': False, 'sessions': [], 'complete': True}
-        rows = {}
         hosts = self.hosts.hosts()
-        complete = True
-        for host_id, host in hosts.items():
-            try:
-                result = _remote(host['alias'], {'operation': 'list'}, timeout=20)
-            except BridgeUnavailable:
-                complete = False
-                continue
-            for item in result.get('sessions') or []:
-                if isinstance(item, dict) and item.get('nativeId') and item.get('origin'):
-                    row = self._row(host_id, host, item)
-                    rows[row['id']] = row
         with self.lock:
-            self.index = rows
-            self.listed = True
+            if not self.refreshing and (hosts != self.host_snapshot or time.monotonic()-self.last_refresh >= 10):
+                self.refreshing = True
+                threading.Thread(target=self._refresh, args=(hosts,), daemon=True,
+                                 name='claude-ssh-list').start()
+            rows = {sid: row for sid, row in self.index.items()
+                    if row['host'] in hosts and hosts[row['host']]['alias'] == row['alias']}
             return {'connected': bool(hosts), 'sessions': [self._public(row) for row in rows.values()],
-                    'complete': complete}
+                    'complete': self.complete and not self.refreshing and hosts == self.host_snapshot}
 
     def contains(self, sid):
         with self.lock:
@@ -162,7 +205,28 @@ class RemoteClaudeCli:
 
     def call(self, action, sid, body):
         try:
-            row = self._get(sid, events=action == 'detail')
+            with self.lock:
+                cached = self.index.get(sid)
+                owned_cached = self.owned.get(sid)
+            host = self.hosts.hosts().get(cached['host']) if cached and self.hosts else None
+            live_cached = bool(cached and host and host['alias'] == cached['alias'] and
+                               owned_cached and owned_cached.origin == cached['origin'] and
+                               owned_cached.process.poll() is None and not owned_cached.error)
+            if live_cached and action != 'resume':
+                if action == 'detail':
+                    try:
+                        row = self._get(sid, events=True)
+                        with self.lock:
+                            self.history[sid] = row['events']
+                    except BridgeUnavailable:
+                        row = {**cached, 'events': self.history.get(sid, [])}
+                else:
+                    row = cached
+            else:
+                row = self._get(sid, events=action == 'detail')
+                if action == 'detail':
+                    with self.lock:
+                        self.history[sid] = row['events']
         except (ValueError, BridgeUnavailable) as exc:
             if action == 'resume':
                 raise ResumePreflightBlocked(str(exc)) from exc
@@ -268,7 +332,14 @@ class RemoteClaudeCli:
                     if owned.active or owned.pending:
                         raise BridgeUnavailable('请等待当前 Claude Code 任务结束后再发送')
                     owned.active = True
-                    owned.write({'type': 'user', 'message': {'role': 'user', 'content': content}})
+                    message_id = str(uuid.uuid4())
+                    owned.write({'type': 'user', 'uuid': message_id,
+                                 'message': {'role': 'user', 'content': content}})
+                    acknowledged = owned.condition.wait_for(
+                        lambda: message_id in owned.user_acks or owned.finished or owned.error,
+                        timeout=20)
+                    if not acknowledged or message_id not in owned.user_acks:
+                        raise BridgeUnavailable('SSH Claude Code 发送结果不明，请检查原会话')
             elif action == 'stop':
                 owned.control({'subtype': 'interrupt'})
             elif action == 'settings':
@@ -282,10 +353,17 @@ class RemoteClaudeCli:
                 mode = body.get('mode')
                 if mode not in MODES:
                     raise ValueError('请选择 Claude Code 提供的权限模式')
+                if mode == 'bypassPermissions' and body.get('confirmed') is not True:
+                    raise ValueError('完全访问需要明确确认')
                 result = owned.control({'subtype': 'set_permission_mode', 'mode': mode})
                 if result.get('mode') != mode:
                     raise BridgeUnavailable('Claude Code 未确认权限模式')
-                owned.permission = mode
+                with owned.condition:
+                    deadline = time.monotonic() + 5
+                    while owned.permission != mode and owned.process.poll() is None and time.monotonic() < deadline:
+                        owned.condition.wait(max(0, deadline-time.monotonic()))
+                    if owned.permission != mode:
+                        raise BridgeUnavailable('Claude Code 尚未报告生效的权限模式，请刷新检查')
             elif action == 'respond':
                 rid = body.get('requestId')
                 with owned.condition:

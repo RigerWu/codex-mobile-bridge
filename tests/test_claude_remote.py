@@ -109,6 +109,23 @@ class RemoteWorkerContract(unittest.TestCase):
             self.assertEqual(remote_worker.pid_domain(), 'darwin:machine-id:pid:[123]')
         self.assertEqual(remote_worker.sys.platform, original)
 
+    def test_remote_origin_tracks_account_without_rotating_stable_identity(self):
+        credentials = self.config/'.credentials.json'
+        credentials.write_text('{"accessToken":"first"}')
+        with patch.dict(os.environ, self.env, clear=True), \
+             patch.object(remote_worker, 'auth_status', return_value={'loggedIn': True}):
+            first = remote_worker.profile()['origin']
+            credentials.write_text('{"accessToken":"second"}')
+            self.assertNotEqual(remote_worker.profile()['origin'], first)
+        with patch.dict(os.environ, self.env, clear=True), \
+             patch.object(remote_worker, 'auth_status', return_value={'loggedIn': True,
+                                                                      'email': 'fixture@example.test'}):
+            first = remote_worker.profile()['origin']
+            credentials.write_text('{"accessToken":"rotated"}')
+            self.assertEqual(remote_worker.profile()['origin'], first)
+            os.environ['ANTHROPIC_API_KEY'] = 'different-account-key'
+            self.assertNotEqual(remote_worker.profile()['origin'], first)
+
 
 class RemoteAdapterContract(unittest.TestCase):
     def setUp(self):
@@ -124,6 +141,7 @@ class RemoteAdapterContract(unittest.TestCase):
     def test_host_and_profile_scope_and_passive_listing(self):
         with patch.object(remote, '_remote', return_value={'sessions': [self.row]}) as request, \
              patch.object(remote.subprocess, 'Popen') as popen:
+            self.cli._refresh(self.hosts.hosts())
             listing = self.cli.listing()
         popen.assert_not_called()
         sid = listing['sessions'][0]['id']
@@ -134,6 +152,36 @@ class RemoteAdapterContract(unittest.TestCase):
         self.hosts.hosts.return_value['ssh:test']['alias'] = 'different'
         with self.assertRaisesRegex(ValueError, '主机配置已变化'):
             self.cli._get(sid)
+
+    def test_offline_host_refresh_does_not_block_cached_list_or_live_controls(self):
+        row = self.cli._row('ssh:test', self.hosts.hosts()['ssh:test'], self.row)
+        self.cli.index[row['id']] = row
+        owned = SimpleNamespace(origin=row['origin'], process=Mock(), error=None,
+                                condition=threading.Condition(), active=True, pending={},
+                                model=None, permission=None, events=[], catalog={},
+                                control=Mock(return_value={}), close=Mock())
+        owned.process.poll.return_value = None
+        self.cli.owned[row['id']] = owned
+        self.cli.host_snapshot = self.hosts.hosts()
+        self.cli.last_refresh = 0
+        pause = threading.Event()
+        entered = threading.Event()
+        def offline(*_args, **_kwargs):
+            entered.set()
+            pause.wait(2)
+            raise BridgeUnavailable('offline')
+        try:
+            with patch.object(remote, '_remote', side_effect=offline):
+                start = __import__('time').monotonic()
+                listed = self.cli.listing()
+                self.assertLess(__import__('time').monotonic()-start, .25)
+                self.assertEqual(listed['sessions'][0]['id'], row['id'])
+                self.assertTrue(entered.wait(1))
+                self.assertTrue(self.cli.contains(row['id']))
+                self.assertEqual(self.cli.call('stop', row['id'], {}), {'status': 'accepted'})
+                owned.control.assert_called_once_with({'subtype': 'interrupt'})
+        finally:
+            pause.set()
 
     def test_remote_upload_replaces_gateway_path_before_native_message(self):
         with tempfile.TemporaryDirectory() as temporary:

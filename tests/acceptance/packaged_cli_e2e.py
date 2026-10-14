@@ -107,7 +107,17 @@ class MockHandler(BaseHTTPRequestHandler):
             return
         try:
             events = self._codex_events(body) if self.server.kind == 'codex' else self._claude_events(body)
-        except ValueError:
+        except ValueError as exc:
+            messages = body.get('messages') or []
+            last = messages[-1] if isinstance(messages, list) and messages else {}
+            last = last if isinstance(last, dict) else {}
+            content = last.get('content')
+            self.server.record(kind='fixture-reject', reason=str(exc)[:80], path=path,
+                               messageCount=len(messages) if isinstance(messages, list) else -1,
+                               lastRole=last.get('role'), contentType=type(content).__name__,
+                               markers=[marker for marker in ('CLAUDE_SEED', 'CLAUDE_HTTP_SEND',
+                                   'REQUEST_DENY_WRITE', 'REQUEST_ALLOW_WRITE')
+                                   if marker in json.dumps(content)])
             self.send_error(409)
             return
         content = ''.join('event: ' + name + '\ndata: ' + json.dumps(event) + '\n\n'
@@ -764,6 +774,8 @@ def main():
         result['claudeModelPosts'] = sum(row['kind'] == 'model' for row in servers[1].calls)
         result['blockedExternalConnects'] = sum(row['kind'] == 'blocked-external'
                                                  for server in servers for row in server.calls)
+        result['fixtureRejections'] = [row for server in servers for row in server.calls
+                                       if row['kind'] == 'fixture-reject'][-12:]
         (run/'result.json').write_text(json.dumps(result, ensure_ascii=False, indent=2), encoding='utf-8')
         os.environ.clear(); os.environ.update(previous_env)
         print(json.dumps(result, ensure_ascii=False))

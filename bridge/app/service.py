@@ -97,7 +97,7 @@ class LiveSession:
                 saved_labels = {turn['id']: turn for turn in self.saved_view['turns'] if turn.get('status') != 'inProgress'}
                 for turn in result['turns']:
                     saved = saved_labels.get(turn['id'])
-                    if saved is not None:
+                    if saved is not None and saved.get('model'):
                         # Desktop history hydration can substitute today's model.
                         # Recorded turn_context is authoritative for past replies.
                         turn['model'], turn['effort'] = saved.get('model'), saved.get('effort')

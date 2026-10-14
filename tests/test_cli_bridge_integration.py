@@ -16,6 +16,7 @@ from bridge.clients.codex.app_server import AppServerUnavailable, AppServerUnkno
 from bridge.clients.codex.cli_session import CliSessions
 from bridge.clients.codex.ipc import IPCError
 from bridge.features.sessions.goal import GoalUnavailable
+from bridge.features.sessions.store import SessionStore
 from bridge.features.auth.auth import password_record
 
 
@@ -724,6 +725,60 @@ class CliApprovalProtocolTests(unittest.TestCase):
             self.adapter.call(self.thread_id, 'thread-follower-submit-user-input',
                               {'requestId': request_id, 'response': {'answers': {'choice': {'answers': ['yes']}}}})
         self.assertEqual(self.adapter.client.respond.call_count, 1)
+
+
+class CliModelAttributionTests(unittest.TestCase):
+    def test_native_snapshot_uses_recorded_model_for_each_turn(self):
+        with tempfile.TemporaryDirectory(dir=ROOT / '.tmp') as folder:
+            home = Path(folder)
+            thread_id = str(uuid.uuid4())
+            rollout = home / 'sessions' / 'rollout.jsonl'
+            rollout.parent.mkdir()
+            records = []
+            for turn_id, model in [('old', 'model-old'), ('new', 'model-new')]:
+                records.extend([
+                    {'type': 'event_msg', 'payload': {'type': 'task_started', 'turn_id': turn_id}},
+                    {'type': 'turn_context', 'payload': {'turn_id': turn_id, 'model': model}},
+                    {'type': 'response_item', 'payload': {'type': 'message', 'role': 'assistant', 'content': [{'text': turn_id}]}},
+                    {'type': 'event_msg', 'payload': {'type': 'task_complete', 'turn_id': turn_id}},
+                ])
+            rollout.write_text(''.join(json.dumps(record) + '\n' for record in records))
+            with sqlite3.connect(home / 'state_5.sqlite') as db:
+                db.execute('CREATE TABLE threads(id TEXT, cwd TEXT, originator TEXT, source TEXT, rollout_path TEXT, model_provider TEXT)')
+                db.execute('INSERT INTO threads VALUES(?,?,?,?,?,?)',
+                           (thread_id, '/fixture/work', 'codex_cli_rs', 'cli', str(rollout), 'openai'))
+            adapter = CliSessions(home, lambda *_: None, lambda: None)
+            process = object()
+            adapter.client.process = process
+            adapter.joined[thread_id] = process
+            adapter.metadata[thread_id] = {'cwd': '/fixture/work', 'modelProvider': 'openai', 'model': 'model-current'}
+            adapter.client.request = Mock(return_value={'thread': {
+                'id': thread_id, 'cwd': '/fixture/work', 'modelProvider': 'openai', 'model': 'model-current',
+                'turns': [{'id': 'old', 'status': 'completed', 'items': [{'id': 'a', 'type': 'agentMessage', 'text': 'old'}]},
+                          {'id': 'new', 'status': 'completed', 'items': [{'id': 'b', 'type': 'agentMessage', 'text': 'new'}]}]}})
+            state = adapter.refresh(thread_id)
+            self.assertEqual([turn.get('params', {}).get('model') for turn in state['turns']],
+                             [None, None])
+            session = LiveSession(thread_id)
+            with session.condition:
+                session.set_history(SessionStore(home).history(thread_id))
+            session.state = state
+            session.connected = True
+            self.assertEqual([turn['model'] for turn in session.view()['turns']],
+                             ['model-old', 'model-new'])
+            session.saved_view['turns'][1]['model'] = None
+            session.state['turns'][1]['params'] = {'model': 'native-per-turn'}
+            self.assertEqual(session.view()['turns'][1]['model'], 'native-per-turn')
+            session.saved_view['turns'][1]['model'] = 'model-new'
+            adapter._event({'method': 'turn/started', 'params': {'threadId': thread_id,
+                            'turn': {'id': 'live', 'status': 'inProgress'}}})
+            adapter._event({'method': 'thread/settings/updated', 'params': {'threadId': thread_id,
+                            'threadSettings': {'model': 'future-model'}}})
+            adapter._event({'method': 'turn/completed', 'params': {'threadId': thread_id,
+                            'turn': {'id': 'live', 'status': 'completed'}}})
+            session.state = adapter.states[thread_id]
+            self.assertEqual([turn['model'] for turn in session.view()['turns']],
+                             ['model-old', 'model-new', 'model-current'])
 
 
 if __name__ == '__main__':

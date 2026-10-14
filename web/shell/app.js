@@ -911,4 +911,5 @@ $('permissions-button').onclick=()=>{
 
 if(accountsPanel){accountsPanel.current.after($('account-details'));}
 
-window.BridgeFileActions?.mountSettings($('appearance-dialog'),value=>api('/api/file-transfer',value));
+const fileTransferSettings=window.BridgeFileActions?.mountSettings($('appearance-dialog'),value=>api('/api/file-transfer',value));
+if(fileTransferSettings)$('appearance-dialog').querySelector('.settings-action-row')?.after(fileTransferSettings);

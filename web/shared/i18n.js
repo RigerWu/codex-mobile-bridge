@@ -3,6 +3,7 @@
 const BridgeI18n=(()=>{
 const en={
 "同时应用到本机 CLI":"Also apply to local CLI",
+"官方 Claude Desktop 登录不能直接同步到 Claude Code CLI":"Claude Desktop sign-in cannot be copied to Claude Code CLI",
 "本机 CLI 已核验":"Local CLI verified",
 "本机 CLI 核验失败：":"Local CLI verification failed: ",
 "桌面已切换；本机 CLI 核验失败：":"Desktop switched; local CLI verification failed: ",

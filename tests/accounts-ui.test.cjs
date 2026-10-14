@@ -22,6 +22,7 @@ test('web exposes saved account selection without enrollment or credential input
 });
 test('Codex switch sends local CLI choice only after checkbox selection',async()=>{
  const ui=fixture();await ui.panel.refresh();const row=ui.value().accounts[0];
+ assert.match(ui.text(),/共用账号配置；切换后 CLI 也会使用新接入/);
  const box=ui.all().find(n=>n.tag==='input'&&n.type==='checkbox'&&n.parent?.children.some(child=>child.textContent==='同时应用到本机 CLI'));
  assert.ok(box);box.checked=true;box.onchange();await ui.panel.choose(row);
  assert.equal(ui.requests[0].syncLocalCli,true);

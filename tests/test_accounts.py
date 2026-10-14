@@ -37,11 +37,17 @@ class AccountsTests(unittest.TestCase):
             catalog_reader=SimpleNamespace(executable=self.root/'runtime', cache={'old': 1}),
             remote_bridges={}, live={}, submissions={}, lock=threading.RLock(),
             account=Account(self.home,self.root,executable=self.root/'runtime'), ipc=Mock(), _disconnected=Mock())
+        self.bridge.cli_sessions = SimpleNamespace(lock=threading.RLock(), joined={}, attaching=set(),
+            requests={}, client=SimpleNamespace(socket_path=str(self.root/'missing.sock')))
         self.manager = Accounts(self.bridge)
         self.bridge.accounts = self.manager
         self.manager.index['desktopExecutable'] = '/fixture/Desktop'
         self.app = Mock()
         self.app.executable = Path('/fixture/Desktop')
+        runtime_probe = patch('bridge.features.accounts.cli_sync.LocalCliSync._codex_runtime',
+                              return_value=(True, self.app))
+        runtime_probe.start()
+        self.addCleanup(runtime_probe.stop)
         self.manager.wait_stopped = Mock()
         self.manager.wait_ready = Mock()
         self.original = self.manager.snapshot_files()
@@ -242,6 +248,25 @@ class AccountsTests(unittest.TestCase):
         self.bridge.submissions={};self.bridge.live={'one':SimpleNamespace(view=lambda:{'status':'active','connected':True,'title':'Busy fixture'})}
         with self.assertRaises(ValueError):self.switch(row)
         self.app.stop.assert_not_called()
+
+    def test_unchecked_shared_switch_blocks_joined_cli_before_desktop_shutdown(self):
+        row = self.api()
+        self.bridge.cli_sessions.joined['fixture'] = object()
+        with self.assertRaisesRegex(ValueError, 'CLI 会话'):
+            self.switch(row, syncLocalCli=False)
+        self.app.stop.assert_not_called()
+        self.assertEqual(self.manager.snapshot_files(), self.original)
+
+    def test_cli_join_after_desktop_stop_blocks_shared_file_write(self):
+        row = self.api()
+        self.manager.prepare = self.prepare
+        def joined_after_stop():
+            self.bridge.cli_sessions.joined['fixture'] = object()
+        self.manager.wait_stopped = Mock(side_effect=joined_after_stop)
+        self.switch(row, syncLocalCli=False)
+        wait_for_account_worker(self)
+        self.assertEqual(self.manager.snapshot_files(), self.original)
+        self.assertEqual(self.manager.state['phase'], 'restored')
 
     def test_disconnected_active_history_and_connected_error_do_not_block(self):
         self.bridge.live={

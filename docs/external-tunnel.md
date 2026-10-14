@@ -13,8 +13,14 @@
 
 交互形式参考 [DSH Remote Web UI 的 `publicBaseUrl` 配置](https://github.com/DamonKoy/dsh-web-ui/blob/main/packages/dsh-remote-web-ui/README.md)；Bridge 独立实现了自己的连接配置与安全校验，没有复用其源码。
 
+### 出现“此访问地址未在网关配置中允许”
+
+这条提示表示请求已到达 Bridge，但请求中的 Host 不在允许列表中。先确认已在 Bridge 保存并启用该公开 HTTPS 地址，再检查代理是否保留了公开域名及端口，例如 `bridge.example.com:8443`。只有穿透端口映射、没有在 Bridge 登记公开地址，仍会被拒绝；代理改写 Host 或丢失非标准端口，也可能触发该提示。参见 [issue #35](https://github.com/try2love/codex-mobile-bridge/issues/35)。请按上述步骤配置，不要关闭 Host/Origin 校验。
+
 ## English
 
 Use **Existing tunnel / reverse proxy** when you manage a trusted HTTPS tunnel or a proxy running on the gateway computer. Point its HTTP upstream to that computer's actual loopback gateway address, such as `http://127.0.0.1:8787` with your real port. Save only the phone's HTTPS root URL in Bridge, optionally with a port. Public HTTP, subpaths, redirects and disabled TLS verification are unsupported. The gateway can keep LAN and local browser access off while this configured HTTPS entry uses the loopback upstream.
 
 Preserve the public Host (including a custom port), Origin, Cookie and `X-CSRF-Token`; disable proxy caching and response buffering, and allow long requests, streaming and the file sizes you need. Bridge uses long polling or SSE; WebSocket support alone does not establish compatibility. **Check fixed entry** verifies TLS and the current instance without credentials, then test sign-in, chat and files from your phone's mobile network. A proxy on another device must instead use the advanced [NAS setup](../deploy/nas/README.md) with a reachable computer LAN address. The v2.1.0 option is pending release; public downloads remain v2.0.3.
+
+If Bridge reports that the access address is not allowed, the request reached the gateway but its Host is not registered. Save and enable the public HTTPS URL, and ensure the proxy preserves the public hostname and any custom port. Port forwarding alone does not register an allowed address; do not disable Host/Origin validation. See [issue #35](https://github.com/try2love/codex-mobile-bridge/issues/35).

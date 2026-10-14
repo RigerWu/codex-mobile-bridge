@@ -16,6 +16,14 @@ from bridge.clients.errors import BridgeUnavailable
 
 
 MODES = {'default', 'acceptEdits', 'plan', 'dontAsk', 'auto', 'bypassPermissions'}
+PERMISSION_OPTIONS = (
+    ('default', '默认权限', '需要时请求确认'),
+    ('acceptEdits', '允许文件编辑', '文件编辑自动允许，其他操作仍按规则确认'),
+    ('plan', '计划模式', '先制定计划'),
+    ('dontAsk', '不询问', '无法自动允许的操作直接拒绝'),
+    ('auto', '自动模式', '由 Claude 判断可自动执行的操作'),
+    ('bypassPermissions', '完全访问', '跳过权限确认'),
+)
 
 
 class ResumePreflightBlocked(BridgeUnavailable):
@@ -169,6 +177,9 @@ class _Owned:
                             self.process.terminate()
                         self.model = event.get('model') or self.model
                         self.permission = event.get('permissionMode') or self.permission
+                    elif kind == 'system' and event.get('subtype') == 'status':
+                        if event.get('permissionMode') in MODES:
+                            self.permission = event['permissionMode']
                     elif kind == 'result':
                         self.active = False
                         self.pending.clear()
@@ -366,9 +377,10 @@ class ClaudeCli:
                         'currentModel': public['model'], 'currentEffort': '', 'capabilities': {'models': True, 'effort': False},
                         'skills': []}
             if action == 'access' and 'mode' not in body:
-                options = [{'value': mode, 'label': label} for mode, label in
-                           (('default', '默认权限'), ('acceptEdits', '允许文件编辑'), ('plan', '计划模式'))]
-                return {'status': 'accepted', 'mode': public['permissionMode'], 'options': options if live else []}
+                options = [{'value': mode, 'label': label, 'description': description}
+                           for mode, label, description in PERMISSION_OPTIONS]
+                return {'status': 'accepted', 'mode': public['permissionMode'],
+                        'options': options if live else []}
             if action == 'resume':
                 if live:
                     return {'status': 'ready'}
@@ -386,7 +398,8 @@ class ClaudeCli:
                 command = [profile['binary'], '-p', '--resume', native, '--input-format', 'stream-json',
                            '--output-format', 'stream-json', '--verbose', '--replay-user-messages',
                            '--setting-sources', 'user,project,local', '--permission-mode', row['permissionMode'],
-                           '--permission-prompt-tool', 'stdio', '--permission-prompts', 'host']
+                           '--permission-prompt-tool', 'stdio', '--permission-prompts', 'host',
+                           '--allow-dangerously-skip-permissions']
                 if row['model']:
                     command.extend(('--model', row['model']))
                 try:
@@ -429,12 +442,19 @@ class ClaudeCli:
                 owned.model = selection
             elif action == 'access':
                 mode = body.get('mode')
-                if mode not in ('default', 'acceptEdits', 'plan'):
+                if mode not in MODES:
                     raise ValueError('请选择 Claude Code 提供的权限模式')
+                if mode == 'bypassPermissions' and body.get('confirmed') is not True:
+                    raise ValueError('完全访问需要明确确认')
                 result = owned.control({'subtype': 'set_permission_mode', 'mode': mode})
                 if result.get('mode') != mode:
                     raise BridgeUnavailable('Claude Code 未确认权限模式')
-                owned.permission = mode
+                with owned.condition:
+                    deadline = time.monotonic() + 5
+                    while owned.permission != mode and owned.process.poll() is None and time.monotonic() < deadline:
+                        owned.condition.wait(max(0, deadline-time.monotonic()))
+                    if owned.permission != mode:
+                        raise BridgeUnavailable('Claude Code 尚未报告生效的权限模式，请刷新检查')
             elif action == 'respond':
                 rid = body.get('requestId')
                 with owned.condition:

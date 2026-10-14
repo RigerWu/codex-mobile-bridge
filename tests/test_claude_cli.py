@@ -177,6 +177,7 @@ class ClaudeCliContract(unittest.TestCase):
         owner.condition = threading.Condition()
         owner.error = None
         owner.control.return_value = {'mode': 'default'}
+        owner.control.side_effect = lambda request: (setattr(owner, 'permission', request['mode']) or {'mode': request['mode']}) if request['subtype'] == 'set_permission_mode' else {}
         self.cli.owned[self.native] = owner
         self.assertEqual(self.cli.call('send', self.sid, {'text': 'new fixture message'})['status'], 'accepted')
         self.assertTrue(self.cli.busy())
@@ -196,6 +197,26 @@ class ClaudeCliContract(unittest.TestCase):
                                                                              'message': '用户拒绝了本次操作'}}})
         self.cli.call('stop', self.sid, {})
         owner.control.assert_called_with({'subtype': 'interrupt'})
+
+    def test_native_permission_choices_require_explicit_bypass_selection(self):
+        process = Mock()
+        process.poll.return_value = None
+        owner = Mock(origin=self.profile['origin'], process=process, active=False,
+                     model=None, permission='plan', events=[])
+        owner.pending = {}
+        owner.catalog = {}
+        owner.condition = threading.Condition()
+        owner.error = None
+        owner.control.side_effect = lambda request: (setattr(owner, 'permission', request['mode']) or {'mode': request['mode']})
+        self.cli.owned[self.native] = owner
+        options = self.cli.call('access', self.sid, {})['options']
+        self.assertEqual({option['value'] for option in options},
+                         {'default', 'acceptEdits', 'plan', 'dontAsk', 'auto', 'bypassPermissions'})
+        with self.assertRaisesRegex(ValueError, '明确确认'):
+            self.cli.call('access', self.sid, {'mode': 'bypassPermissions'})
+        owner.control.assert_not_called()
+        self.cli.call('access', self.sid, {'mode': 'bypassPermissions', 'confirmed': True})
+        self.assertEqual(self.cli.call('access', self.sid, {})['mode'], 'bypassPermissions')
 
     def test_question_approval_forwards_answers_to_owned_tool(self):
         process = Mock()

@@ -100,9 +100,10 @@ class LiveSession:
                 saved_labels = {turn['id']: turn for turn in self.saved_view['turns'] if turn.get('status') != 'inProgress'}
                 for turn in result['turns']:
                     saved = saved_labels.get(turn['id'])
-                    if saved is not None and saved.get('model'):
+                    if saved is not None and (self.runtime != 'cli' or saved.get('model')):
                         # Desktop history hydration can substitute today's model.
                         # Recorded turn_context is authoritative for past replies.
+                        # Only native CLI per-turn fields can fill an unknown label.
                         turn['model'], turn['effort'] = saved.get('model'), saved.get('effort')
             # Native paginated snapshots only contain the loaded tail. Keep the
             # saved prefix in the presentation, never in the IPC patch base.

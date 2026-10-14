@@ -3,8 +3,9 @@
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
+from unittest.mock import Mock, patch
 
-from packaged_cli_e2e import MockHandler
+from packaged_cli_e2e import GatewayHTTP, MockHandler
 
 
 class FixtureTurnSelectionTests(unittest.TestCase):
@@ -55,6 +56,32 @@ class FixtureTurnSelectionTests(unittest.TestCase):
                 {'role': 'user', 'content': [{'type': 'tool_result',
                     'tool_use_id': 'toolu_unrelated', 'is_error': True}]},
             ]})
+
+
+class HttpTraceTests(unittest.TestCase):
+    def test_records_route_status_and_closes_connection(self):
+        connection = Mock()
+        connection.getresponse.return_value = SimpleNamespace(
+            status=200, read=lambda: b'{"ok":true}', getheader=lambda _: None)
+        with patch('packaged_cli_e2e.http.client.HTTPConnection', return_value=connection):
+            client = GatewayHTTP(12345)
+            self.assertEqual(client.request('GET', '/api/clients?detail=1')[0], 200)
+        self.assertEqual(client.trace[0]['method'], 'GET')
+        self.assertEqual(client.trace[0]['route'], '/api/clients')
+        self.assertEqual(client.trace[0]['status'], 200)
+        self.assertGreaterEqual(client.trace[0]['durationMs'], 0)
+        connection.close.assert_called_once()
+
+    def test_timeout_identifies_route_and_closes_connection(self):
+        connection = Mock()
+        connection.getresponse.side_effect = TimeoutError('timed out')
+        with patch('packaged_cli_e2e.http.client.HTTPConnection', return_value=connection):
+            client = GatewayHTTP(12345)
+            with self.assertRaisesRegex(TimeoutError, 'GET /api/clients timed out'):
+                client.request('GET', '/api/clients')
+        self.assertEqual(client.trace[0]['status'], 'timeout')
+        self.assertEqual(client.trace[0]['route'], '/api/clients')
+        connection.close.assert_called_once()
 
 
 if __name__ == '__main__':

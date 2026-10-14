@@ -247,13 +247,17 @@ class InstalledWorker:
 
 
 class GatewayHTTP:
-    def __init__(self, port):
+    def __init__(self, port, trace=None):
         self.port = port
         self.cookie = None
         self.csrf = None
+        self.trace = trace if trace is not None else []
 
     def request(self, method, path, body=None, authenticated=True, csrf=True):
         connection = http.client.HTTPConnection('127.0.0.1', self.port, timeout=12)
+        route = path.split('?', 1)[0]
+        started = time.monotonic()
+        status = None
         headers = {'Host': '127.0.0.1:' + str(self.port),
                    'Origin': 'http://127.0.0.1:' + str(self.port),
                    'Content-Type': 'application/json'}
@@ -261,13 +265,24 @@ class GatewayHTTP:
             headers['Cookie'] = self.cookie
         if method == 'POST' and authenticated and csrf and self.csrf:
             headers['X-CSRF-Token'] = self.csrf
-        connection.request(method, path, body=json.dumps(body) if body is not None else None,
-                           headers=headers)
-        reply = connection.getresponse()
-        raw = reply.read()
-        status = reply.status
-        cookie = reply.getheader('Set-Cookie')
-        connection.close()
+        try:
+            connection.request(method, path, body=json.dumps(body) if body is not None else None,
+                               headers=headers)
+            reply = connection.getresponse()
+            raw = reply.read()
+            status = reply.status
+            cookie = reply.getheader('Set-Cookie')
+        except TimeoutError as exc:
+            status = 'timeout'
+            raise TimeoutError(method + ' ' + route + ' timed out') from exc
+        except Exception as exc:
+            status = type(exc).__name__
+            raise
+        finally:
+            connection.close()
+            self.trace.append({'method': method, 'route': route,
+                               'durationMs': round((time.monotonic() - started) * 1000),
+                               'status': status})
         try:
             value = json.loads(raw)
         except ValueError:
@@ -644,6 +659,7 @@ def main():
         env.update({'XDG_CONFIG_HOME': str(run/'xdg-config'), 'XDG_DATA_HOME': str(run/'xdg-data'),
                     'XDG_CACHE_HOME': str(run/'xdg-cache')})
     worker = InstalledWorker(args.gateway, data, env)
+    http_trace = []
     result = {'schema': 1, 'status': 'failed', 'stage': 'setup', 'gatewayInstalled': str(args.gateway),
               'run': str(run), 'checks': {}, 'codexModelPosts': 0, 'claudeModelPosts': 0,
               'blockedExternalConnects': 0, 'errorType': None, 'error': None}
@@ -686,7 +702,7 @@ def main():
         worker.call('save', settings)
         started = True  # A timed-out start may still have launched this isolated gateway.
         worker.call('start')
-        http = GatewayHTTP(settings['preferences']['port'])
+        http = GatewayHTTP(settings['preferences']['port'], http_trace)
         wait_for(lambda: http.request('GET', '/api/auth')[0] == 200,
                  'installed gateway HTTP start', 40)
         result['stage'] = 'authenticated-http'
@@ -721,7 +737,7 @@ def main():
         await_native_idle(codex_home, codex_cli, claude_profile)
         started = True
         worker.call('start')
-        http = GatewayHTTP(settings['preferences']['port'])
+        http = GatewayHTTP(settings['preferences']['port'], http_trace)
         wait_for(lambda: http.request('GET', '/api/auth')[0] == 200,
                  'installed gateway restart', 40)
         http.login()
@@ -785,6 +801,7 @@ def main():
                                                  for server in servers for row in server.calls)
         result['fixtureRejections'] = [row for server in servers for row in server.calls
                                        if row['kind'] == 'fixture-reject'][-12:]
+        result['httpTrace'] = http_trace
         (run/'result.json').write_text(json.dumps(result, ensure_ascii=False, indent=2), encoding='utf-8')
         os.environ.clear(); os.environ.update(previous_env)
         print(json.dumps(result, ensure_ascii=False))

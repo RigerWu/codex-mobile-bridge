@@ -5,7 +5,7 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import Mock, patch
 
-from packaged_cli_e2e import GatewayHTTP, MockHandler
+from packaged_cli_e2e import GatewayHTTP, MockHandler, ready_clients
 
 
 class FixtureTurnSelectionTests(unittest.TestCase):
@@ -63,9 +63,10 @@ class HttpTraceTests(unittest.TestCase):
         connection = Mock()
         connection.getresponse.return_value = SimpleNamespace(
             status=200, read=lambda: b'{"ok":true}', getheader=lambda _: None)
-        with patch('packaged_cli_e2e.http.client.HTTPConnection', return_value=connection):
+        with patch('packaged_cli_e2e.http.client.HTTPConnection', return_value=connection) as connect:
             client = GatewayHTTP(12345)
             self.assertEqual(client.request('GET', '/api/clients?detail=1')[0], 200)
+        self.assertEqual(connect.call_args.kwargs['timeout'], 10)
         self.assertEqual(client.trace[0]['method'], 'GET')
         self.assertEqual(client.trace[0]['route'], '/api/clients')
         self.assertEqual(client.trace[0]['status'], 200)
@@ -75,13 +76,55 @@ class HttpTraceTests(unittest.TestCase):
     def test_timeout_identifies_route_and_closes_connection(self):
         connection = Mock()
         connection.getresponse.side_effect = TimeoutError('timed out')
-        with patch('packaged_cli_e2e.http.client.HTTPConnection', return_value=connection):
+        with patch('packaged_cli_e2e.http.client.HTTPConnection', return_value=connection) as connect:
             client = GatewayHTTP(12345)
             with self.assertRaisesRegex(TimeoutError, 'GET /api/clients timed out'):
                 client.request('GET', '/api/clients')
+        self.assertEqual(connect.call_args.kwargs['timeout'], 10)
         self.assertEqual(client.trace[0]['status'], 'timeout')
         self.assertEqual(client.trace[0]['route'], '/api/clients')
         connection.close.assert_called_once()
+
+    def test_client_write_uses_ui_lifecycle_deadline_without_retry(self):
+        connection = Mock()
+        connection.getresponse.side_effect = TimeoutError('timed out')
+        with patch('packaged_cli_e2e.http.client.HTTPConnection', return_value=connection) as connect:
+            client = GatewayHTTP(12345)
+            with self.assertRaisesRegex(TimeoutError, 'POST /api/clients timed out'):
+                client.request('POST', '/api/clients', {'provider': 'claude', 'enabled': True})
+        self.assertEqual(connect.call_args.kwargs['timeout'], 45)
+        self.assertEqual(connection.request.call_count, 1)
+        self.assertEqual(client.trace[0]['status'], 'timeout')
+
+    def test_pending_client_list_is_not_treated_as_ready(self):
+        rows = iter([
+            {'pending': True, 'clients': [{'id': 'claude', 'cliAuthReady': True}]},
+            {'pending': False, 'clients': [{'id': 'claude', 'cliAuthReady': False}]},
+        ])
+        client = SimpleNamespace(trace=[], checked=lambda method, route: (
+            client.trace.append({'durationMs': 4}) or next(rows)))
+        self.assertFalse(ready_clients(client)[0]['cliAuthReady'])
+        self.assertEqual(len(client.trace), 2)
+
+    def test_ready_client_list_over_ui_deadline_fails(self):
+        client = SimpleNamespace(trace=[], checked=lambda method, route: (
+            client.trace.append({'durationMs': 10_000}) or
+            {'pending': False, 'clients': [{'id': 'claude'}]}))
+        with self.assertRaisesRegex(AssertionError, 'UI status deadline'):
+            ready_clients(client)
+
+    def test_missing_pending_contract_fails(self):
+        client = SimpleNamespace(trace=[], checked=lambda method, route: (
+            client.trace.append({'durationMs': 4}) or {'clients': []}))
+        with self.assertRaisesRegex(AssertionError, 'pending state'):
+            ready_clients(client)
+
+    def test_ready_after_discovery_window_still_fails(self):
+        client = SimpleNamespace(trace=[], checked=lambda method, route: (
+            client.trace.append({'durationMs': 4}) or {'pending': False, 'clients': []}))
+        with patch('packaged_cli_e2e.time.monotonic', side_effect=[0, 0, 46]):
+            with self.assertRaisesRegex(AssertionError, '45-second discovery window'):
+                ready_clients(client)
 
 
 if __name__ == '__main__':

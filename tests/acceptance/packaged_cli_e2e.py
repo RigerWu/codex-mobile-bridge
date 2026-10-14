@@ -254,8 +254,9 @@ class GatewayHTTP:
         self.trace = trace if trace is not None else []
 
     def request(self, method, path, body=None, authenticated=True, csrf=True):
-        connection = http.client.HTTPConnection('127.0.0.1', self.port, timeout=12)
         route = path.split('?', 1)[0]
+        timeout = (10 if method == 'GET' else 45) if route == '/api/clients' else 12
+        connection = http.client.HTTPConnection('127.0.0.1', self.port, timeout=timeout)
         started = time.monotonic()
         status = None
         headers = {'Host': '127.0.0.1:' + str(self.port),
@@ -420,6 +421,21 @@ def await_native_idle(codex_home, codex_cli, claude_profile):
         verify_native_idle(codex_home, codex_cli, claude_profile)
         return True
     wait_for(idle, 'task-owned native processes to stop', 12)
+
+
+def ready_clients(http):
+    deadline = time.monotonic() + 45
+    while True:
+        require(time.monotonic() < deadline, 'GET /api/clients stayed pending beyond 45 seconds')
+        value = http.checked('GET', '/api/clients')
+        require(http.trace[-1]['durationMs'] < 10_000,
+                'GET /api/clients exceeded the UI status deadline')
+        require(time.monotonic() < deadline, 'GET /api/clients exceeded the 45-second discovery window')
+        require(type(value.get('pending')) is bool and isinstance(value.get('clients'), list),
+                'Client status response has no pending state or client list')
+        if value['pending'] is False:
+            return value['clients']
+        time.sleep(.25)
 
 
 def verify_codex(http, thread_id, project, server, result):
@@ -713,17 +729,19 @@ def main():
                              {'activate': True}, csrf=False)[0] == 403,
                 'Write without CSRF was not rejected')
         result['checks']['authCsrf'] = True
-        clients = http.checked('GET', '/api/clients')['clients']
+        clients = ready_clients(http)
         claude_client = next((row for row in clients if row.get('id') == 'claude'), None)
         require(claude_client is not None and claude_client.get('cliAvailable') is True and
                 claude_client.get('cliAuthReady') is True,
                 'Installed gateway did not discover the authenticated isolated Claude CLI')
         enabled = http.checked('POST', '/api/clients',
             {'provider': 'claude', 'enabled': True, 'initializeDesktop': False})
+        require(http.trace[-1]['durationMs'] < 45_000,
+                'POST /api/clients exceeded the UI lifecycle deadline')
         require(any(row.get('id') == 'claude' and row.get('enabled') is True
                     for row in enabled.get('clients', [])) and
                 any(row.get('id') == 'claude' and row.get('enabled') is True
-                    for row in http.checked('GET', '/api/clients')['clients']),
+                    for row in ready_clients(http)),
                 'Installed gateway did not enable Claude CLI access')
         result['checks']['claudeCliEnabledWithoutDesktop'] = True
         result['stage'] = 'codex-http'
@@ -804,7 +822,11 @@ def main():
         result['httpTrace'] = http_trace
         (run/'result.json').write_text(json.dumps(result, ensure_ascii=False, indent=2), encoding='utf-8')
         os.environ.clear(); os.environ.update(previous_env)
-        print(json.dumps(result, ensure_ascii=False))
+        summary = {key: value for key, value in result.items() if key != 'httpTrace'}
+        summary['httpRequestCount'] = len(http_trace)
+        summary['maxClientsGetMs'] = max((row['durationMs'] for row in http_trace
+            if row['method'] == 'GET' and row['route'] == '/api/clients'), default=0)
+        print(json.dumps(summary, ensure_ascii=False))
     return 0 if result['status'] == 'passed' else 1
 
 

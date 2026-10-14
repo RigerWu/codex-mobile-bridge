@@ -443,6 +443,8 @@ class Handler(BaseHTTPRequestHandler):
                 operation = value.get('action')
                 if operation not in (('details', 'switch') if write else ('list',)):
                     return self.output(403, {'error': '添加、修改与删除账号请在电脑端完成。'})
+                if write and operation == 'switch' and (set(value) - {'action', 'id', 'syncLocalCli'} or not isinstance(value.get('id'), str) or value.get('syncLocalCli', False) not in (True, False)):
+                    raise ValueError('账号切换请求包含不支持的字段')
                 if operation == 'switch' and self.server.auth.config.get('mode') == 'none':
                     raise PermissionError('请启用密码保护后再切换账号')
                 return self.output(200, manager.client_accounts(desktop_accounts.group(1), {**value, 'operation': operation}))
@@ -551,7 +553,9 @@ class Handler(BaseHTTPRequestHandler):
                 if self.server.auth.config.get('mode') == 'none':
                     raise PermissionError('免密访问不能切换账号，请在桌面端操作')
                 body = self.read_json()
-                if set(body) != {'id', 'requestId', 'confirmed', 'tasksConfirmed'}:
+                if (set(body) - {'id', 'requestId', 'confirmed', 'tasksConfirmed', 'syncLocalCli'}
+                        or not {'id', 'requestId', 'confirmed', 'tasksConfirmed'} <= set(body)
+                        or 'syncLocalCli' in body and not isinstance(body['syncLocalCli'], bool)):
                     raise ValueError('账号切换请求包含不支持的字段')
                 return self.output(202, self.server.bridge.accounts.switch(body))
             if not write and path == '/api/account':

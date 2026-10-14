@@ -20,6 +20,12 @@ test('web exposes saved account selection without enrollment or credential input
  ui.confirm(true);await ui.panel.choose(ui.value().accounts[0]);assert.deepEqual(Object.keys(ui.requests[0]).sort(),['action','confirmed','id','requestId','tasksConfirmed']);
  assert.equal(ui.requests[0].tasksConfirmed,true);assert.match(ui.prompts[0],/未在网页显示/);
 });
+test('Codex switch sends local CLI choice only after checkbox selection',async()=>{
+ const ui=fixture();await ui.panel.refresh();const row=ui.value().accounts[0];
+ const box=ui.all().find(n=>n.tag==='input'&&n.type==='checkbox'&&n.parent?.children.some(child=>child.textContent==='同时应用到本机 CLI'));
+ assert.ok(box);box.checked=true;box.onchange();await ui.panel.choose(row);
+ assert.equal(ui.requests[0].syncLocalCli,true);
+});
 test('passwordless web disables switching and explains the desktop alternative',async()=>{
  const ui=fixture();ui.setValue({...ui.value(),canSwitch:false});await ui.panel.refresh();
  assert.equal(ui.all().find(n=>n.textContent==='切换到此接入').disabled,true);assert.match(ui.text(),/免密访问不能切换/);

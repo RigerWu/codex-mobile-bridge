@@ -515,3 +515,14 @@ test('Claude CLI approval and stop use current native request and session despit
  await ui.view.mutate('respond',{requestId:'native-request-1',decision:'decline'});await new Promise(setImmediate);
  await ui.view.stop.click();const writes=ui.calls.filter(c=>c.body);assert.equal(writes.length,2);assert.equal(writes[0].body.requestId,'native-request-1');assert.match(writes[1].url,/\/stop$/);assert.equal(writes[1].body.sessionId,'cli-a');
 });
+
+
+test('known preflight rejection permits a new explicit Claude CLI resume attempt',async()=>{
+ const ui=fixture();let attempts=0,detail=cliDetail();
+ ui.setHandler(async(url,body)=>{if(body){attempts++;if(attempts===1)return {status:'blocked',message:'Original terminal is open'};detail=cliDetail('ready');return {status:'ready'};}return url.includes('/detail')?detail:{connected:true,sessions:[detail.session]};});
+ ui.view.setClientStates([cliClient]);await ui.view.choose('claude');await ui.view.open('cli-a');
+ await ui.view.resumeButton.click();await new Promise(setImmediate);
+ assert.equal(attempts,1);assert.equal(ui.view.canResume(),true);assert.equal(ui.view.send.disabled,true);
+ await ui.view.resumeButton.click();await new Promise(setImmediate);
+ const writes=ui.calls.filter(c=>c.body);assert.equal(writes.length,2);assert.notEqual(writes[0].body.id,writes[1].body.id);assert.equal(ui.view.canMutate(),true);
+});

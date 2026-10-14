@@ -1,8 +1,10 @@
-## v2.0.4（待发布）· CLI 会话接入与文件阅读优化
+## v2.1.0（待发布）· CLI 接入、已有 HTTPS 入口与阅读体验
 
 - **Codex CLI 会话接入**：聊天列表纳入现有 CLI 会话，先读历史，点击“继续会话”后接入或恢复原会话；原终端无需保持打开。仅显式继续时才可能启动该环境中已安装的原生托管 daemon，不安装 CLI。若聊天已由 Codex App 接续，则复用经核验的现有执行连接，避免争抢写入锁。支持发送、排队、补充任务、停止及可识别的审批/问题。
 - **CLI 模型、Skill 与模式**：连接后可选择模型与推理强度、添加 Skill、切换普通/计划模式；兼容的本机和 SSH 原生 CLI 运行时支持 Goal 的创建、暂停、修改、恢复与关闭。原生 CLI 通过同一 daemon 操作，保留原提供商、认证与工作目录；短暂断线保留 Skill 选择与草稿。CLI 权限可按执行端支持的选项切换，生效结果由原生运行时确认；聊天中的“完全访问权限”简写为“完全访问”。SSH 上由 App 接管的聊天仍不支持 Goal；消息编辑/分支等操作暂不开放。
 - **SSH 发现与诊断**：纳入已配置的有效 SSH 主机，通过用户登录 shell 读取远端数据目录；设置中的“连接诊断”显示本机/远端状态和计数，支持复制摘要及登录后的脱敏文件导出。旧版手机 App 可查看、复制，需更新后才能导出。顶部 SSH 错误可关闭，同一故障在自动刷新时不重现，恢复或故障变化后重新提示。原生版本条件及协议限制见 [CLI 接入说明](docs/codex-cli.md)。
+- **Claude CLI 与账号管理**：Codex 和 Claude CLI 各自在对应账号页配置；已保存 API 配置可查询上游模型列表并检查模型端点。本机 CLI 同步须主动启用并核验目标。Claude 可从已有本机或 SSH 项目创建 CLI 聊天，沿用所选配置和工作目录。完整可读列表有多种会话类型时才显示类型筛选与行标签；Claude 已知上下文容量显示蓝色用量圆环，未知容量显示中性圆环。
+- **已有穿透 / 反向代理**：只填写自管入口的 HTTPS 根地址，即可将已有穿透或本机反代接到网关回环端口；不要求开启 LAN，也不管理穿透软件。固定入口检测验证证书和当前网关实例，扫码在地址可达时签发。跨设备 NAS 保留进阶配置与局域网要求；详见[配置说明](docs/external-tunnel.md)。
 - **目录返回符合浏览习惯**：在“文件”标签的子目录中，返回先进入上一级，回到项目根目录后再返回聊天；Codex 顶部返回按钮和手机工作台共用这一规则。全屏预览中先退出全屏，保留原有浮层关闭优先级。
 - **Claude 额度按需查询**：打开、返回或定时刷新账号面板时只显示已保存的额度，点击“查看剩余额度”才发起查询。显示上次成功查询的日期与时间；失败时保留旧结果和原查询时间，并提示未更新，减少非主动查询触发的凭据读取。Codex 与 DeepSeek Harness 的查询方式保持不变。
 - **源码更适合阅读**：常见代码文件增加语法高亮、独立行号和“复制代码”；可切换“自动换行 / 原始行宽”，让长代码适合手机屏幕。软换行不改变原始行号，复制保留原文、不带行号；未知语言及较大文本保留纯文本阅读。
@@ -16,13 +18,15 @@ PDF 在线预览上限为 **20 MiB**，同时受当前普通点击下载限额�
 
 正式发布后，建议网关与 Android/iOS App 一起更新，以获得完整的文件阅读和原生 HTML 隔离支持；Web 用户更新网关后重新加载页面即可。共享中继部署也需同步更新中继服务。Android 覆盖安装以保留数据；iOS 仍需自行签名。
 
-本节为待发布说明，文件阅读的本地测试已获用户确认；macOS CLI 0.162.1 的运行中接入与冷恢复、发送及流式回复已通过本机联调。Windows、Linux 和不同 SSH 环境仍需各自验收；各平台正式构建与发布验收尚未执行，范围见 [验证记录](VERIFICATION.md)。当前公开下载仍为 v2.0.3。手动额度查询不代表所有 macOS 钥匙串授权场景均已消除。
+本节为待发布说明，文件阅读的本地测试已获用户确认；macOS Codex CLI 0.162.1 的运行中接入与冷恢复、发送及流式回复已通过本机联调。Claude CLI 的本机与回环 SSH 创建、历史和用量通过隔离假模型接口验收，未使用真实付费模型或手机，也不是远端 Linux 实测。外部 HTTPS 入口仍需在用户自己的代理和手机网络验收。Windows、Linux 和不同 SSH 环境仍需各自验收；正式发布构建尚未执行，范围见 [验证记录](VERIFICATION.md)。当前公开下载仍为 v2.0.3。手动额度查询不代表所有 macOS 钥匙串授权场景均已消除。
 
 ### English
 
 - **Codex CLI access:** discover saved CLI chats and read history without activation. **Continue chat** explicitly connects to or resumes the original chat, even after its terminal closes; it may start the already installed, managed daemon but never installs CLI. Chats already owned by Codex App follow the verified existing owner instead of competing for the writer lock. Send, queue, steer, interrupt and supported approval/input requests are available after connection.
 - **CLI models, Skills and modes:** select model/effort, add Skills and switch default/plan modes after connection. Compatible local and SSH native CLI runtimes support creating, pausing, editing, resuming and clearing Goals. Native controls use the same daemon and retain the original provider, authentication and working directory. Transient disconnects preserve selected Skills and drafts. CLI permissions follow the execution runtime and policy, with effective-state confirmation. SSH chats owned by Codex App still do not expose Goals; editing/forking remains unavailable.
 - **SSH discovery diagnostics:** include configured managed SSH hosts and read the remote data home through the user login shell. Open **Connection diagnostics** in Settings for readable status and counts, copy the summary, or export authenticated, sanitized data. Older native apps need an update to export. A dismissed SSH error stays hidden across automatic refreshes until recovery or a changed fault. See [CLI support and protocol limits](docs/codex-cli.md).
+- **Claude CLI and account access:** configure Codex and Claude CLI separately under their account sections. Saved API configurations can list upstream models and check their model endpoint. Local CLI sync is opt-in and verifies the target. Create Claude CLI chats from existing local or SSH projects with the selected configuration and directory. Chat-type filters and badges appear only with multiple types in the fully readable list. Claude context usage shows a blue ring for known capacity and a neutral ring otherwise.
+- **Existing tunnel / reverse proxy:** save a trusted HTTPS root URL for a user-managed tunnel or same-computer proxy targeting the gateway loopback port. LAN can stay off; Bridge does not manage the tunnel process. Fixed-entry checks verify TLS and the current instance. A proxy on another device still uses advanced NAS setup and LAN reachability. See the [guide](docs/external-tunnel.md).
 - **Directory-aware Back:** move to the parent folder before returning to chat at the project root. The Codex header and mobile workbench use the same rule. Back exits fullscreen previews first and preserves existing overlay handling.
 - **Manual Claude quota queries:** opening, revisiting or periodically refreshing the accounts panel displays saved usage only. Select **View remaining quota** to query. Keep the last successful date, time and values on failure, with a clear stale-data message. Codex and DeepSeek Harness retain their existing query behavior.
 - **Readable source files:** add syntax highlighting, separate line numbers and **Copy code**. Switch between **Wrap lines** and **Original line width**; wrapping keeps source line numbers aligned, and copying preserves the original text without line numbers. Unknown languages and larger text fall back to plain text.
@@ -34,7 +38,7 @@ PDF previews are limited to **20 MiB** and the configured ordinary-download limi
 
 When released, update both the gateway and Android/iOS apps for the complete feature set and native HTML isolation. Browser users only need to reload after updating the gateway. Shared-relay deployments also require a relay update. Install Android over the existing app; iOS still requires your own signing.
 
-**Unreleased:** file-reading testing has been accepted by the user. Warm join and cold resume, including send and streaming replies, passed locally on macOS CLI 0.162.1; Windows, Linux and different SSH environments remain to be validated. Native release builds and release validation remain pending. See [verification](VERIFICATION.md). Public downloads remain v2.0.3. Manual Claude quota queries do not eliminate every macOS Keychain authorization scenario.
+**Unreleased:** file-reading testing has been accepted by the user. Codex CLI warm join and cold resume, including send and streaming replies, passed locally on macOS CLI 0.162.1. Claude CLI creation, history and usage passed with local and loopback SSH using an isolated mock API, without paid model calls or a physical phone. The external HTTPS entry still requires validation through the user's own proxy and phone network. Windows, Linux and other SSH environments remain to be validated; release builds are pending. See [verification](VERIFICATION.md). Public downloads remain v2.0.3. Manual Claude quota queries do not eliminate every macOS Keychain authorization scenario.
 
 ---
 

@@ -1,0 +1,20 @@
+# 已有穿透 / 反向代理接入（v2.1.0 待发布）
+
+此方式适合已自行配置好 SakuraFrp、其他 HTTPS 穿透服务，或运行在**本机**的 HTTPS 反向代理。Bridge 只保存手机访问的公开地址；穿透客户端、域名、证书和代理由你在原服务中管理。当前公开安装包仍是 v2.0.3，尚无此连接选项。
+
+1. 在穿透或代理服务中，把 HTTP 上游设为运行 Bridge 的这台电脑的回环地址，例如 `http://127.0.0.1:8787`。`8787` 仅是示例，须使用桌面 App 当前显示的**实际网关端口**。若服务运行在容器中，容器内的 `127.0.0.1` 不一定指向电脑，请先确认网络路径；这类跨设备代理应使用下方的 NAS 进阶方式。
+2. 确保公开入口有电脑与手机都信任的有效 HTTPS 证书。手机地址必须是完整的 HTTPS 根地址，例如 `https://bridge.example.com` 或 `https://bridge.example.com:8443`。不接受公开 HTTP、`/codex/` 等子路径、账号、查询参数或重定向目标；不要关闭 TLS 证书校验。
+3. 在桌面 App 的“网络访问 → 添加连接”选择“已有穿透 / 反向代理”，填入该手机地址，保存并启动网关。此模式可以同时关闭局域网访问和本机网页访问；Bridge 仍仅为已配置的 HTTPS 入口保留本机回环上游。
+4. 在 App 中点击“检测固定入口”。检查会从电脑对已保存的 HTTPS 地址请求无凭据的 `/api/auth`，验证证书和当前网关实例，不跟随重定向。检查成功后，再用手机蜂窝网络测试登录、聊天读取、发送和文件访问。扫码登录只在该地址真正连到当前网关时签发。
+
+代理须将**原始公开 Host（含非标准端口）**、Origin、Cookie 与 `X-CSRF-Token` 传给网关。Nginx 可用 `$http_host` 保留 `:8443`；`$host` 可能丢失端口。不要把上游 Host 改为 `127.0.0.1`；网关会按公开 Host 和 Origin 检查请求。关闭代理缓存和响应缓冲，允许长时间请求、流式回复与应用所需的上传/下载大小。Bridge 主要使用 HTTP 长轮询或 SSE；若代理支持 WebSocket，也应保留升级请求，但不能用 WebSocket 支持替代流式响应与请求体限制检查。外部服务自身的上传限制、空闲超时和带宽仍可能限制附件与大文件。
+
+如果反代运行在另一台 NAS / 服务器上，并且它通过电脑的局域网地址访问网关，请选进阶的 **NAS / 其他设备反代**：保持局域网访问开启，填写 NAS 可达的电脑 HTTP 上游，端口须与网关一致，不能填 NAS 自己的回环地址。详见 [NAS 配置](../deploy/nas/README.md)。仅有公网地址而没有到电脑的上游通路，仍无法连接。
+
+交互形式参考 [DSH Remote Web UI 的 `publicBaseUrl` 配置](https://github.com/DamonKoy/dsh-web-ui/blob/main/packages/dsh-remote-web-ui/README.md)；Bridge 独立实现了自己的连接配置与安全校验，没有复用其源码。
+
+## English
+
+Use **Existing tunnel / reverse proxy** when you manage a trusted HTTPS tunnel or a proxy running on the gateway computer. Point its HTTP upstream to that computer's actual loopback gateway address, such as `http://127.0.0.1:8787` with your real port. Save only the phone's HTTPS root URL in Bridge, optionally with a port. Public HTTP, subpaths, redirects and disabled TLS verification are unsupported. The gateway can keep LAN and local browser access off while this configured HTTPS entry uses the loopback upstream.
+
+Preserve the public Host (including a custom port), Origin, Cookie and `X-CSRF-Token`; disable proxy caching and response buffering, and allow long requests, streaming and the file sizes you need. Bridge uses long polling or SSE; WebSocket support alone does not establish compatibility. **Check fixed entry** verifies TLS and the current instance without credentials, then test sign-in, chat and files from your phone's mobile network. A proxy on another device must instead use the advanced [NAS setup](../deploy/nas/README.md) with a reachable computer LAN address. The v2.1.0 option is pending release; public downloads remain v2.0.3.

@@ -289,7 +289,7 @@ class RemoteClaudeCli:
             elif action == 'respond':
                 rid = body.get('requestId')
                 with owned.condition:
-                    pending = owned.pending.pop(rid, None)
+                    pending = owned.pending.get(rid)
                 if not pending:
                     raise ValueError('请求已处理或过期')
                 decision = {'accept': 'allow', 'decline': 'deny'}.get(body.get('decision'))
@@ -310,6 +310,9 @@ class RemoteClaudeCli:
                     response['updatedInput'] = updated
                 else:
                     response['message'] = '用户拒绝了本次操作'
+                with owned.condition:
+                    if owned.pending.pop(rid, None) is not pending:
+                        raise ValueError('请求已处理或过期')
                 owned.write({'type': 'control_response', 'response': {'subtype': 'success',
                              'request_id': rid, 'response': response}})
             else:

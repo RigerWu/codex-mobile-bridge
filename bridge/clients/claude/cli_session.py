@@ -208,7 +208,8 @@ class _Owned:
                 with self.condition:
                     kind = event.get('type')
                     if kind == 'bridge_preflight':
-                        self.preflight = event
+                        if self.preflight is None:
+                            self.preflight = event
                         if event.get('status') == 'blocked':
                             self.error = event.get('message') or 'Claude Code 远端恢复前核验失败'
                     elif kind == 'control_response':

@@ -33,6 +33,7 @@ PUBLIC_URLS = set('''
 '''.split())
 
 SSH_SOURCES = {
+    'bridge/clients/claude/remote_worker.py': ['profile', 'command', 'resume'],
     'bridge/features/sessions/store.py': ['SessionStore'],
     'bridge/clients/codex/catalog.py': ['Catalog'],
     'bridge/features/sessions/create.py': ['create_empty', 'fork_copy', 'rename_thread'],

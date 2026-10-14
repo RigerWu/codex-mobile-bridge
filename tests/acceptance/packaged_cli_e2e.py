@@ -678,6 +678,19 @@ def main():
                              {'activate': True}, csrf=False)[0] == 403,
                 'Write without CSRF was not rejected')
         result['checks']['authCsrf'] = True
+        clients = http.checked('GET', '/api/clients')['clients']
+        claude_client = next((row for row in clients if row.get('id') == 'claude'), None)
+        require(claude_client is not None and claude_client.get('cliAvailable') is True and
+                claude_client.get('cliAuthReady') is True,
+                'Installed gateway did not discover the authenticated isolated Claude CLI')
+        enabled = http.checked('POST', '/api/clients',
+            {'provider': 'claude', 'enabled': True, 'initializeDesktop': False})
+        require(any(row.get('id') == 'claude' and row.get('enabled') is True
+                    for row in enabled.get('clients', [])) and
+                any(row.get('id') == 'claude' and row.get('enabled') is True
+                    for row in http.checked('GET', '/api/clients')['clients']),
+                'Installed gateway did not enable Claude CLI access')
+        result['checks']['claudeCliEnabledWithoutDesktop'] = True
         result['stage'] = 'codex-http'
         verify_codex(http, codex_id, project, servers[0], result['checks'])
         result['stage'] = 'claude-http'

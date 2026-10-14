@@ -1040,6 +1040,7 @@ class HttpTests(unittest.TestCase):
         from types import SimpleNamespace
         calls=[]
         self.server.bridge.hosts=SimpleNamespace(projects=lambda:[{'key':'local|p','name':'Test'}])
+        self.server.bridge.projects=lambda:[{'key':'local|p','name':'Test','type':'desktop'}]
         self.server.bridge.create_chat=lambda *args: calls.append(args) or {'id':THREAD,'host':'local'}
         body={'project':'local|p','title':'New chat','id':str(uuid.uuid4())}
         self.assertEqual(self.request('GET','/api/projects')[0],401)

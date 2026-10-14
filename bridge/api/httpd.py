@@ -580,8 +580,10 @@ class Handler(BaseHTTPRequestHandler):
                 return self.output(200, {'sessions': rows})
             if write and path == '/api/sessions':
                 body = self.read_json()
-                return self.output(200, self.server.bridge.create_chat(body.get('project'), body.get('title'), body.get('id'),
-                                                                        kind=body.get('kind', 'desktop')))
+                fields = (body.get('project'), body.get('title'), body.get('id'))
+                result = (self.server.bridge.create_chat(*fields, kind=body['kind']) if 'kind' in body
+                          else self.server.bridge.create_chat(*fields))
+                return self.output(200, result)
             if path == '/api/notifications/defaults':
                 if self.server.notifications is None:
                     raise ValueError('当前网关未启用通知服务')

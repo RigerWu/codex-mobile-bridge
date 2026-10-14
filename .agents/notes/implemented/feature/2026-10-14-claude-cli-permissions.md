@@ -10,4 +10,4 @@ Closed history still has no permission choices, and unknown saved permissions st
 
 ## Verification
 
-Fixture tests cover mode choices, Full Access confirmation and native control routing. `python -B -m unittest tests.test_claude_cli` and `node --test tests/desktop-sessions-ui.test.cjs` pass. A real native status event after switching and organization restrictions were not exercised in this branch.
+Fixture tests cover mode choices, Full Access confirmation and native control routing. `python -B -m unittest tests.test_claude_cli` and `node --test tests/desktop-sessions-ui.test.cjs` pass. Root acceptance with installed Claude 2.1.287 and an isolated mock API confirmed the control response and effective native status for all six modes. Organization-specific restrictions are still reported as unconfirmed if the native process refuses a change. No paid API was used.

@@ -840,7 +840,7 @@ $('pushplus-form').onsubmit=event=>{event.preventDefault();return notificationCh
 $('pushplus-test').onclick=()=>notificationChannelAction(true);
 
 const codexCliRoot=el('div');
-const codexCliDetails=el('details','account-compact');codexCliDetails.append(el('summary','',t('Codex CLI 接入')),codexCliRoot);$('accounts-dialog').append(codexCliDetails);
+const codexCliDetails=el('details','account-compact');codexCliDetails.append(el('summary','',t('Codex CLI 接入')),codexCliRoot);codexCliDetails.firstElementChild.dataset.i18n='Codex CLI 接入';$('accounts-dialog').append(codexCliDetails);
 const codexCliAccessPanel=typeof CliAccessPanel==='undefined'?null:new CliAccessPanel({root:codexCliRoot,provider:'codex',read:()=>api('/api/cli-access'),request:value=>api('/api/cli-access',value)});
 $('accounts-dialog').addEventListener('close',()=>codexCliAccessPanel?.clear());
 const accountsPanel=window.BridgeSharedRelay||typeof AccountsPanel==='undefined'?null:new AccountsPanel({root:$('accounts-content'),toolbar:$('accounts-heading'),read:()=>api('/api/accounts'),request:({action,...value})=>action==='ignoreSubmission'?ignoreSubmission(value):api(action==='account'?'/api/accounts/account':action==='details'?'/api/accounts/details':action==='reminders'?'/api/accounts/reminders':action==='checkDesktopUpdate'||action==='requestDesktopUpdate'?'/api/accounts/desktop-update':'/api/accounts/switch',action==='checkDesktopUpdate'||action==='requestDesktopUpdate'?{action,...value}:value),onChanged:()=>resetModelCatalog(),onUpdate:()=>{const label='账号管理';$('accounts-button').setAttribute('data-i18n',label);$('accounts-button').textContent=t(label);}});
@@ -861,7 +861,7 @@ function openCurrentAccounts(){
     onChanged:(value,previous)=>desktopSessions.accountChanged(provider,previous,value)
   });
   if(provider==='claude'&&typeof CliAccessPanel!=='undefined'){
-    const details=el('details','account-compact'),root=el('div');details.append(el('summary','',t('Claude Code CLI 接入')),root);dialog.append(details);
+    const details=el('details','account-compact'),root=el('div');details.append(el('summary','',t('Claude Code CLI 接入')),root);details.firstElementChild.dataset.i18n='Claude Code CLI 接入';dialog.append(details);
     claudeCliAccessPanel=new CliAccessPanel({root,provider:'claude',read:()=>api('/api/cli-access'),request:value=>api('/api/cli-access',value)});
     claudeCliAccessPanel.refresh();
   }

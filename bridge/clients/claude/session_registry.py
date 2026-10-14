@@ -2,6 +2,7 @@
 
 import json
 import os
+import re
 import subprocess
 import sys
 from pathlib import Path
@@ -13,7 +14,21 @@ _UNKNOWN = '无法确认原 Claude Code 会话是否仍在其他终端运行，�
 _RUNNING = '原 Claude Code 会话仍在其他终端运行，请先在原终端结束会话'
 
 
-def _darwin_writer(pid, proc_start):
+def _pid_domain():
+    if sys.platform == 'darwin':
+        return 'darwin'
+    if sys.platform == 'linux':
+        try:
+            machine = Path('/etc/machine-id').read_text().strip()
+            namespace = os.readlink('/proc/self/ns/pid')
+        except OSError as exc:
+            raise BridgeUnavailable(_UNKNOWN) from exc
+        if machine and re.fullmatch(r'pid:\[\d+\]', namespace):
+            return 'darwin:' + machine + ':' + namespace
+    raise BridgeUnavailable(_UNKNOWN)
+
+
+def _native_writer(pid, proc_start):
     try:
         os.kill(pid, 0)
     except ProcessLookupError:
@@ -22,6 +37,7 @@ def _darwin_writer(pid, proc_start):
         raise BridgeUnavailable(_UNKNOWN) from exc
     try:
         env = os.environ.copy()
+        env['LC_ALL'] = 'C'
         env['TZ'] = 'UTC'
         result = subprocess.run(['ps', '-p', str(pid), '-o', 'lstart='],
                                 capture_output=True, text=True, timeout=3, env=env)
@@ -39,6 +55,7 @@ def assert_session_closed(config_dir: Path, session_id: str = None):
     if not registry.is_dir() or registry.is_symlink():
         raise BridgeUnavailable(_UNKNOWN)
     try:
+        domain = _pid_domain()
         entries = list(registry.iterdir())
         for path in entries:
             if path.suffix != '.json':
@@ -53,12 +70,9 @@ def assert_session_closed(config_dir: Path, session_id: str = None):
             pid = entry.get('pid')
             if (not isinstance(pid, int) or isinstance(pid, bool) or pid <= 0 or
                     path.stem != str(pid) or not isinstance(entry.get('procStart'), str) or
-                    not entry['procStart'] or entry.get('pidDomain') != sys.platform):
+                    not entry['procStart'] or entry.get('pidDomain') != domain):
                 raise BridgeUnavailable(_UNKNOWN)
-            if sys.platform != 'darwin':
-                # Other platforms lack a verified native procStart comparison.
-                raise BridgeUnavailable(_UNKNOWN)
-            if _darwin_writer(pid, entry['procStart']):
+            if _native_writer(pid, entry['procStart']):
                 raise BridgeUnavailable(_RUNNING)
     except (OSError, ValueError, UnicodeError) as exc:
         raise BridgeUnavailable(_UNKNOWN) from exc

@@ -27,6 +27,21 @@ PERMISSION_OPTIONS = (
     ('auto', '自动模式', '由 Claude 判断可自动执行的操作'),
     ('bypassPermissions', '完全访问', '跳过权限确认'),
 )
+_MANAGED_API_ROUTING = {
+    'CLAUDE_CODE_PROVIDER_MANAGED_BY_HOST',
+    'CLAUDE_CODE_USE_ANTHROPIC_AWS',
+    'CLAUDE_CODE_USE_BEDROCK',
+    'CLAUDE_CODE_USE_FOUNDRY',
+    'CLAUDE_CODE_USE_MANTLE',
+    'CLAUDE_CODE_USE_VERTEX',
+}
+
+
+def managed_api_env(source=None):
+    """Keep ambient provider credentials and routing out of a selected API profile."""
+    source = os.environ if source is None else source
+    return {key: value for key, value in source.items()
+            if not key.startswith('ANTHROPIC_') and key not in _MANAGED_API_ROUTING}
 
 
 def _skill_catalog(catalog):
@@ -84,9 +99,7 @@ def _profile():
 
 
 def _auth_ready(profile):
-    env = os.environ.copy()
-    if profile.get('managedApi'):
-        env = {key: value for key, value in env.items() if not key.startswith('ANTHROPIC_')}
+    env = managed_api_env() if profile.get('managedApi') else os.environ.copy()
     env['CLAUDE_CONFIG_DIR'] = str(profile['directory'])
     try:
         process = subprocess.run([profile['binary'], 'auth', 'status', '--json'],
@@ -401,9 +414,7 @@ class ClaudeCli:
             raise ValueError('原项目目录不可用')
         native = str(uuid.uuid4())
         sid = model.gateway_id('cli:' + origin, native)
-        env = os.environ.copy()
-        if profile.get('managedApi'):
-            env = {key: value for key, value in env.items() if not key.startswith('ANTHROPIC_')}
+        env = managed_api_env() if profile.get('managedApi') else os.environ.copy()
         env['CLAUDE_CONFIG_DIR'] = str(profile['directory'])
         command = [profile['binary'], '-p', '--session-id', native, '--input-format', 'stream-json',
                    '--output-format', 'stream-json', '--verbose', '--replay-user-messages',
@@ -516,9 +527,7 @@ class ClaudeCli:
                     cwd = str(Path(row['cwd']).resolve(strict=True))
                 except OSError as exc:
                     raise ResumePreflightBlocked('原项目目录不可用，请在电脑端检查') from exc
-                env = os.environ.copy()
-                if profile.get('managedApi'):
-                    env = {key: value for key, value in env.items() if not key.startswith('ANTHROPIC_')}
+                env = managed_api_env() if profile.get('managedApi') else os.environ.copy()
                 env['CLAUDE_CONFIG_DIR'] = str(profile['directory'])
                 command = [profile['binary'], '-p', '--resume', native, '--input-format', 'stream-json',
                            '--output-format', 'stream-json', '--verbose', '--replay-user-messages',

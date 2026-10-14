@@ -145,8 +145,11 @@ class CliAccess:
         source = value.get('directory') or str(native['directory'])
         if not isinstance(source, str) or not Path(source).expanduser().is_absolute():
             raise ValueError('请填写本机 Claude 配置目录的完整路径')
-        directory = Path(source).expanduser().resolve(strict=True)
-        if not directory.is_dir() or directory.is_symlink():
+        candidate = Path(source).expanduser()
+        if candidate.is_symlink():
+            raise ValueError('Claude 配置目录不可用')
+        directory = candidate.resolve(strict=True)
+        if not directory.is_dir():
             raise ValueError('Claude 配置目录不可用')
         profile = {**native, 'directory': directory}
         if not _auth_ready(profile):

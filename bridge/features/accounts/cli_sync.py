@@ -2,8 +2,6 @@
 
 import hashlib
 import json
-import os
-import socket
 import subprocess
 from pathlib import Path
 
@@ -36,16 +34,8 @@ class LocalCliSync:
                 raise ValueError('请先结束或断开本机 Codex CLI 会话后再切换接入')
         if self._accounts().blockers():
             raise ValueError('有任务或待发送消息，请先处理后再切换接入')
-        path = Path(cli.client.socket_path)
-        if path.exists():
-            with socket.socket(socket.AF_UNIX) as probe:
-                probe.settimeout(.25)
-                try:
-                    probe.connect(str(path))
-                except (OSError, TimeoutError):
-                    pass  # Stale socket is not a running daemon.
-                else:
-                    raise ValueError('本机 Codex CLI 后台服务仍在运行，请先正常结束后再切换')
+        if cli.daemon_may_be_running():
+            raise ValueError('本机 Codex CLI 后台服务仍在运行或状态未知，请先正常结束后再切换')
 
     def _claude_dir(self, row):
         candidate = Path(row['directory']).expanduser()
@@ -103,11 +93,14 @@ class LocalCliSync:
 
     @staticmethod
     def _claude_auth(directory, expected):
-        from bridge.clients.claude.cli_session import _profile
+        from bridge.clients.claude.cli_session import _profile, managed_api_env
         profile = _profile()
         if not profile:
             raise ValueError('找不到 Claude Code CLI')
-        env = {key: value for key, value in os.environ.items() if not key.startswith('ANTHROPIC_')}
+        env = managed_api_env() if expected else None
+        if env is None:
+            import os
+            env = os.environ.copy()
         env['CLAUDE_CONFIG_DIR'] = str(directory)
         try:
             result = subprocess.run([profile['binary'], 'auth', 'status', '--json'],
@@ -115,7 +108,11 @@ class LocalCliSync:
             status = json.loads(result.stdout)
         except (OSError, subprocess.SubprocessError, ValueError) as exc:
             raise ValueError('Claude Code CLI 认证状态无法核验') from exc
+        if not isinstance(status, dict):
+            raise ValueError('Claude Code CLI 认证状态无法核验')
+        config_dir = status.get('configDirectory')
         if (result.returncode or status.get('loggedIn') is not True
+                or not isinstance(config_dir, str) or Path(config_dir).resolve() != directory.resolve()
                 or expected and status.get('authMethod') != expected):
             raise ValueError('Claude Code CLI 未识别所选认证方式')
         return status
@@ -235,13 +232,15 @@ class LocalCliSync:
                 raise ValueError('本机 Codex CLI 模型提供商未生效')
             if row['kind'] == 'chatgpt':
                 tokens = json.loads((accounts.home/'auth.json').read_text()).get('tokens') or {}
-                if auth.get('email') != row.get('email') or token_owner({'tokens': tokens}) != row.get('tokenOwner'):
+                if (auth.get('type') != 'chatgpt' or auth.get('email') != row.get('email')
+                        or token_owner({'tokens': tokens}) != row.get('tokenOwner')):
                     raise ValueError('本机 Codex CLI 账号身份未生效')
             else:
                 provider_config = (config.get('model_providers') or {}).get('bridge_api') or {}
                 secret = json.loads((accounts.directory(row['id'])/'api.json').read_text())['key']
                 actual = json.loads((accounts.home/'auth.json').read_text()).get('OPENAI_API_KEY')
                 if (auth.get('type') != 'apiKey' or provider_config.get('base_url') != row['baseUrl']
+                        or config.get('openai_base_url') != row['baseUrl']
                         or config.get('model') != row['model'] or actual != secret):
                     raise ValueError('本机 Codex CLI API 接入未生效')
             return {'status': 'verified', 'sharedWithDesktop': True}

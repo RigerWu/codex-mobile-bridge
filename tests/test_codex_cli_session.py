@@ -4,6 +4,7 @@ import os
 import shlex
 import subprocess
 import threading
+import time
 import unittest
 from pathlib import Path
 from unittest.mock import Mock, patch
@@ -91,12 +92,20 @@ class CliSessionTests(unittest.TestCase):
 
     def test_unavailable_proxy_starts_daemon_only_for_explicit_attach(self):
         info = {'codexHome': str(self.home)}
-        self.fake.connect = Mock(side_effect=[AppServerUnavailable('offline'),
-                                              AppServerUnavailable('offline'), info])
-        with patch.object(self.sessions, '_start_daemon') as start:
+        started = False
+        def connect():
+            if not started:
+                time.sleep(.03)
+                raise AppServerUnavailable('offline')
+            return info
+        def start_daemon():
+            nonlocal started
+            started = True
+        self.fake.connect = Mock(side_effect=connect)
+        with patch.object(self.sessions, '_start_daemon', side_effect=start_daemon) as start:
             self.assertEqual(self.sessions.attach('thread-a', explicit=True)['id'], 'thread-a')
         start.assert_called_once_with()
-        self.assertEqual(self.fake.connect.call_count, 3)
+        self.assertEqual(self.fake.connect.call_count, 2)
 
     def test_explicit_attach_resumes_saved_thread_and_preserves_identity(self):
         self.fake.loaded = False

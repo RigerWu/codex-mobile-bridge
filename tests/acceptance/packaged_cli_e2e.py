@@ -346,7 +346,8 @@ def seed_codex(cli, home, project, env):
     require(report.get('status') in ('started', 'alreadyRunning'), 'Native Codex daemon did not start')
     events = queue.Queue()
     socket = home/'app-server-control'/'app-server-control.sock'
-    client = CodexAppServer(socket, cli=str(cli), on_event=events.put, check_socket=True)
+    client = CodexAppServer(socket, cli=str(cli), on_event=events.put,
+                            check_socket=True, client_name='codex-tui')
     try:
         require(client.connect().get('codexHome') == str(home), 'Native Codex daemon selected another home')
         thread = client.request('thread/start', {'cwd': str(project), 'threadSource': 'cli'})['thread']
@@ -536,11 +537,16 @@ def verify_claude(http, sid, project, server, markers, result):
                                        'text': 'CLAUDE_HTTP_SEND; synthetic only.'})
     detail = wait_for(lambda: detail_with('CLAUDE_HTTP_REPLY'), 'Claude HTTP assistant reply')
     wait_for(ready_detail, 'Claude HTTP turn completion')
-    require(detail['session']['model'] == alternate_model and
-            any(row['kind'] == 'model' and row['model'] != CLAUDE_MODEL and
-                (row['model'] == alternate_model or row['model'].startswith('claude-' + alternate_model + '-'))
-                for row in server.calls[before_model_calls:]),
-            'Claude next turn did not use the selected native model')
+    next_models = [row['model'] for row in server.calls[before_model_calls:]
+                   if row['kind'] == 'model']
+    native_model = next_models[-1] if next_models else None
+    require(native_model != CLAUDE_MODEL and isinstance(native_model, str) and
+            (native_model == alternate_model or
+             alternate_model in ('opus', 'sonnet', 'haiku') and
+             native_model.startswith('claude-' + alternate_model + '-')) and
+            detail['session']['model'] in (alternate_model, native_model),
+            'Claude next turn model mismatch: selected=' + alternate_model +
+            ', native=' + str(native_model) + ', detail=' + str(detail['session']['model']))
     result['claudeHttpReply'] = True
     for decision in ('decline', 'accept'):
         label = 'DENY' if decision == 'decline' else 'ALLOW'
@@ -770,7 +776,7 @@ def main():
             result['checks']['ownedNativeRuntimesStopped'] = True
         except Exception as exc:
             result['status'] = 'failed'
-            result['cleanupError'] = 'native idle: ' + type(exc).__name__
+            result['cleanupError'] = 'native idle: ' + type(exc).__name__ + ': ' + str(exc)[:160]
         for server, thread in zip(servers, threads):
             server.shutdown(); server.server_close(); thread.join(timeout=5)
         result['codexModelPosts'] = sum(row['kind'] == 'model' for row in servers[0].calls)

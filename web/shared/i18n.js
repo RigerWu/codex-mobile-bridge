@@ -1777,6 +1777,8 @@ const en={
   "关闭窗口后，网关继续运行。": "The gateway keeps running after you close this window.",
   "其他连接配置": "Additional connections",
   "创建并打开": "Create and open",
+  "创建聊天": "Create chat",
+  "CLI 聊天已创建，可在此继续": "CLI chat created. Continue here.",
   "删除": "Delete",
   "刷新列表": "Refresh list",
   "刷新日志": "Refresh logs",

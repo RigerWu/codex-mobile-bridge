@@ -263,6 +263,7 @@ $('new-chat-type').onchange=()=>{
   if(newChatProjects.some(p=>p.key===selected&&(p.type||'desktop')===kind))$('new-chat-project').value=selected;
   $('new-chat-project').onchange();
   $('new-chat-submit').disabled=!$('new-chat-project').value;
+  $('new-chat-submit').textContent=t(kind==='cli'?'创建聊天':'创建并打开');
 };
 $('new-chat-project').onchange=()=>{$('new-chat-path').textContent=$('new-chat-project').value==='local|independent'?t('在此电脑创建独立聊天'):newChatProjects.find(p=>p.key===$('new-chat-project').value)?.cwd||'';};
 $('new-chat-dialog').addEventListener('cancel',event=>{if(creatingChat)event.preventDefault();});
@@ -287,8 +288,9 @@ $('new-chat-form').onsubmit=async event=>{
     if($('new-chat-dialog').open)$('new-chat-error').textContent=t(e.message)+t('；若结果不确定，请先刷新列表检查，避免重复创建。');
     else toast(t('聊天已创建，连接暂未完成：')+t(e.message));
   }finally{
-    creatingChat=false;setLanguageBusy();$('new-chat-submit').textContent=t('创建并打开');
+    creatingChat=false;setLanguageBusy();$('new-chat-submit').textContent=t(kind==='cli'?'创建聊天':'创建并打开');
     $('new-chat-form').querySelectorAll('input,select,button').forEach(n=>n.disabled=false);
+    $('new-chat-submit').disabled=!$('new-chat-project').value;
     document.querySelector('[data-close="new-chat-dialog"]').disabled=false;
   }
 };
@@ -680,6 +682,7 @@ $('phone-language').onchange=()=>{
   BridgeI18n.setLanguage($('phone-language').value);BridgeI18n.apply();accountPanel.render();if(typeof accountsPanel!=="undefined")accountsPanel?.render();renderList();
   if(!$('new-chat-title').dataset.edited)$('new-chat-title').value=t('新聊天');
   $('new-chat-help').textContent=t($('new-chat-type').value==='cli'?'选择已有 CLI 项目目录，在此创建聊天。':'选择已有项目，或不选择项目创建独立聊天。电脑会打开这条聊天。');
+  $('new-chat-submit').textContent=t($('new-chat-type').value==='cli'?'创建聊天':'创建并打开');
   renderLoginStatus();
   for(const id of ['login-error','send-error','model-error','skills-error','new-chat-error','notify-error','rename-error','pushplus-error','toast'])$(id).textContent=t($(id).textContent);
   for(const option of $('new-chat-project').options){const project=newChatProjects.find(p=>p.key===option.value);if(project)option.textContent=project.name+' · '+(project.host==='local'?t('此电脑'):project.hostLabel);}

@@ -140,6 +140,19 @@ class LocalCliSyncTests(unittest.TestCase):
                     with self.assertRaisesRegex(ValueError, '认证状态无法核验'):
                         self.sync._claude_auth(directory, 'api_key')
 
+    def test_claude_auth_negative_control_rejects_error_exit_with_logged_out_json(self):
+        directory = self.root/'native-claude'
+        directory.mkdir()
+        selected = SimpleNamespace(returncode=0, stdout=json.dumps({
+            'loggedIn': True, 'authMethod': 'api_key'}))
+        failed_control = SimpleNamespace(returncode=2, stdout=json.dumps({
+            'loggedIn': False, 'authMethod': 'none'}))
+        with patch('bridge.clients.claude.cli_session._profile', return_value={'binary': '/fixture/claude'}), \
+             patch('bridge.clients.claude.cli_session.managed_api_env', return_value={}, create=True), \
+             patch('bridge.features.accounts.cli_sync.subprocess.run', side_effect=[selected, failed_control]):
+            with self.assertRaisesRegex(ValueError, '配置目录无法核验'):
+                self.sync._claude_auth(directory, 'api_key')
+
     def test_claude_auth_rejects_wrong_selected_method_before_control(self):
         directory = self.root/'native-claude'
         directory.mkdir()

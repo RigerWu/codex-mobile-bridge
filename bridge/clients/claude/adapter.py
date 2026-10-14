@@ -13,6 +13,7 @@ from bridge.clients.claude.setup import inspect_installation, console_source, de
 from bridge.clients.errors import BridgeUnavailable
 from bridge.clients.claude.mailbox import FileDesktop, MAX_REQUEST, CONNECTOR_REVISION
 from bridge.clients.claude.cli_session import ClaudeCli
+from bridge.clients.claude.remote import RemoteClaudeCli
 from bridge.app.lifecycle import private_json
 from bridge.platforms.windows import session as windows_session
 from bridge.platforms.windows.session import DesktopUnavailable
@@ -21,9 +22,10 @@ DESKTOP_WAIT_STATES = {'needs-screen-saver', 'needs-unlock', 'needs-desktop'}
 
 
 class Claude:
-    def __init__(self, directory, *, auto_connect=True):
+    def __init__(self, directory, *, auto_connect=True, hosts=None):
         self.directory = Path(directory)
         self.cli = ClaudeCli(self.directory.parent/'uploads')
+        self.remote_cli = RemoteClaudeCli(hosts)
         self.desktop = None
         self.index = {}
         self.loop = None
@@ -554,6 +556,7 @@ class Claude:
         elif not self.discovery:
             result.update(setupState='not-scanned', reason='请扫描本机客户端')
         result.update(self.cli.status())
+        result['cliAvailable'] = result['cliAvailable'] or self.remote_cli.available()
         return result
 
     async def listing(self):
@@ -578,16 +581,21 @@ class Claude:
     async def dispatch(self, action, sid, body):
         if action == 'list':
             cli = await asyncio.to_thread(self.cli.listing)
+            remote = await asyncio.to_thread(self.remote_cli.listing)
             if self.status()['connected']:
                 desktop = await self.listing()
-                return {'connected': True, 'sessions': desktop['sessions'] + cli['sessions'],
+                return {'connected': True, 'sessions': desktop['sessions'] + cli['sessions'] + remote['sessions'],
                         'coverage': {**desktop['coverage'], 'cli': cli['connected']},
-                        'complete': desktop['complete']}
-            return {'connected': cli['connected'], 'sessions': cli['sessions'],
+                        'complete': desktop['complete'] and remote['complete']}
+            return {'connected': cli['connected'] or remote['connected'], 'sessions': cli['sessions'] + remote['sessions'],
                     'coverage': {'code': False, 'cowork': False, 'cli': cli['connected']},
-                    'complete': cli['connected']}
+                    'complete': (cli['connected'] or remote['connected']) and remote['complete']}
         if action == 'resume':
+            if await asyncio.to_thread(self.remote_cli.contains, sid):
+                return await asyncio.to_thread(self.remote_cli.call, action, sid, body)
             return await asyncio.to_thread(self.cli.call, action, sid, body)
+        if sid and await asyncio.to_thread(self.remote_cli.contains, sid):
+            return await asyncio.to_thread(self.remote_cli.call, action, sid, body)
         if sid and await asyncio.to_thread(self.cli.contains, sid):
             return await asyncio.to_thread(self.cli.call, action, sid, body)
         if not self.status()['connected']:
@@ -731,11 +739,17 @@ class Claude:
         if self.loop is None:
             if action == 'list':
                 cli = self.cli.listing()
-                return {'connected': cli['connected'], 'sessions': cli['sessions'],
+                remote = self.remote_cli.listing()
+                return {'connected': cli['connected'] or remote['connected'],
+                        'sessions': cli['sessions'] + remote['sessions'],
                         'coverage': {'code': False, 'cowork': False, 'cli': cli['connected']},
-                        'complete': cli['connected']}
+                        'complete': (cli['connected'] or remote['connected']) and remote['complete']}
             if action == 'resume':
+                if self.remote_cli.contains(sid):
+                    return self.remote_cli.call(action, sid, body or {})
                 return self.cli.call(action, sid, body or {})
+            if sid and self.remote_cli.contains(sid):
+                return self.remote_cli.call(action, sid, body or {})
             if sid and self.cli.contains(sid):
                 return self.cli.call(action, sid, body or {})
             raise BridgeUnavailable(self.status()['reason'])
@@ -794,6 +808,7 @@ class Claude:
 
     def close(self):
         self.cli.close()
+        self.remote_cli.close()
         # Ownership handoff must preserve explicit connection intent. A user's
         # Cancel action persists autoConnect=False instead.
         self.cancel(persist=False)

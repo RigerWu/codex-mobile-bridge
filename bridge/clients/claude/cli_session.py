@@ -249,6 +249,7 @@ class _Owned:
         self.permission = None
         self.catalog = {}
         self.error = None
+        self.preflight = None
         self.finished = False
         threading.Thread(target=self._read, daemon=True, name='claude-cli-reader').start()
 
@@ -263,7 +264,11 @@ class _Owned:
                     continue
                 with self.condition:
                     kind = event.get('type')
-                    if kind == 'control_response':
+                    if kind == 'bridge_preflight':
+                        self.preflight = event
+                        if event.get('status') == 'blocked':
+                            self.error = event.get('message') or 'Claude Code 远端恢复前核验失败'
+                    elif kind == 'control_response':
                         response = event.get('response') or {}
                         self.responses[response.get('request_id')] = response
                     elif kind == 'control_request' and (event.get('request') or {}).get('subtype') == 'can_use_tool':

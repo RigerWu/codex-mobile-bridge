@@ -55,7 +55,8 @@ class DesktopSessions:
         self.config_path = self.directory/'settings.json'
         self.config = json.loads(self.config_path.read_text()) if self.config_path.exists() else {}
         self.adapters = {'deepseek': DeepSeek(self.directory/'deepseek', self.config.get('deepseekHome')),
-                         'claude': Claude(self.directory/'claude', auto_connect=False)}
+                         'claude': Claude(self.directory/'claude', auto_connect=False,
+                                          hosts=bridge.hosts if bridge is not None and hasattr(bridge, 'hosts') else None)}
         self.deepseek_restore_error = None
         if self.config.get('deepseekAdapterDirectory'):
             try:
@@ -450,7 +451,8 @@ class DesktopSessions:
             self.bridge.assert_desktop_idle()
             return
         adapter = self.adapters[provider]
-        if provider == 'claude' and adapter.cli.busy() is True:
+        if provider == 'claude' and (adapter.cli.busy() is True or
+                                     getattr(adapter, 'remote_cli', None) is not None and adapter.remote_cli.busy() is True):
             raise ValueError('有 Claude Code 任务运行或等待确认，请先结束任务再关闭客户端')
         try:
             status = adapter.call('status') if provider == 'deepseek' else adapter.status()
@@ -698,7 +700,7 @@ class DesktopSessions:
     def _claude_quit_evidence(self):
         adapter = self.adapters['claude']
         try:
-            if adapter.cli.busy() is True:
+            if adapter.cli.busy() is True or getattr(adapter, 'remote_cli', None) is not None and adapter.remote_cli.busy() is True:
                 return {'busy': True, 'unknown': False}
             if not adapter.status().get('connected'):
                 return {'busy': False, 'unknown': True}
@@ -1037,7 +1039,9 @@ class DesktopSessions:
                     if not result.get('running'):
                         raise ValueError('客户端尚未启动，请在电脑端检查后重试')
             else:
-                if provider == 'claude' and self.adapters[provider].cli.busy() is True:
+                if provider == 'claude' and (self.adapters[provider].cli.busy() is True or
+                                             getattr(self.adapters[provider], 'remote_cli', None) is not None and
+                                             self.adapters[provider].remote_cli.busy() is True):
                     raise ValueError('有 Claude Code 任务运行或等待确认，请先结束任务再关闭客户端')
                 self._stop_client(provider, descriptor, inspect_client(descriptor),
                                   native_confirmation=value.get('quitDesktop') is True,

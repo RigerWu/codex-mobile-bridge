@@ -29,6 +29,43 @@ MODEL = 'cmb-win-fixture-model'
 EVENTS = []
 
 
+def private_state_directory():
+    """Create a fresh native-private state directory, or verify an existing one."""
+    script = r'''
+$ErrorActionPreference = 'Stop'
+$path = $env:CMB_FIXTURE_STATE_DIR
+$sid = [Security.Principal.WindowsIdentity]::GetCurrent().User.Value
+if (-not (Test-Path -LiteralPath $path)) {
+    $security = New-Object Security.AccessControl.DirectorySecurity
+    $security.SetSecurityDescriptorSddlForm("O:${sid}D:P(A;OICI;FA;;;${sid})")
+    [IO.Directory]::CreateDirectory($path, $security) | Out-Null
+}
+$item = Get-Item -LiteralPath $path -Force
+if (-not $item.PSIsContainer -or ($item.Attributes -band [IO.FileAttributes]::ReparsePoint)) {
+    throw 'Isolated daemon state path is not a plain directory'
+}
+$security = Get-Acl -LiteralPath $path
+$owner = ([Security.Principal.NTAccount]$security.Owner).Translate([Security.Principal.SecurityIdentifier]).Value
+$rules = @($security.Access)
+if ($owner -ne $sid -or -not $security.AreAccessRulesProtected -or $rules.Count -ne 1 -or
+    $rules[0].IdentityReference.Translate([Security.Principal.SecurityIdentifier]).Value -ne $sid -or
+    $rules[0].FileSystemRights -ne [Security.AccessControl.FileSystemRights]::FullControl -or
+    $rules[0].InheritanceFlags -ne [Security.AccessControl.InheritanceFlags]'ContainerInherit, ObjectInherit' -or
+    $rules[0].PropagationFlags -ne [Security.AccessControl.PropagationFlags]::None -or
+    $rules[0].AccessControlType -ne [Security.AccessControl.AccessControlType]::Allow -or
+    $rules[0].IsInherited) {
+    throw 'Isolated daemon state directory lacks the native private ACL'
+}
+'''
+    environment = os.environ.copy()
+    environment['CMB_FIXTURE_STATE_DIR'] = str(HOME / 'app-server-daemon')
+    result = subprocess.run(['powershell.exe', '-NoProfile', '-NonInteractive', '-Command', script],
+                            env=environment, stdin=subprocess.DEVNULL, capture_output=True,
+                            text=True, timeout=15, creationflags=subprocess.CREATE_NO_WINDOW)
+    if result.returncode:
+        raise RuntimeError('Could not prepare isolated private daemon state: ' + result.stderr[-500:])
+
+
 class MockAPI(BaseHTTPRequestHandler):
     def log_message(self, *_):
         pass
@@ -100,6 +137,7 @@ def main():
         raise RuntimeError('Run with the staged Windows CLI')
     HOME.mkdir(parents=True, exist_ok=True)
     PROJECT.mkdir(exist_ok=True)
+    private_state_directory()
     server = ThreadingHTTPServer(('127.0.0.1', 0), MockAPI)
     threading.Thread(target=server.serve_forever, daemon=True).start()
     base = f'http://127.0.0.1:{server.server_port}'
@@ -110,7 +148,6 @@ def main():
               'env_key="CMB_FIXTURE_KEY"\n[projects.' + json.dumps(str(PROJECT)) +
               ']\ntrust_level="trusted"\n')
     (HOME / 'config.toml').write_text(config, encoding='utf-8')
-    (HOME / 'app-server-daemon').mkdir(exist_ok=True)
     (HOME / 'app-server-daemon/settings.json').write_text(json.dumps({
         'remoteControlEnabled': False,
         'updater': {'autoUpdateEnabled': False, 'updateIntervalMinutes': 120}}), encoding='utf-8')

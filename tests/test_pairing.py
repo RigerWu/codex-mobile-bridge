@@ -222,3 +222,19 @@ class PairingHTTPTests(unittest.TestCase):
         response = connection.getresponse()
         self.assertEqual(response.status, 403)
         response.read(); connection.close()
+
+    def test_forbidden_local_response_closes_before_reusing_client_for_public_entry(self):
+        self.server.local_access = False
+        connection = http.client.HTTPConnection('127.0.0.1', self.server.server_port, timeout=3)
+        try:
+            connection.request('GET', '/api/auth', headers={'Host': '192.0.2.1:8787', 'Origin': ORIGIN})
+            rejected = connection.getresponse()
+            self.assertEqual(rejected.status, 403)
+            self.assertEqual(rejected.getheader('Connection'), 'close')
+            rejected.read()
+            connection.request('GET', '/api/auth', headers={'Host': 'example.com', 'Origin': 'https://example.com'})
+            accepted = connection.getresponse()
+            self.assertEqual(accepted.status, 200)
+            self.assertFalse(json.loads(accepted.read())['authenticated'])
+        finally:
+            connection.close()

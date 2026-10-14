@@ -177,6 +177,8 @@ class Handler(BaseHTTPRequestHandler):
         if compressed:
             self.send_header('Content-Encoding', 'gzip')
         self.send_header("Content-Length", str(len(body)))
+        if self.close_connection:
+            self.send_header("Connection", "close")
         if content_disposition:
             self.send_header("Content-Disposition", content_disposition)
         if cookie:

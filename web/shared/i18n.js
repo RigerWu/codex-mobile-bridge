@@ -2,6 +2,7 @@
 // UI messages only. Never translate chat content, commands, model IDs or user input.
 const BridgeI18n=(()=>{
 const en={
+"原项目目录不可用，请在电脑端检查":"The original project directory is unavailable. Check it on your computer.",
 "有 Claude Code 任务运行或等待确认，请先结束任务再关闭客户端":"A Claude Code task is running or awaiting approval. Finish it before closing the client.",
 "Claude Code CLI 暂不支持此发送选项":"This send option is not supported for Claude Code CLI yet.",
 "Claude Code 会话":"Claude Code chat",

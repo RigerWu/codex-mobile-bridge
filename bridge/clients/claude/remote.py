@@ -152,10 +152,9 @@ class RemoteClaudeCli:
         def discover(host_id, host):
             cwds = {item['cwd'] for item in known if item.get('host') == host_id}
             try:
-                result = _remote(host['alias'], {'operation': 'list'}, timeout=12)
+                result = _remote(host['alias'], {'operation': 'projects'}, timeout=12)
                 found = result.get('profile')
-                if not found or not _remote(host['alias'], {'operation': 'auth',
-                        'origin': found['origin']}, timeout=12)['ready']:
+                if not found or not result.get('authReady'):
                     return []
             except BridgeUnavailable:
                 return []
@@ -241,9 +240,9 @@ class RemoteClaudeCli:
         host = self.hosts.hosts().get(host_id) if self.hosts else None
         if not host or host['alias'] != alias:
             raise ValueError('原 SSH 主机配置已变化')
-        fresh = _remote(alias, {'operation': 'list'}, timeout=12).get('profile')
-        if not fresh or fresh['origin'] != origin or not _remote(
-                alias, {'operation': 'auth', 'origin': origin}, timeout=12)['ready']:
+        preflight = _remote(alias, {'operation': 'projects'}, timeout=12)
+        fresh = preflight.get('profile')
+        if not fresh or fresh['origin'] != origin or not preflight.get('authReady'):
             raise BridgeUnavailable('原 SSH Claude Code 账号配置已变化或不可用')
         native = str(uuid.uuid4())
         sid = model.gateway_id('cli:ssh:'+host_id+':'+origin, native)

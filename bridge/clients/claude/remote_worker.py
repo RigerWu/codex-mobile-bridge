@@ -241,6 +241,9 @@ def command(request):
     operation = request.get('operation')
     if operation == 'list':
         return {'profile': found, 'sessions': sessions(found) if found else []}
+    if operation == 'projects':
+        return {'profile': found, 'sessions': sessions(found) if found else [],
+                'authReady': auth_ready(found) if found else False}
     if not found or found['origin'] != request.get('origin'):
         raise ValueError('原 Claude Code 配置已变化或不可用')
     if operation == 'detail':

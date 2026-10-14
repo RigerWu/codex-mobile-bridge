@@ -221,7 +221,7 @@ Windows 关闭窗口会收起到系统托盘；双击托盘或再次启动 App �
 | Cloudflare 固定隧道 | 有私人域名，没有服务器 | 在 Cloudflare 配置 DNS 与公开主机名，填写域名和 Tunnel Token |
 | 固定 HTTPS · Tailscale | 希望固定地址且不自建服务器 | 安装登录官方 Tailscale，检测地址并完成 Funnel/Serve 授权，见[指引](docs/tailscale.md) |
 | 自有服务器 + SSH | 有 Linux 公网服务器；电脑在校园网或 NAT 后 | 准备 HTTPS 与转发权限，再填普通用户 SSH；域名需绑定公网 IP，留空使用 HTTPS 公网 IP 时须有匹配 IP 的受信任证书 |
-| NAS / 已有反代 / Docker | NAS 已能访问电脑，已有域名和 HTTPS 反代 | 填固定 HTTPS 地址、NAS 可达的电脑 HTTP 地址；直接反代或导出 Nginx Docker 包 |
+| NAS / 其他设备（已有穿透的高级选项） | NAS 已能访问电脑，已有域名和 HTTPS 反代 | 填固定 HTTPS 地址、NAS 可达的电脑 HTTP 地址；直接反代或导出 Nginx Docker 包 |
 
 **App 内可导出或复制配置参考**（SSH 连接显示“导出手动配置参考”和“复制手动配置说明”，NAS 保留部署包入口）。生成的包带实际填写的地址、端口、中文步骤、验收项和启停命令，不含登录密码、Token、Codex 数据或 SSH 私钥。首次服务器部署完成后，日常只需打开 App 并启动网关；可启用“打开 App 时自动启动网关”。
 

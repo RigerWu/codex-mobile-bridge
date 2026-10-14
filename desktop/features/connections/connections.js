@@ -142,7 +142,7 @@ function renderConnections(){
         advanced.append(deploy);
       }
       const actions=document.createElement('div');actions.className='actions';actions.append(action('检测固定入口','checkEntry',()=>api.checkEntry({id:row.id})));card.append(actions);
-      const status=note([connectionSetupState.get(row.id),snapshot?.externalStatus?.[row.id]?.message].filter(Boolean).map(t).join(' ')||'保存配置后可检测入口。');status.dataset.connectionStatus=row.id;
+      const status=note([connectionSetupState.get(row.id),snapshot?.externalStatus?.[row.id]?.message].filter(Boolean).map(t).join(' ')||'保存并启动网关后可检测入口。');status.dataset.connectionStatus=row.id;
     }else{
       const publicAddress=field('publicUrl',row.accessMode==='server'?'手机访问地址（可选）':'手机访问地址','text',row.accessMode==='server'?'留空使用服务器公网 IP':'https://codex.try2love.com');
       if(row.accessMode==='server'){
@@ -210,7 +210,7 @@ function renderConnections(){
       const actions=document.createElement('div');actions.className='actions';
       if(row.accessMode!=='cloudflare')for(const [label,method] of [[row.accessMode==='server'?'导出手动配置参考…':'导出部署包…','exportDeployment'],[row.accessMode==='server'?'复制手动配置说明':'复制给部署 Agent','copyDeployment']])actions.append(action(label,method,()=>api[method]({id:row.id,language:BridgeI18n.language()})));
       actions.append(action('检测固定入口','checkEntry',()=>api.checkEntry({id:row.id})));card.append(actions);
-      const status=note([connectionSetupState.get(row.id),snapshot?.externalStatus?.[row.id]?.message].filter(Boolean).map(t).join(' ')||'保存配置后可检测入口。');status.dataset.connectionStatus=row.id;
+      const status=note([connectionSetupState.get(row.id),snapshot?.externalStatus?.[row.id]?.message].filter(Boolean).map(t).join(' ')||'保存并启动网关后可检测入口。');status.dataset.connectionStatus=row.id;
     }
     $('connections').append(container);
   }

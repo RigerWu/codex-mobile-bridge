@@ -212,7 +212,7 @@ Under **Network access → Add connection**, choose a type and click **Add conne
 | Fixed Cloudflare tunnel | Private domain, no server | Configure Cloudflare DNS and a public hostname; enter the domain and tunnel token |
 | Fixed Tailscale HTTPS | A fixed address without your own server | Sign in to the official client, discover its address and authorize Funnel/Serve; see the [guide](docs/tailscale.md) |
 | Own server + SSH | A public Linux server; the computer is behind NAT | Prepare HTTPS and forwarding, then use a regular SSH account. Bind a domain to the public IP, or leave the URL blank for HTTPS by public IP with a trusted IP certificate |
-| NAS / existing proxy / Docker | The NAS can reach the computer and already has an HTTPS reverse proxy | Enter the fixed HTTPS URL and the computer's HTTP address as reachable from the NAS |
+| NAS / other device (advanced existing-entry option) | The NAS can reach the computer and already has an HTTPS reverse proxy | Enter the fixed HTTPS URL and the computer's HTTP address as reachable from the NAS |
 
 The existing-tunnel option keeps tunnel software and certificates under your control. Use the gateway's actual loopback port and preserve the public Host; LAN and local browser access may stay off. A proxy on another device belongs under the advanced NAS option. See the [illustrated setup](site/setup.html#external).
 

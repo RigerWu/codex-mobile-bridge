@@ -93,7 +93,7 @@ def validate(preferences):
         if p['sshAuth'] == 'config' and not p['sshTarget']:
             raise FieldError('请填写服务器的 SSH 目标', 'sshTarget')
         if urlsplit(p['publicUrl']).port not in (None, 443):
-            raise FieldError('服务器 HTTPS 入口使用 443 端口；已有其他入口请选择 NAS / 已有反代', 'publicUrl')
+            raise FieldError('服务器 HTTPS 入口使用 443 端口；已有其他入口请选择已有穿透 / 反向代理', 'publicUrl')
     if p['accessMode'] == 'nas':
         if not p['lan'] or not p['proxyUpstream']:
             raise FieldError('NAS 方式需要开启局域网访问并填写 NAS 可达的电脑 HTTP 地址', 'proxyUpstream')

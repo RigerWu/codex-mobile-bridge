@@ -9,7 +9,7 @@
 
 代理须将**原始公开 Host（含非标准端口）**、Origin、Cookie 与 `X-CSRF-Token` 传给网关。Nginx 可用 `$http_host` 保留 `:8443`；`$host` 可能丢失端口。不要把上游 Host 改为 `127.0.0.1`；网关会按公开 Host 和 Origin 检查请求。关闭代理缓存和响应缓冲，允许长时间请求、流式回复与应用所需的上传/下载大小。Bridge 主要使用 HTTP 长轮询或 SSE；若代理支持 WebSocket，也应保留升级请求，但不能用 WebSocket 支持替代流式响应与请求体限制检查。外部服务自身的上传限制、空闲超时和带宽仍可能限制附件与大文件。
 
-如果反代运行在另一台 NAS / 服务器上，并且它通过电脑的局域网地址访问网关，请选进阶的 **NAS / 其他设备反代**：保持局域网访问开启，填写 NAS 可达的电脑 HTTP 上游，端口须与网关一致，不能填 NAS 自己的回环地址。详见 [NAS 配置](../deploy/nas/README.md)。仅有公网地址而没有到电脑的上游通路，仍无法连接。
+如果反代运行在另一台 NAS / 服务器上，并且它通过电脑的局域网地址访问网关，在同一连接卡展开 **高级：目标所在位置**，将“穿透或反向代理运行在”选为 **NAS 或另一台设备**：保持局域网访问开启，填写 NAS 可达的电脑 HTTP 上游，端口须与网关一致，不能填 NAS 自己的回环地址。详见 [NAS 配置](../deploy/nas/README.md)。仅有公网地址而没有到电脑的上游通路，仍无法连接。
 
 交互形式参考 [DSH Remote Web UI 的 `publicBaseUrl` 配置](https://github.com/DamonKoy/dsh-web-ui/blob/main/packages/dsh-remote-web-ui/README.md)；Bridge 独立实现了自己的连接配置与安全校验，没有复用其源码。
 

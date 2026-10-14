@@ -213,27 +213,18 @@ class ClaudeCliContract(unittest.TestCase):
         self.cli.call('stop', self.sid, {})
         owner.control.assert_called_with({'subtype': 'interrupt'})
 
-    def test_catalog_finds_real_skill_files_and_send_invokes_native_command(self):
-        user = self.config/'skills'/'review'
-        project = self.cwd/'.claude'/'skills'/'private'
-        plugin = self.root/'plugin'/'skills'/'check'
-        for folder, name, selectable in ((user, 'review', True), (project, 'private', False),
-                                         (plugin, 'check', True)):
-            folder.mkdir(parents=True)
-            (folder/'SKILL.md').write_text('---\nname: '+name+'\ndescription: Fixture '+name+
-                                          '\nuser-invocable: '+str(selectable).lower()+'\n---\nInstructions\n')
-        (self.config/'plugins').mkdir()
-        (self.config/'plugins'/'installed_plugins.json').write_text(json.dumps({'plugins': {
-            'sample@market': [{'installPath': str(self.root/'plugin')}]}}))
-        names = {row['id']: row for row in _skill_catalog(self.profile, str(self.cwd))}
-        self.assertEqual(set(names), {'review', 'private', 'sample:check'})
-        self.assertFalse(names['private']['selectable'])
+    def test_catalog_uses_only_native_loaded_user_project_and_plugin_commands(self):
+        catalog = {'commands': [{'name': 'review', 'description': 'User skill'},
+                    {'name': 'sample:check', 'description': 'Enabled plugin skill'},
+                    {'name': 'compact', 'builtin': True}, {'name': 'invalid name'}]}
+        names = {row['id']: row for row in _skill_catalog(catalog)}
+        self.assertEqual(set(names), {'review', 'sample:check'})
         process = Mock()
         process.poll.return_value = None
         owner = Mock(origin=self.profile['origin'], process=process, active=False,
                      model=None, permission='plan', events=[])
         owner.pending = {}
-        owner.catalog = {'models': []}
+        owner.catalog = catalog
         owner.condition = threading.Condition()
         owner.error = None
         self.cli.owned[self.native] = owner

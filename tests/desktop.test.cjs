@@ -214,6 +214,44 @@ test('external status updates a folded summary without replacing the focused car
   assert.equal(ui.nodes.get('connections').children[0],card);
 });
 
+test('fixed-entry retry replaces an earlier error in card and summary across polling',async()=>{
+  const ui=await renderer();
+  ui.value.preferences.connections=[{id:'entry',name:'Home',enabled:true,accessMode:'external',publicUrl:'https://bridge.example.com:8443'}];
+  await ui.poll();
+  const descendants=node=>[node,...(node.children||[]).flatMap(descendants)];
+  const items=()=>descendants(ui.nodes.get('connections'));
+  const check=()=>items().find(node=>node.dataset.connectionAction==='checkEntry').click();
+  const text=()=>items().filter(node=>node.dataset.connectionStatus==='entry'||node.className==='connection-summary').map(node=>node.textContent).join('\n');
+  ui.api.checkEntry=async()=>{throw Error("Error invoking remote method 'bridge:check-entry': Error: HTTPS 证书或 TLS 握手失败；请检查域名、证书和反代配置");};
+  await check();assert.match(text(),/TLS/);
+  const message='固定 HTTPS 入口已连到当前网关。请再用手机蜂窝网络验证登录与聊天。';
+  ui.api.checkEntry=async()=>({url:'https://bridge.example.com:8443',message});
+  await check();assert.ok(text().includes(message));assert.doesNotMatch(text(),/TLS|Error invoking/);
+  await ui.poll();assert.ok(text().includes(message));assert.doesNotMatch(text(),/TLS|Error invoking/);
+  ui.run("applyLanguage('en')");assert.doesNotMatch(text(),/TLS|Error invoking/);
+  ui.api.checkEntry=async()=>{throw Error('入口没有连接到当前网关；请检查反代目标，旧版网关须先更新并重启');};
+  await check();assert.doesNotMatch(text(),/Please also verify|固定 HTTPS 入口已/);
+});
+
+test('fixed-entry results belong to the checked target and gateway instance',async()=>{
+  const ui=await renderer();
+  ui.value.runtime={running:true,instanceId:'first'};
+  ui.value.preferences.connections=[{id:'entry',name:'Home',enabled:true,accessMode:'external',publicUrl:'https://one.example.com'}];
+  await ui.poll();
+  const descendants=node=>[node,...(node.children||[]).flatMap(descendants)];
+  const check=()=>descendants(ui.nodes.get('connections')).find(node=>node.dataset.connectionAction==='checkEntry').click();
+  let finish,requests=0;
+  ui.api.checkEntry=()=>{requests++;return new Promise(resolve=>finish=resolve);};
+  const pending=check();await new Promise(setImmediate);await check();assert.equal(requests,1);
+  ui.value.preferences.connections[0].publicUrl='https://two.example.com';
+  await ui.poll();finish({message:'first target passed'});await pending;
+  assert.equal(ui.run("connectionSetupState.has('entry')"),false);
+  ui.api.checkEntry=async()=>({message:'second target passed'});await check();
+  assert.equal(ui.run("connectionSetupState.get('entry')"),'second target passed');
+  ui.value.runtime.instanceId='second';await ui.poll();
+  assert.equal(ui.run("connectionSetupState.has('entry')"),false);
+});
+
 test('changing the Tailscale HTTPS port invalidates the previously detected URL',async()=>{
   const ui=await renderer();
   ui.run(`connectionDraft=[{id:'ts',enabled:true,accessMode:'tailscale',publicUrl:'https://mac.example.ts.net',tailscaleMode:'funnel',tailscalePort:443,tailscaleNodeId:'n123'}];renderConnections();`);

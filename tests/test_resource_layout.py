@@ -21,7 +21,7 @@ PUBLIC_URLS = set('''
 / /bootstrap.js /host.js /layout.js /permissions.js /downloads.js /downloads.css
 /client-icons/codex.png /client-icons/claude.png /client-icons/deepseek.png
 /client-navigation.js /client-navigation.css /client-lifecycle.js /client-lifecycle.css /desktop-sessions.js
-/client-accounts.js /desktop-sessions.css /vendor/xterm/xterm.js
+/client-accounts.js /cli-access.js /desktop-sessions.css /vendor/xterm/xterm.js
 /vendor/xterm/addon-fit.js /vendor/xterm/xterm.css /command-terminal-panel.js
 /list-sync.js /agents-panel.js /side-chat.js /terminal-panel.js /floating-panel.js
 /git-panel.js /file-actions.js /workbench.js /source-view.js /pdf-preview.js /html-preview.js /vendor/pdfjs/pdf.min.mjs /vendor/pdfjs/pdf.worker.min.mjs /vendor/prism/source-view.min.js /image-viewer.js /workbench.css /i18n.js /app.js

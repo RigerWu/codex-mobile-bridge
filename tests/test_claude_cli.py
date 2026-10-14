@@ -1,4 +1,5 @@
 import json
+import os
 import tempfile
 import threading
 import unittest
@@ -7,7 +8,7 @@ from pathlib import Path
 from unittest.mock import Mock, patch
 
 from bridge.clients.claude import model
-from bridge.clients.claude.cli_session import ClaudeCli, ResumePreflightBlocked, _Owned
+from bridge.clients.claude.cli_session import ClaudeCli, ResumePreflightBlocked, _Owned, _auth_ready
 from bridge.clients.errors import BridgeUnavailable
 from bridge.clients.manager import DesktopSessions
 
@@ -94,6 +95,36 @@ class ClaudeCliContract(unittest.TestCase):
             self.assertIn('--resume', args[0])
             self.assertNotIn('Fixture request', args[0])
             self.assertEqual(popen.call_count, 1)
+
+    def test_managed_api_ignores_ambient_anthropic_overrides(self):
+        self.profile['managedApi'] = True
+        with patch.dict(os.environ, {'ANTHROPIC_API_KEY': 'wrong', 'ANTHROPIC_BASE_URL': 'https://wrong.invalid',
+                                     'ANTHROPIC_AUTH_TOKEN': 'wrong', 'KEEP_ME': 'yes'}), \
+             patch('bridge.clients.claude.cli_session.subprocess.run') as run:
+            run.return_value.returncode = 0
+            run.return_value.stdout = '{"loggedIn": true}'
+            self.assertTrue(_auth_ready(self.profile))
+            environment = run.call_args.kwargs['env']
+            self.assertNotIn('ANTHROPIC_API_KEY', environment)
+            self.assertNotIn('ANTHROPIC_BASE_URL', environment)
+            self.assertNotIn('ANTHROPIC_AUTH_TOKEN', environment)
+            self.assertEqual(environment['CLAUDE_CONFIG_DIR'], str(self.config))
+            self.assertEqual(environment['KEEP_ME'], 'yes')
+            process = Mock();process.poll.return_value = None;process.stdout = iter(())
+            with patch('bridge.clients.claude.cli_session.subprocess.Popen', return_value=process) as popen, \
+                 patch('bridge.clients.claude.cli_session._Owned') as owner_type:
+                owner = owner_type.return_value
+                owner.origin = self.profile['origin'];owner.process = process
+                owner.catalog = {'current_permission_mode': 'plan'}
+                owner.pending = {};owner.active = False;owner.error = None
+                owner.control.return_value = {'current_permission_mode': 'plan'}
+                self.cli.call('resume', self.sid, {})
+                environment = popen.call_args.kwargs['env']
+                self.assertNotIn('ANTHROPIC_API_KEY', environment)
+                self.assertNotIn('ANTHROPIC_BASE_URL', environment)
+                self.assertNotIn('ANTHROPIC_AUTH_TOKEN', environment)
+                self.assertEqual(environment['CLAUDE_CONFIG_DIR'], str(self.config))
+                self.assertEqual(environment['KEEP_ME'], 'yes')
 
     def test_external_writer_guard_blocks_before_spawning(self):
         with patch('bridge.clients.claude.cli_session.assert_session_closed',

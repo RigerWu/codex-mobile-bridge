@@ -953,6 +953,29 @@ class HttpTests(unittest.TestCase):
         self.assertEqual(self.request('POST', path, body, auth)[2]['outcome'], 'reset')
         manager.account.assert_called_once_with(body)
 
+    def test_cli_access_route_requires_login_csrf_and_blocks_passwordless_writes(self):
+        from unittest.mock import Mock
+        manager = self.server.bridge.cli_access = Mock()
+        manager.public.return_value = {'codex': {'accounts': []}, 'claude': {'accounts': []}}
+        manager.change.return_value = {'savedId': 'fixture'}
+        path = '/api/cli-access'
+        value = {'provider': 'claude', 'action': 'saveApi'}
+        self.assertEqual(self.request('GET', path)[0], 401)
+        self.assertEqual(self.request('POST', path, value)[0], 401)
+        auth = self.login()
+        self.assertEqual(self.request('GET', path, headers=auth)[2], manager.public.return_value)
+        self.assertEqual(self.request('POST', path, value, {'Cookie': auth['Cookie']})[0], 403)
+        self.assertEqual(self.request('POST', path, value, {**auth, 'Origin': 'https://other.test'})[0], 403)
+        manager.change.assert_not_called()
+        self.assertEqual(self.request('POST', path, value, auth)[2]['savedId'], 'fixture')
+        manager.change.assert_called_once_with(value)
+        self.server.auth = Auth({'mode': 'none'})
+        status, headers, body = self.request('POST', '/api/login', {})
+        self.assertEqual(status, 200)
+        passwordless = {'Cookie': headers['Set-Cookie'].split(';')[0], 'X-CSRF-Token': body['csrf']}
+        self.assertEqual(self.request('POST', path, value, passwordless)[0], 403)
+        manager.change.assert_called_once_with(value)
+
     def test_account_routes_require_login_csrf_and_same_origin(self):
         from unittest.mock import Mock
         account = self.server.bridge.account = Mock()
@@ -1100,7 +1123,7 @@ class HttpTests(unittest.TestCase):
             self.assertEqual(response.status, 200)
             scripts = re.findall(r'<script src="([^"]+)"', response.read().decode())
             self.assertEqual([script.split('?', 1)[0] for script in scripts], ['/bootstrap.js', '/host.js', '/layout.js', '/vendor/markdown-it.min.js', '/vendor/katex/katex.min.js',
-                                       '/vendor/texmath.js', '/message-actions.js', '/markdown.js', '/i18n.js', '/downloads.js', '/image-viewer.js', '/timeline.js', '/account.js', '/modes.js', '/attachments.js', '/activity.js', '/fast-mode.js', '/accounts.js', '/client-accounts.js', '/floating-panel.js', '/git-panel.js', '/vendor/xterm/xterm.js', '/vendor/xterm/addon-fit.js', '/command-terminal-panel.js', '/terminal-panel.js', '/permissions.js', '/side-chat.js', '/agents-panel.js', '/file-actions.js', '/vendor/prism/source-view.min.js', '/source-view.js', '/pdf-preview.js', '/html-preview.js', '/workbench.js', '/list-sync.js', '/client-lifecycle.js', '/desktop-sessions.js', '/client-navigation.js', '/app.js', '/presentation.js'])
+                                       '/vendor/texmath.js', '/message-actions.js', '/markdown.js', '/i18n.js', '/downloads.js', '/image-viewer.js', '/timeline.js', '/account.js', '/modes.js', '/attachments.js', '/activity.js', '/fast-mode.js', '/accounts.js', '/client-accounts.js', '/cli-access.js', '/floating-panel.js', '/git-panel.js', '/vendor/xterm/xterm.js', '/vendor/xterm/addon-fit.js', '/command-terminal-panel.js', '/terminal-panel.js', '/permissions.js', '/side-chat.js', '/agents-panel.js', '/file-actions.js', '/vendor/prism/source-view.min.js', '/source-view.js', '/pdf-preview.js', '/html-preview.js', '/workbench.js', '/list-sync.js', '/client-lifecycle.js', '/desktop-sessions.js', '/client-navigation.js', '/app.js', '/presentation.js'])
             for script in scripts:
                 conn.request('GET', script)
                 response = conn.getresponse()

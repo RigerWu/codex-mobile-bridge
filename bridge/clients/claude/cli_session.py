@@ -59,6 +59,8 @@ def _profile():
 
 def _auth_ready(profile):
     env = os.environ.copy()
+    if profile.get('managedApi'):
+        env = {key: value for key, value in env.items() if not key.startswith('ANTHROPIC_')}
     env['CLAUDE_CONFIG_DIR'] = str(profile['directory'])
     try:
         process = subprocess.run([profile['binary'], 'auth', 'status', '--json'],
@@ -214,7 +216,8 @@ class _Owned:
 
 
 class ClaudeCli:
-    def __init__(self):
+    def __init__(self, profile_resolver=None):
+        self.profile_resolver = profile_resolver or (lambda: _profile())
         self.lock = threading.RLock()
         self.owned = {}
         self.index = {}
@@ -237,7 +240,7 @@ class ClaudeCli:
     def status(self):
         if self.closed:
             return {'cliAvailable': False, 'cliAuthReady': False}
-        profile = _profile()
+        profile = self.profile_resolver()
         return {'cliAvailable': bool(profile), 'cliAuthReady': self._ready(profile)}
 
     def busy(self):
@@ -250,7 +253,7 @@ class ClaudeCli:
             return False
 
     def listing(self):
-        profile = _profile()
+        profile = self.profile_resolver()
         if not profile:
             return {'connected': False, 'sessions': []}
         rows = {}
@@ -293,7 +296,7 @@ class ClaudeCli:
         return value
 
     def _get(self, sid):
-        profile = _profile()
+        profile = self.profile_resolver()
         with self.lock:
             cached = self.index.get(sid)
         row = None
@@ -311,7 +314,7 @@ class ClaudeCli:
         return row
 
     def contains(self, sid):
-        profile = _profile()
+        profile = self.profile_resolver()
         with self.lock:
             row = self.index.get(sid)
         if row and profile and row['origin'] == profile['origin'] and not row['path'].is_symlink() and row['path'].is_file():
@@ -346,7 +349,7 @@ class ClaudeCli:
                     events = row['events']
                 messages = model.transcript(events)
                 unique = {item['id']: item for item in messages}
-                can_resume = (not live and row['permissionKnown'] and self._ready(_profile())
+                can_resume = (not live and row['permissionKnown'] and self._ready(self.profile_resolver())
                               and Path(row['cwd']).is_dir())
                 return {'connected': True, 'session': public, 'messages': list(unique.values()),
                         'turns': model.turns(events),
@@ -372,7 +375,7 @@ class ClaudeCli:
             if action == 'resume':
                 if live:
                     return {'status': 'ready'}
-                profile = _profile()
+                profile = self.profile_resolver()
                 if not profile or profile['origin'] != row['origin'] or not self._ready(profile, fresh=True):
                     raise ResumePreflightBlocked('原 Claude Code 账号配置已变化或不可用')
                 if not row['permissionKnown'] or row['permissionMode'] not in MODES:
@@ -382,6 +385,8 @@ class ClaudeCli:
                 except OSError as exc:
                     raise ResumePreflightBlocked('原项目目录不可用，请在电脑端检查') from exc
                 env = os.environ.copy()
+                if profile.get('managedApi'):
+                    env = {key: value for key, value in env.items() if not key.startswith('ANTHROPIC_')}
                 env['CLAUDE_CONFIG_DIR'] = str(profile['directory'])
                 command = [profile['binary'], '-p', '--resume', native, '--input-format', 'stream-json',
                            '--output-format', 'stream-json', '--verbose', '--replay-user-messages',

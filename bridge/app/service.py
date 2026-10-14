@@ -841,6 +841,7 @@ class Bridge:
             if (session.desktop_owner_probe == 'found' or
                     not session.native_attaching and not (session.runtime == 'cli' and session.connected)):
                 return
+            newly_connected = not session.connected or session.runtime != 'cli'
             session.state = state
             session.runtime = 'cli'
             session.owner = 'cli:' + thread_id
@@ -849,9 +850,14 @@ class Bridge:
             session.error = None
             session.access = self._access(session.origin, session)
             session.changed()
+        if newly_connected:
+            logging.getLogger(__name__).info("Codex connection transition thread=%s cause=native_attached", thread_id)
         self.notification_event.set()
 
     def _cli_disconnected(self, thread_id=None):
+        if not self.closed.is_set():
+            logging.getLogger(__name__).info("Codex connection transition thread=%s cause=%s",
+                                            thread_id or 'all', 'native_thread_revoked' if thread_id else 'native_proxy_disconnected')
         with self.lock:
             sessions = list(self.live.values())
         for session in sessions:
@@ -1275,7 +1281,8 @@ class Bridge:
                     sessions = list(self.live.values())
                 for session in sessions:
                     if session.owner == params.get("clientId"):
-                        self._invalidate(session, "桌面会话连接已断开，正在等待重连", runtime='desktop', owner=params.get("clientId"))
+                        self._invalidate(session, "桌面会话连接已断开，正在等待重连", runtime='desktop',
+                                         owner=params.get("clientId"), reason='desktop_client_disconnected')
             # Owner changes can make previously unanswered probes available.
             self.notification_cursor = 0
             self.notification_boundary.clear()
@@ -1304,22 +1311,27 @@ class Bridge:
                 session.discovering = False
             if not session.owner or message.get("sourceClientId") != session.owner:
                 return
+            reason = 'snapshot_invalid'
             try:
                 if change.get("type") == "snapshot":
                     state = change["conversationState"]
                 elif change.get("type") == "patches":
                     if session.revision is None or change.get("baseRevision") != session.revision:
+                        reason = 'revision_mismatch'
                         raise ValueError("Revision mismatch")
                     state = apply_patches(session.state, change["patches"])
                 else:
                     return
                 if state.get('id') != session.id:
+                    reason = 'thread_id_mismatch'
                     raise ValueError("Session mismatch")
                 if session.origin == 'cli' and (state.get('hostId', self.host) != self.host or
                         not session.saved_cwd or not session.saved_provider or
                         state.get('cwd') != session.saved_cwd or
                         state.get('modelProvider') != session.saved_provider):
+                    reason = 'owner_identity_mismatch'
                     raise ValueError("CLI owner identity mismatch")
+                newly_connected = not session.connected or session.runtime != 'desktop'
                 session.state = state
                 session.revision = change["revision"]
                 session.runtime = 'desktop'
@@ -1328,19 +1340,27 @@ class Bridge:
                 session.error = None
                 session.access = self._access(session.origin, session)
                 session.changed()
+                if newly_connected:
+                    logging.getLogger(__name__).info(
+                        "Codex connection transition thread=%s cause=desktop_owner_attached", session.id)
                 with self.lock:
                     self.notification_dirty.add(session.id)
                 self.notification_event.set()
             except (ValueError, KeyError, IndexError, TypeError):
+                logging.getLogger(__name__).info(
+                    "Codex connection transition thread=%s cause=%s", session.id, reason)
                 session.connected = False
                 session.revision = None
                 session.error = "现有 Codex App 连接与此会话不匹配，未连接" if session.origin == 'cli' else "同步状态发生变化，正在重新读取桌面快照"
                 session.changed()
 
-    def _invalidate(self, session, message, runtime=None, owner=None):
+    def _invalidate(self, session, message, runtime=None, owner=None, reason=None):
         with session.condition:
             if (runtime is not None and session.runtime != runtime) or (owner is not None and session.owner != owner):
                 return
+            if session.connected and reason:
+                logging.getLogger(__name__).info(
+                    "Codex connection transition thread=%s cause=%s", session.id, reason)
             session.connected = False
             session.revision = None
             if session.origin == 'cli' and session.runtime == 'desktop':
@@ -1358,7 +1378,8 @@ class Bridge:
             sessions = list(self.live.values())
         for session in sessions:
             if session.origin != 'cli' or session.desktop_owner_probe == 'found':
-                self._invalidate(session, "桌面 App 连接已断开，正在等待重连", runtime='desktop')
+                self._invalidate(session, "桌面 App 连接已断开，正在等待重连", runtime='desktop',
+                                 reason='desktop_ipc_disconnected')
 
     def _maintain(self):
         delay = 3

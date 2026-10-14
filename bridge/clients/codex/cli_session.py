@@ -776,21 +776,22 @@ class CliSessions:
             self.refreshing.add(thread_id)
         def run():
             try:
-                read_retry = False
+                read_retry_delay = .25
                 while True:
                     try:
                         self.refresh(thread_id)
                     except AppServerUnavailable:
                         with self.lock:
                             still_joined = self.joined.get(thread_id) is self.client.process
-                        if read_retry or not still_joined:
+                        if not still_joined:
                             raise
-                        # A single replay-safe retry lets a completed turn
-                        # converge when this was the last native event.
-                        read_retry = True
-                        time.sleep(.25)
+                        # The last turn event may need this replay-safe read
+                        # to converge. Keep one bounded-backoff worker until
+                        # it succeeds or the native join is revoked.
+                        time.sleep(read_retry_delay)
+                        read_retry_delay = min(15, read_retry_delay * 4)
                         continue
-                    read_retry = False
+                    read_retry_delay = .25
                     with self.lock:
                         if thread_id not in self.refresh_pending:
                             break

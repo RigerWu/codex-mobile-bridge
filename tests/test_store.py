@@ -94,24 +94,26 @@ class StoreTests(unittest.TestCase):
                 ('tui-cli', 'CLI', '/private/user', 8, 0, 'codex-tui', 'cli'),
                 ('rs-vscode', 'CLI', '/private/user', 9, 0, 'codex_cli_rs', 'vscode'),
                 ('legacy-cli', 'CLI', '/private/user', 10, 0, None, 'cli'),
+                ('bridge-cli', 'CLI', '/private/user', 11, 0, 'codex-mobile-bridge-cli', 'vscode'),
+                ('bridge-other', 'Other', '/private/user', 12, 0, 'codex-mobile-bridge', 'vscode'),
             ])
         rows = self.store.list()
         self.assertEqual({r['id']: r['origin'] for r in rows},
                          {'test': 'desktop', 'tui': 'cli', 'cli': 'cli', 'tui-cli': 'cli',
-                          'rs-vscode': 'cli', 'legacy-cli': 'cli'})
+                          'rs-vscode': 'cli', 'legacy-cli': 'cli', 'bridge-cli': 'cli'})
         self.assertEqual(self.store.get('tui')['origin'], 'cli')
         self.assertEqual(self.store.get('cli')['origin'], 'cli')
         self.assertEqual(self.store.get('legacy-cli')['origin'], 'cli')
         self.assertEqual({r['id'] for r in self.store.notification_changes()},
-                         {'test', 'tui', 'cli', 'archived', 'tui-cli', 'rs-vscode', 'legacy-cli'})
+                         {'test', 'tui', 'cli', 'archived', 'tui-cli', 'rs-vscode', 'legacy-cli', 'bridge-cli'})
         self.assertEqual([r['id'] for r in self.store.list(archived=True)], ['archived'])
-        for thread_id in ('other', 'child'):
+        for thread_id in ('other', 'child', 'bridge-other'):
             with self.assertRaises(KeyError):
                 self.store.get(thread_id)
         self.assertEqual({r['id'] for r in self.store.lifecycle_threads()}, {'test'})
         report = self.store.discovery_diagnostics('cli')
-        self.assertEqual(report['counts'], {'desktop': 1, 'cli': 6, 'other': 1, 'subagent': 1,
-                                            'visible': 6, 'archived': 1})
+        self.assertEqual(report['counts'], {'desktop': 1, 'cli': 7, 'other': 2, 'subagent': 1,
+                                            'visible': 7, 'archived': 1})
         self.assertEqual(report['target'], {'found': True, 'origin': 'cli', 'archived': False,
                                             'reason': 'rollout_missing', 'read': 'unavailable'})
         self.assertTrue(self.store.discovery_diagnostics('archived')['target']['archived'])

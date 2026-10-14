@@ -19,7 +19,7 @@ from bridge.features.terminals.manager import TerminalManager
 from bridge.features.sessions.side_chat import SideChats
 from bridge.features.sessions import linux_permissions
 from bridge.clients.codex.ipc import DesktopIPC, IPCError
-from bridge.clients.codex.app_server import AppServerError
+from bridge.clients.codex.app_server import AppServerError, AppServerUnavailable
 from bridge.clients.codex.cli_session import CliSessions
 from bridge.clients.codex.transport import ipc_endpoint
 from bridge.features.sessions.model import apply_patches, computer_use_approval, items_array, normalize_state, normalize_request, ordered_turns, pending_requests, async_requests, request_id, user_display_text
@@ -450,15 +450,44 @@ class Bridge:
         target.chmod(0o600)
         target.replace(self.creations_path)
 
+    def projects(self):
+        projects = [dict(project, type='desktop') for project in self.hosts.projects()]
+        candidates = [(self.host, self)]
+        if self.host == 'local':
+            for host in self.hosts.hosts():
+                candidates.append((host, self.for_host(host)))
+        def read(candidate):
+            try:
+                return candidate[1].store.list(limit=500)
+            except (StoreUnavailable, RemoteUnavailable):
+                return []
+        with ThreadPoolExecutor(max_workers=min(4, len(candidates))) as pool:
+            groups = list(pool.map(read, candidates))
+        seen = set()
+        for (host, bridge), rows in zip(candidates, groups):
+            for row in rows:
+                cwd = row.get('cwd')
+                if row.get('origin') != 'cli' or not isinstance(cwd, str) or not cwd or (host, cwd) in seen:
+                    continue
+                seen.add((host, cwd))
+                label = '此电脑' if host == 'local' else self.hosts.hosts()[host].get('displayName', host)
+                projects.append({'key': 'cli|' + host + '|' + hashlib.sha256(cwd.encode()).hexdigest()[:20],
+                                 'type': 'cli', 'host': host, 'hostLabel': label,
+                                 'name': cwd.rstrip('/').rsplit('/', 1)[-1] or cwd, 'cwd': cwd})
+        return projects
+
     @operation
-    def create_chat(self, project_key, title, request_id):
+    def create_chat(self, project_key, title, request_id, kind='desktop'):
         if not isinstance(request_id, str):
             raise ValueError('创建请求标识无效')
         uuid.UUID(request_id)
         if not isinstance(title, str) or not title.strip() or len(title) > 120:
             raise ValueError('请输入 1–120 字的聊天名称')
-        project = next((p for p in self.hosts.projects() if p['key'] == project_key), None)
-        if project_key == 'local|independent':
+        if kind not in ('desktop', 'cli'):
+            raise ValueError('未知聊天类型')
+        available = self.projects() if kind == 'cli' else self.hosts.projects()
+        project = next((p for p in available if p['key'] == project_key), None)
+        if kind == 'desktop' and project_key == 'local|independent':
             project = {'host': 'local', 'cwd': None}
         if project is None:
             raise ValueError('请选择电脑 App 中已保存的项目')
@@ -466,16 +495,38 @@ class Bridge:
         with self.create_lock:
             entry = self.creations.get(request_id)
             if entry:
-                if entry['project'] != project_key or entry['title'] != title:
+                if (entry['project'] != project_key or entry['title'] != title or
+                        entry.get('kind', 'desktop') != kind or
+                        entry.get('cwd', project['cwd']) != project['cwd']):
                     raise ValueError('同一创建请求不能用于不同内容')
                 if not entry.get('id'):
                     raise CreationError('上次创建结果尚不确定，请先刷新聊天列表并检查电脑 App，避免重复创建')
             else:
-                self.ipc.connect()
-                entry = {'project': project_key, 'title': title, 'host': project['host'], 'at': time.time()}
+                if kind == 'desktop':
+                    self.ipc.connect()
+                entry = {'project': project_key, 'title': title, 'kind': kind,
+                         'cwd': project['cwd'], 'host': project['host'], 'at': time.time()}
                 self.creations[request_id] = entry
                 self._save_creations()
-                if project['host'] == 'local':
+                if kind == 'cli':
+                    def mark_started():
+                        entry['started'] = True
+                        self._save_creations()
+
+                    def mark_created(created_id):
+                        entry['id'] = created_id
+                        self._save_creations()
+
+                    try:
+                        state = self.for_host(project['host']).cli_sessions.create(
+                            project['cwd'], title, on_start=mark_started, on_created=mark_created)
+                        thread_id = state['id']
+                    except AppServerUnavailable:
+                        if not entry.get('started'):
+                            del self.creations[request_id]
+                            self._save_creations()
+                        raise
+                elif project['host'] == 'local':
                     try:
                         cwd = project['cwd'] or independent_directory(self.data_dir, request_id)
                         thread_id = create_empty(self.catalog_reader.executable, self.codex_home, cwd, title)
@@ -495,10 +546,28 @@ class Bridge:
                 uuid.UUID(thread_id)
                 entry['id'] = thread_id
                 self._save_creations()
+                if kind == 'cli':
+                    bridge = self.for_host(project['host'])
+                    with bridge.lock:
+                        session = bridge.live.setdefault(thread_id, LiveSession(thread_id))
+                    with session.condition:
+                        session.origin = 'cli'
+                        session.origin_verified = True
+                        session.saved_cwd = project['cwd']
+                        session.saved_provider = state['modelProvider']
+                        session.runtime = 'cli'
+                        session.owner = 'cli:' + thread_id
+                        session.connected = True
+                        session.state = state
+                        session.access = bridge._access('cli', session)
+                        session.changed()
             bridge = self.for_host(entry['host'])
             if isinstance(bridge.store, RemoteStore):
                 with bridge.store.lock:
                     bridge.store.cache.clear()
+            if kind == 'cli':
+                return {'id': entry['id'], 'host': entry['host'], 'opened': False,
+                        'message': 'CLI 聊天已创建，可在此继续'}
             try:
                 open_in_desktop(entry['id'], entry['host'])
                 opened = True

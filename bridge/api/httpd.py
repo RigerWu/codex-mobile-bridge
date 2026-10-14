@@ -569,7 +569,7 @@ class Handler(BaseHTTPRequestHandler):
                 return self.output(200, {"sessions": rows, "unavailableHosts": self.server.bridge.host_errors,
                                         'notificationRead': {key: feed[key] for key in ('streamId', 'cursor')} if feed else None})
             if not write and path == '/api/projects':
-                return self.output(200, {'projects': self.server.bridge.hosts.projects()})
+                return self.output(200, {'projects': self.server.bridge.projects()})
             if write and path == '/api/activity':
                 groups = self.read_json().get('hosts')
                 if not isinstance(groups, dict) or len(groups) > 20:
@@ -580,7 +580,8 @@ class Handler(BaseHTTPRequestHandler):
                 return self.output(200, {'sessions': rows})
             if write and path == '/api/sessions':
                 body = self.read_json()
-                return self.output(200, self.server.bridge.create_chat(body.get('project'), body.get('title'), body.get('id')))
+                return self.output(200, self.server.bridge.create_chat(body.get('project'), body.get('title'), body.get('id'),
+                                                                        kind=body.get('kind', 'desktop')))
             if path == '/api/notifications/defaults':
                 if self.server.notifications is None:
                     raise ValueError('当前网关未启用通知服务')

@@ -9,6 +9,7 @@ import shutil
 import subprocess
 import threading
 import time
+import uuid
 from pathlib import Path
 
 from bridge.clients.codex.app_server import (
@@ -125,12 +126,46 @@ class CliSessions:
             self.home / 'app-server-control/app-server-control.sock', cli=cli,
             on_event=self._event, on_server_request=self._server_request,
             on_disconnect=self._disconnect, process_factory=process_factory,
-            command=command, check_socket=alias is None)
+            command=command, check_socket=alias is None, client_name='codex-mobile-bridge-cli')
         self.configured_cli = cli
         self.store = RemoteStore(alias) if alias else SessionStore(self.home)
 
     def available(self):
         return self.alias is not None or Path(self.client.socket_path).exists() or _managed_cli(self.home) is not None
+
+    def create(self, cwd, title, on_start=None, on_created=None):
+        """An explicit new CLI chat; no turn is started."""
+        if not isinstance(cwd, str) or not cwd or (self.alias is None and not Path(cwd).is_dir()):
+            raise AppServerUnavailable('CLI 项目目录不存在')
+        info = self._connect_explicit()
+        if self.alias is None and Path(info['codexHome']) != self.home:
+            raise AppServerUnavailable('Codex CLI runtime belongs to another home')
+        if self.alias is not None:
+            remote_home = Path(info['codexHome'])
+            if not remote_home.is_absolute() or (self.remote_home is not None and remote_home != self.remote_home):
+                raise AppServerUnavailable('Remote Codex CLI runtime identity changed')
+            self.remote_home = remote_home
+        if on_start is not None:
+            on_start()
+        result = self.client.request('thread/start', {'cwd': cwd, 'ephemeral': False, 'threadSource': 'cli'})
+        thread = result.get('thread') or {}
+        thread_id = thread.get('id')
+        if not isinstance(thread_id, str) or thread.get('cwd') != cwd or not thread.get('modelProvider'):
+            raise AppServerUnsupported('CLI creation returned an unverified thread')
+        uuid.UUID(thread_id)
+        if on_created is not None:
+            on_created(thread_id)
+        with self.lock:
+            self.joined[thread_id] = self.client.process
+            self.metadata[thread_id] = {'cwd': cwd, 'modelProvider': thread['modelProvider'],
+                                        'model': result.get('model'), 'reasoningEffort': result.get('reasoningEffort'),
+                                        'serviceTier': result.get('serviceTier'),
+                                        'collaborationMode': result.get('collaborationMode'),
+                                        'permissions': {key: copy.deepcopy(result[key]) for key in
+                                                        ('approvalPolicy', 'approvalsReviewer', 'sandbox', 'activePermissionProfile')
+                                                        if key in result}, 'goal': None}
+        self.client.request('thread/name/set', {'threadId': thread_id, 'name': title})
+        return self.refresh(thread_id)
 
     def attach(self, thread_id, explicit=False):
         """Passive inspection never starts or resumes a runtime."""

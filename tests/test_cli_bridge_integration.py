@@ -911,5 +911,29 @@ class CliModelAttributionTests(unittest.TestCase):
                              ['model-old', 'model-new', 'model-current', 'native-per-turn'])
 
 
+class CliCreationProtocolTests(unittest.TestCase):
+    def test_explicit_create_starts_cli_thread_without_turn_or_resume(self):
+        with tempfile.TemporaryDirectory(dir=ROOT / '.tmp') as folder:
+            home = Path(folder)
+            thread_id = str(uuid.uuid4())
+            cli = CliSessions(home, lambda *_: None, lambda: None)
+            cli.client.process = object()
+            cli._connect_explicit = Mock(return_value={'codexHome': str(home)})
+            thread = {'id': thread_id, 'cwd': str(home), 'modelProvider': 'fixture',
+                      'model': 'fixture-model', 'status': {'type': 'idle'}, 'turns': []}
+            def request(method, params, **kwargs):
+                if method == 'thread/start': return {'thread': thread}
+                if method == 'thread/read': return {'thread': thread}
+                return {}
+            cli.client.request = Mock(side_effect=request)
+            result = cli.create(str(home), 'Fixture CLI')
+            self.assertEqual(result['id'], thread_id)
+            self.assertEqual(result['modelProvider'], 'fixture')
+            methods = [call.args[0] for call in cli.client.request.call_args_list]
+            self.assertEqual(methods, ['thread/start', 'thread/name/set', 'thread/read'])
+            self.assertEqual(cli.client.request.call_args_list[0].args[1],
+                             {'cwd': str(home), 'ephemeral': False, 'threadSource': 'cli'})
+
+
 if __name__ == '__main__':
     unittest.main()

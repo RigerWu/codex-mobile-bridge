@@ -31,7 +31,7 @@ def main():
                 try:
                     value = json.loads(line)
                     action = value.get('action')
-                    if action not in ('accounts', 'account', 'desktop-sessions', 'start', 'stop', 'save'):
+                    if action not in ('accounts', 'account', 'cli-access', 'desktop-sessions', 'start', 'stop', 'save'):
                         raise ValueError('不支持的本机管理操作')
                     method = getattr(desktop, action.replace('-', '_'))
                     result = method() if action == 'stop' else method(value.get('payload') or {})

@@ -15,3 +15,11 @@ Preserve the joined session on `AppServerUnavailable` from a background refresh.
 An isolated native Codex 0.162.1 loopback Goal turn and explicit `complete` transition stayed connected and editable. Completion alone did not reproduce the user's disconnect. A deterministic adapter test reproduced the reported history-only state when `thread/read` timed out after a completed Goal event; the change keeps the live writer and converges the completed turn after two timeouts without any later event.
 
 The reported chat is CLI-origin but Desktop-owned in the latest read-only snapshot. A dual-process isolated fixture showed the Goal sidecar set and clear a Goal without stealing the owning process's writer. A service fixture reproduced a history-only window followed by automatic Desktop reattachment after an owner-disconnect event; it does not prove that such an event caused the user's incident. Connection-transition logs now record only the opaque thread ID and a fixed reason category, distinguishing Desktop client/IPC loss, snapshot validation, and native thread/proxy loss without logging chat text, prompts, credentials, or provider details.
+
+## Alternatives considered
+
+Invalidating on every refresh failure simplifies recovery but abandons a writer that remains alive. Retaining every failed connection would hide real disconnects; only read failures retry while the same joined process remains valid.
+
+## Consequences
+
+A stale read cannot overwrite a replacement connection or a newer turn event. Backoff bounds repeated read work. The original production trigger remains unproven; the fix covers reproduced timeout and ordering races.

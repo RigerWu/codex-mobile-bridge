@@ -13,3 +13,11 @@ Expose Codex App and Codex CLI as explicit chat types. CLI folder choices come f
 ## Verification
 
 Source tests cover the explicit `thread/start` call, known-folder selection, duplicate requests and unchanged App creation. An isolated Codex CLI 0.162.1 loopback fixture created a CLI chat through the authenticated HTTP API; a fresh store read confirmed CLI origin and the selected cwd/provider, and a send completed through the native daemon. The saved rollout contained a user message and an assistant message after the fixture emitted output item events. The native live `thread/read` fixture returned an empty item list, so the connected live view did not display the assistant item; that fixture limitation does not affect saved-history discovery.
+
+## Alternatives considered
+
+Opening the App for every new chat reuses the existing path but cannot create a CLI-owned chat. A free-form arbitrary directory field broadens project selection beyond known configuration. Explicit chat type and discovered CLI folders preserve the user-selected execution context.
+
+## Consequences
+
+The old desktop create API remains compatible when kind is omitted. An unknown CLI create outcome keeps its receipt rather than creating another thread. Actual 390px English UI acceptance creates a CLI chat, sends a message, displays the reply, and has no horizontal overflow.

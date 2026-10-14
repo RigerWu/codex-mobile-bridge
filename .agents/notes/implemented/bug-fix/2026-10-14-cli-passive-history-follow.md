@@ -13,3 +13,11 @@ While a CLI-origin session is disconnected, periodic background reads refresh it
 ## Verification
 
 An integration fixture appends a second terminal turn after the first passive read and checks that timeline changes contain the new reply without advancing the owner retry, native attach or call. An unchanged repeat read yields no new rows. The test failed before the change and passes after it.
+
+## Alternatives considered
+
+Requiring Continue provides fresh live events but claims a writer just to read history. Refreshing on every poll increases filesystem and SSH work; a bounded local history cadence fixes visibility while keeping passive access read-only.
+
+## Consequences
+
+Real isolated native-writer acceptance displayed a subsequent reply through GET-only gateway polling in 2.354 seconds with the correct model and connected=false. SSH keeps its existing cadence; no two-second SSH guarantee is made.

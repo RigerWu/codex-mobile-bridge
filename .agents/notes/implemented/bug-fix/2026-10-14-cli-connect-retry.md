@@ -13,3 +13,11 @@ Explicit continuation waits for the current background owner lookup to finish an
 ## Verification and limit
 
 The real `Bridge.activate` chain with a delayed fake `IPC.owner` called owner discovery twice before the change, both when no owner existed and when an owner had no snapshot yet. After the change it calls once; a later separate activation probes again. A controlled unavailable-proxy fixture required two attempts instead of three. Isolated native 0.162.1 cold attach remained about 0.25 seconds before and after because that fixture has no stalled proxy. The measured fixture demonstrates the duplicate wait, while the reported production delay has not been timed at its actual IPC boundary.
+
+## Alternatives considered
+
+Always probing again guarantees freshness but duplicates the same in-flight observation. Reusing only the current lookup removes that delay while a later user action still asks for fresh owner evidence.
+
+## Consequences
+
+Continuation still waits for an actual owner lookup; the change does not weaken owner identity checks or introduce a timeout-based takeover.

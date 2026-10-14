@@ -13,3 +13,11 @@ The live-session view joins native turns by ID to its already loaded saved rollo
 ## Verification
 
 A regression fixture with two recorded models and two later live turns passes. The current thread model differs from both historical models, changes between live turns, and changes again after the second starts. Repeated native snapshots without per-turn models retain both captured labels; an explicit native turn model supersedes the captured label.
+
+## Alternatives considered
+
+Using the current model for every reply is simple but invents historical attribution. Reading every rollout again during native callbacks provides more metadata at the cost of local/SSH latency. Reuse loaded history and native per-turn evidence instead.
+
+## Consequences
+
+Unknown Desktop historical labels remain unknown because Desktop hydration may substitute the current model. Only native CLI per-turn evidence can fill missing saved attribution. The existing timeline regression and native mixed-model fixture verify this distinction.

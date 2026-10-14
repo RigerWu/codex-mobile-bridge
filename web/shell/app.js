@@ -251,23 +251,28 @@ $('new-chat').onclick=async()=>{
   $('new-chat-dialog').showModal();
   try{
     newChatProjects=(await api('/api/projects')).projects;
-    $('new-chat-project').append(new Option(t('不选择项目'),'local|independent'));
-    for(const project of newChatProjects)$('new-chat-project').append(new Option(project.name+' · '+(project.host==='local'?t('此电脑'):project.hostLabel),project.key));
-    const selected=listRows.find(row=>row.id===currentId&&row.host===currentHost)?.projectKey;
-    if(newChatProjects.some(p=>p.key===selected))$('new-chat-project').value=selected;
-    $('new-chat-project').onchange();
-    $('new-chat-submit').disabled=false;
+    $('new-chat-type').onchange();
   }catch(e){$('new-chat-error').textContent=t(e.message);$('new-chat-path').textContent='';}
+};
+$('new-chat-type').onchange=()=>{
+  const kind=$('new-chat-type').value,selected=listRows.find(row=>row.id===currentId&&row.host===currentHost)?.projectKey;
+  $('new-chat-help').textContent=t(kind==='cli'?'选择已有 CLI 项目目录，在此创建聊天。':'选择已有项目，或不选择项目创建独立聊天。电脑会打开这条聊天。');
+  $('new-chat-project').replaceChildren();
+  if(kind==='desktop')$('new-chat-project').append(new Option(t('不选择项目'),'local|independent'));
+  for(const project of newChatProjects.filter(p=>(p.type||'desktop')===kind))$('new-chat-project').append(new Option(project.name+' · '+(project.host==='local'?t('此电脑'):project.hostLabel),project.key));
+  if(newChatProjects.some(p=>p.key===selected&&(p.type||'desktop')===kind))$('new-chat-project').value=selected;
+  $('new-chat-project').onchange();
+  $('new-chat-submit').disabled=!$('new-chat-project').value;
 };
 $('new-chat-project').onchange=()=>{$('new-chat-path').textContent=$('new-chat-project').value==='local|independent'?t('在此电脑创建独立聊天'):newChatProjects.find(p=>p.key===$('new-chat-project').value)?.cwd||'';};
 $('new-chat-dialog').addEventListener('cancel',event=>{if(creatingChat)event.preventDefault();});
 $('new-chat-form').onsubmit=async event=>{
   event.preventDefault();if(creatingChat)return;
-  const project=$('new-chat-project').value,title=$('new-chat-title').value.trim();
+  const project=$('new-chat-project').value,title=$('new-chat-title').value.trim(),kind=$('new-chat-type').value;
   if(!project||!title){$('new-chat-error').textContent=t('请选择项目或不选择项目，并填写聊天名称。');return;}
   let attempt;
   try{attempt=JSON.parse(sessionStorage.getItem('new-chat-attempt')||'null');}catch{}
-  if(!attempt||attempt.project!==project||attempt.title!==title)attempt={id:uuid(),project,title};
+  if(!attempt||attempt.project!==project||attempt.title!==title||attempt.kind!==kind)attempt={id:uuid(),project,title,kind};
   sessionStorage.setItem('new-chat-attempt',JSON.stringify(attempt));
   creatingChat=true;setLanguageBusy();$('new-chat-error').textContent='';$('new-chat-submit').textContent=t('正在创建…');
   $('new-chat-form').querySelectorAll('input,select,button').forEach(n=>n.disabled=true);
@@ -674,6 +679,7 @@ $('phone-language').onchange=()=>{
   const replies=[...$('approvals').querySelectorAll('input,textarea,select')].map(node=>({value:node.value,checked:node.checked}));
   BridgeI18n.setLanguage($('phone-language').value);BridgeI18n.apply();accountPanel.render();if(typeof accountsPanel!=="undefined")accountsPanel?.render();renderList();
   if(!$('new-chat-title').dataset.edited)$('new-chat-title').value=t('新聊天');
+  $('new-chat-help').textContent=t($('new-chat-type').value==='cli'?'选择已有 CLI 项目目录，在此创建聊天。':'选择已有项目，或不选择项目创建独立聊天。电脑会打开这条聊天。');
   renderLoginStatus();
   for(const id of ['login-error','send-error','model-error','skills-error','new-chat-error','notify-error','rename-error','pushplus-error','toast'])$(id).textContent=t($(id).textContent);
   for(const option of $('new-chat-project').options){const project=newChatProjects.find(p=>p.key===option.value);if(project)option.textContent=project.name+' · '+(project.host==='local'?t('此电脑'):project.hostLabel);}

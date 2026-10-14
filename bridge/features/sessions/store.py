@@ -84,7 +84,7 @@ class SessionStore:
     @staticmethod
     def _user_origin_filter(columns):
         if 'originator' in columns:
-            recognized = "originator IN ('Codex Desktop', 'codex_work_desktop', 'codex_mobile_bridge', 'codex-tui', 'codex_cli_rs')"
+            recognized = "originator IN ('Codex Desktop', 'codex_work_desktop', 'codex_mobile_bridge', 'codex-tui', 'codex_cli_rs', 'codex-mobile-bridge-cli')"
             if 'source' in columns:
                 return '(' + recognized + " OR (originator IS NULL AND source IN ('vscode', 'cli')))"
             return recognized
@@ -96,7 +96,7 @@ class SessionStore:
             return 'subagent'
         if row.get('originator') in cls.DESKTOP_ORIGINATORS or (row.get('originator') is None and row.get('source') == 'vscode'):
             return 'desktop'
-        if row.get('originator') in ('codex-tui', 'codex_cli_rs') or (row.get('originator') is None and row.get('source') == 'cli'):
+        if row.get('originator') in ('codex-tui', 'codex_cli_rs', 'codex-mobile-bridge-cli') or (row.get('originator') is None and row.get('source') == 'cli'):
             return 'cli'
         return 'other'
 

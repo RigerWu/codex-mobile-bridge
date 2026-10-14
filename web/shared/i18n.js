@@ -1895,6 +1895,8 @@ const en={
   "收不到通知或打不开聊天？": "No notification, or the chat will not open?",
   "新密码至少需要 12 个字符": "A new password must contain at least 12 characters",
   "新建聊天": "New chat",
+  "聊天类型": "Chat type",
+  "选择已有 CLI 项目目录，在此创建聊天。": "Choose an existing CLI project folder to create a chat here.",
   "新连接类型": "New connection type",
   "显示方式": "Display",
   "暂无关注聊天。请在手机打开聊天并开启提醒。": "No watched chats yet. Open a chat on your phone and enable reminders.",

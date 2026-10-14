@@ -129,7 +129,7 @@ class CodexAppServer:
 
     def __init__(self, socket_path, cli='codex', on_event=None,
                  on_server_request=None, on_disconnect=None, process_factory=None,
-                 command=None, check_socket=True):
+                 command=None, check_socket=True, client_name='codex-mobile-bridge'):
         if not socket_path or not Path(socket_path).is_absolute():
             raise ValueError('An absolute existing control socket path is required')
         self.socket_path = str(socket_path)
@@ -137,6 +137,7 @@ class CodexAppServer:
         self.command = list(command) if command is not None else [
             self.cli, 'app-server', 'proxy', '--sock', self.socket_path]
         self.check_socket = check_socket
+        self.client_name = client_name
         self.on_event = on_event or (lambda event: None)
         self.on_server_request = on_server_request or (lambda request: None)
         self.on_disconnect = on_disconnect or (lambda: None)
@@ -183,7 +184,7 @@ class CodexAppServer:
             threading.Thread(target=self._read_loop, args=(process, transport), daemon=True).start()
             try:
                 info = self.request('initialize', {
-                    'clientInfo': {'name': 'codex-mobile-bridge', 'version': '1'},
+                    'clientInfo': {'name': self.client_name, 'version': '1'},
                     'capabilities': {'experimentalApi': True}}, timeout=timeout,
                     replay_safe=True)
                 if not isinstance(info, dict) or not info.get('codexHome'):

@@ -249,6 +249,23 @@ class CliAccess:
             threading.Thread(target=self._verify_codex_desktop_switch,
                              args=(row['id'], accounts.thread), daemon=True).start()
             return self.public()
+        if provider == 'codex':
+            accounts = self.bridge.accounts
+            with accounts.gate, self.bridge.account.lock:
+                accounts.check_ready()
+                before = sync.snapshot(provider)
+                applied = None
+                try:
+                    applied = sync.apply(provider, row)
+                    sync.verify(provider, row)
+                except Exception:
+                    # apply() handles its own partial-write rollback. A
+                    # prewrite rejection must not restore an older snapshot
+                    # over another account transaction.
+                    if applied and applied.get('mutated') is True:
+                        sync.restore(provider, before)
+                    raise
+            return self.public()
         cli = self._claude_cli() if provider == 'claude' else None
         before = sync.snapshot(provider)
         previous_claude = self.index.get('activeClaude')

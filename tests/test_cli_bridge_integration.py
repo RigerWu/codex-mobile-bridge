@@ -760,6 +760,7 @@ class CliModelAttributionTests(unittest.TestCase):
             self.assertEqual([turn.get('params', {}).get('model') for turn in state['turns']],
                              [None, None])
             session = LiveSession(thread_id)
+            session.runtime = 'cli'
             with session.condition:
                 session.set_history(SessionStore(home).history(thread_id))
             session.state = state

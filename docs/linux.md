@@ -59,8 +59,18 @@ and `/proc` process-start token; live or unverifiable writers remain blocked.
 Both clients passed isolated API profile switching, effective endpoint/model
 checks and rollback after an injected verification failure. These runs used
 native CLIs and loopback mock APIs on real Linux hosts. They did not use paid
-credentials or validate a new Linux GUI package, ARM64, Desktop account restart,
-or physical-phone operation. Claude Desktop Console auto-connection remains
+credentials or validate ARM64, Desktop account restart, or physical-phone
+operation. A subsequent x64 Test deb built from local source `9f34ee0` passed
+installation and actual GNOME GUI startup on Ubuntu 22.04.5, including bundled
+gateway start/stop, authentication, language persistence and controller reopen.
+Its installed worker also passed authenticated HTTP checks for both native CLI
+histories, cold resume, replies, model/permission changes, Codex Goal, Claude
+tool approval allow/deny and history after gateway restart, using loopback mock
+APIs. Its three client-status GETs completed in 7/2/2 ms, within the Web
+client's 10-second read deadline. The separately built Test AppImage has not
+been launched independently.
+These Test packages retain `2.0.3` build metadata and are not a v2.1.0 release.
+Claude Desktop Console auto-connection remains
 unavailable on Linux; Claude Code CLI is a separate integration. See
 [verification](../VERIFICATION.md) for the current platform matrix.
 

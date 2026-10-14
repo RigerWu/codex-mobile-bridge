@@ -264,39 +264,47 @@ class CliSessions:
             raise
 
     def refresh(self, thread_id):
-        self._require_joined(thread_id)
+        with self.lock:
+            process = self.client.process
+            if process is None or self.joined.get(thread_id) is not process:
+                raise AppServerUnavailable('CLI thread is not joined on this connection')
         result = self.client.request('thread/read', {'threadId': thread_id, 'includeTurns': True},
                                      replay_safe=True)
         thread = result.get('thread') or {}
-        if thread.get('id') != thread_id:
-            raise AppServerUnsupported('CLI thread read returned a different thread')
-        if (thread.get('status') or {}).get('type') == 'notLoaded':
-            self._invalidate(thread_id)
-            raise AppServerUnavailable('CLI thread unloaded')
         with self.lock:
-            metadata = self.metadata.get(thread_id)
-        if metadata is None:
-            raise AppServerUnavailable('CLI thread is no longer joined')
-        if (thread.get('cwd') != metadata['cwd'] or
-                thread.get('modelProvider') != metadata['modelProvider']):
-            self._invalidate(thread_id)
-            raise AppServerUnavailable('CLI thread provider or working directory changed')
-        with self.lock:
-            pending = list(self.requests.get(thread_id, {}).values())
-            state = self._state(thread, pending, metadata)
-            previous = self.states.get(thread_id) or {}
-            if thread.get('model') is None and previous.get('latestModel'):
-                state['latestModel'] = previous['latestModel']
-            if 'reasoningEffort' not in thread and 'latestReasoningEffort' in previous:
-                state['latestReasoningEffort'] = previous['latestReasoningEffort']
-            for key in ('latestThreadSettings', 'currentPermissions', 'latestCollaborationMode', 'threadGoal',
-                        'completedThreadGoal', 'turnPlan'):
-                if key in previous:
-                    state[key] = copy.deepcopy(previous[key])
-            if state.get('latestThreadSettings'):
-                state['latestThreadSettings']['model'] = state['latestModel']
-                state['latestThreadSettings']['effort'] = state['latestReasoningEffort']
-            self.states[thread_id] = state
+            if self.client.process is not process or self.joined.get(thread_id) is not process:
+                raise AppServerUnavailable('CLI thread connection changed during read')
+            if thread.get('id') != thread_id:
+                raise AppServerUnsupported('CLI thread read returned a different thread')
+            invalid_reason = None
+            if (thread.get('status') or {}).get('type') == 'notLoaded':
+                invalid_reason = 'CLI thread unloaded'
+            else:
+                metadata = self.metadata.get(thread_id)
+                if metadata is None:
+                    raise AppServerUnavailable('CLI thread is no longer joined')
+                if (thread.get('cwd') != metadata['cwd'] or
+                        thread.get('modelProvider') != metadata['modelProvider']):
+                    invalid_reason = 'CLI thread provider or working directory changed'
+            if invalid_reason is None:
+                pending = list(self.requests.get(thread_id, {}).values())
+                state = self._state(thread, pending, metadata)
+                previous = self.states.get(thread_id) or {}
+                if thread.get('model') is None and previous.get('latestModel'):
+                    state['latestModel'] = previous['latestModel']
+                if 'reasoningEffort' not in thread and 'latestReasoningEffort' in previous:
+                    state['latestReasoningEffort'] = previous['latestReasoningEffort']
+                for key in ('latestThreadSettings', 'currentPermissions', 'latestCollaborationMode', 'threadGoal',
+                            'completedThreadGoal', 'turnPlan'):
+                    if key in previous:
+                        state[key] = copy.deepcopy(previous[key])
+                if state.get('latestThreadSettings'):
+                    state['latestThreadSettings']['model'] = state['latestModel']
+                    state['latestThreadSettings']['effort'] = state['latestReasoningEffort']
+                self.states[thread_id] = state
+        if invalid_reason is not None:
+            self._invalidate(thread_id, expected_process=process)
+            raise AppServerUnavailable(invalid_reason)
         self.on_state(thread_id, copy.deepcopy(state))
         return copy.deepcopy(state)
 
@@ -835,8 +843,10 @@ class CliSessions:
             self.refresh_pending.clear()
         self.on_disconnect()
 
-    def _invalidate(self, thread_id):
+    def _invalidate(self, thread_id, expected_process=None):
         with self.lock:
+            if expected_process is not None and self.joined.get(thread_id) is not expected_process:
+                return
             cancel = self.refresh_cancel.pop(thread_id, None)
             if cancel is not None:
                 cancel.set()

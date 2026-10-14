@@ -342,6 +342,53 @@ class CliSessionTests(unittest.TestCase):
         time.sleep(.3)
         self.assertEqual(sum(method == 'thread/read' for method, _ in self.fake.sent), reads)
 
+    def test_old_read_cannot_replace_or_invalidate_new_join(self):
+        original_request = self.fake.request
+        for old_response in ('valid', 'notLoaded', 'identity_changed'):
+            with self.subTest(old_response=old_response):
+                self.sessions._disconnect()
+                self.fake.process = object()
+                self.fake.thread['model'] = 'old-model'
+                self.sessions.attach('thread-a', explicit=True)
+                started = threading.Event()
+                release = threading.Event()
+                snapshot = self.fake.thread.copy()
+                if old_response == 'notLoaded':
+                    snapshot['status'] = {'type': 'notLoaded'}
+                elif old_response == 'identity_changed':
+                    snapshot['cwd'] = '/other/project'
+                def request(method, params, **kwargs):
+                    if method == 'thread/read' and not started.is_set():
+                        started.set()
+                        release.wait(2)
+                        return {'thread': snapshot}
+                    return original_request(method, params, **kwargs)
+                self.fake.request = request
+                errors = []
+                worker = threading.Thread(target=lambda: self._refresh_error(errors))
+                worker.start()
+                self.assertTrue(started.wait(2))
+                self.sessions._disconnect()
+                self.fake.process = object()
+                self.fake.thread['model'] = 'new-model'
+                self.sessions.attach('thread-a', explicit=True)
+                disconnects = len(self.disconnections)
+                release.set()
+                worker.join(2)
+                self.assertFalse(worker.is_alive())
+                self.assertEqual(len(errors), 1)
+                self.assertIsInstance(errors[0], AppServerUnavailable)
+                self.assertEqual(self.sessions.states['thread-a']['latestModel'], 'new-model')
+                self.assertIn('thread-a', self.sessions.joined)
+                self.assertEqual(len(self.disconnections), disconnects)
+                self.fake.request = original_request
+
+    def _refresh_error(self, errors):
+        try:
+            self.sessions.refresh('thread-a')
+        except Exception as exc:
+            errors.append(exc)
+
     def test_native_settings_event_survives_thread_refresh(self):
         self.sessions.attach('thread-a', explicit=True)
         self.fake.thread['model'] = 'native-model'

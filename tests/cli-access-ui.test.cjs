@@ -102,7 +102,8 @@ test('a failed CLI join remains visible through later history renders and clears
 });
 test('connection diagnostics is secondary to settings and keeps the original export route',()=>{
   assert.doesNotMatch(html,/<a id="session-diagnostics"/);
-  assert.match(html,/<button id="open-session-diagnostics"/);
+  assert.match(html,/<button id="open-session-diagnostics"[^>]*data-i18n="SSH 连接诊断"/);
+  assert.match(html,/<h2 id="session-diagnostics-heading" data-i18n="SSH 连接诊断"/);
   assert.match(html,/<dialog id="session-diagnostics-dialog"/);
   assert.match(app,/openingAccess\.source==='desktop'&&openingAccess\.canReconnect/);
   assert.match(app,/const diagnosticsPath='\/api\/sessions\/diagnostics'/);

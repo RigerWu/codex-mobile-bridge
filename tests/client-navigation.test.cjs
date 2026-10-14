@@ -17,9 +17,9 @@ test('notification settings stay hidden on shared relay while remaining actions 
   ui.window.BridgeSharedRelay=false;ui.nav.paintSettingsActions();
   assert.equal(ui.nav.settingsNotifications.hidden,false);assert.equal(classes.size,0);
   ui.window.BridgeSharedRelay=true;ui.nav.paintSettingsActions();
-  assert.equal(ui.nav.settingsNotifications.hidden,true);assert.equal(classes.has('two-actions'),true);
+  assert.equal(ui.nav.settingsNotifications.hidden,true);assert.equal(classes.has('three-actions'),true);
   ui.nav.switchToggle.hidden=true;ui.nav.paintSettingsActions();
-  assert.equal(classes.has('two-actions'),false);assert.equal(classes.has('one-action'),true);
+  assert.equal(classes.has('three-actions'),false);assert.equal(classes.has('two-actions'),true);
 });
 test('changing provider paints the shell before its slow read resolves',async()=>{
   const {nav,painted}=fixture();let resolve;

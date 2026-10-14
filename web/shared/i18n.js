@@ -25,6 +25,7 @@ const en={
 "原 Claude Code 会话仍在其他终端运行，请先在原终端结束会话":"This Claude Code chat is still open in another terminal. Close it there before continuing.",
 "无法确认原 Claude Code 会话是否仍在其他终端运行，请在电脑端检查后重试":"Unable to confirm whether this Claude Code chat is still open in another terminal. Check your computer and retry.",
 "连接诊断":"Connection diagnostics",
+"SSH 连接诊断":"SSH connection diagnostics",
 "复制摘要":"Copy summary",
 "导出文件":"Export file",
 "关闭连接错误":"Dismiss connection error",

@@ -58,12 +58,6 @@ def _windows_writer(pid, entry):
                     not re.fullmatch(r'[1-9][0-9]*', entry['procStart'])):
                 raise BridgeUnavailable(_UNKNOWN)
             return claude_process.process_start_ticks(pid) == entry['procStart']
-        if entry.get('version') == '2.1.287':
-            if ('procStart' in entry or not isinstance(entry.get('procStartFt'), str) or
-                    not re.fullmatch(r'[1-9][0-9]*', entry['procStartFt']) or
-                    entry.get('pidDomain') != claude_process.pid_domain()):
-                raise BridgeUnavailable(_UNKNOWN)
-            return claude_process.process_start_filetime(pid) == entry['procStartFt']
         raise BridgeUnavailable(_UNKNOWN)
     except OSError as exc:
         raise BridgeUnavailable(_UNKNOWN) from exc

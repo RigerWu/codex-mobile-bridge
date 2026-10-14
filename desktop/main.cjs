@@ -55,7 +55,7 @@ function worker(action,payload){
   if(writes)workerWrites++;
   if(action==='snapshot'&&snapshotPending)return snapshotPending;
   const options=workerFor({packaged:app.isPackaged,resources:process.resourcesPath,root,dataDir});
-  const result=(action==='snapshot'&&!updater?.busy?snapshotWorker.read(options):['accounts','account','desktop-sessions','start','stop','save'].includes(action)?managementWorker.call(options,action,payload):runWorker(options,action,payload)).then(value=>['snapshot','save'].includes(action)?{...value,networkInterfaces:interfaces(),cloudflaredInstall:installStatus,update:updater?.status(),updateResult:updateResult(),updateManaged:updateManaged(),loginStartup:loginStartup.status()}:value).finally(()=>{if(writes)workerWrites--;});
+  const result=(action==='snapshot'&&!updater?.busy?snapshotWorker.read(options):['accounts','account','cli-access','desktop-sessions','start','stop','save'].includes(action)?managementWorker.call(options,action,payload):runWorker(options,action,payload)).then(value=>['snapshot','save'].includes(action)?{...value,networkInterfaces:interfaces(),cloudflaredInstall:installStatus,update:updater?.status(),updateResult:updateResult(),updateManaged:updateManaged(),loginStartup:loginStartup.status()}:value).finally(()=>{if(writes)workerWrites--;});
   if(action==='snapshot')snapshotPending=result.then(value=>{lastSnapshot=value;return value;}).finally(()=>{snapshotPending=null;});
   return action==='snapshot'?snapshotPending:result;
 }
@@ -121,7 +121,7 @@ function register(){
     fs.writeFileSync(path.join(directory,'language.json'),JSON.stringify({language:value}));
     language=value;const title=t('Codex 手机网关');if(window.getTitle()!==title)window.setTitle(title);tray?.relabel();return language;
   });
-  for(const action of ['snapshot','save','start','stop','logs','test-notification','check-entry','tailscale-setup','devices','account', 'accounts', 'harness', 'desktop-sessions','notification-watches', 'transfer-settings'])ipcMain.handle('bridge:'+action,async(event,payload)=>{
+  for(const action of ['snapshot','save','start','stop','logs','test-notification','check-entry','tailscale-setup','devices','account', 'accounts', 'cli-access', 'harness', 'desktop-sessions','notification-watches', 'transfer-settings'])ipcMain.handle('bridge:'+action,async(event,payload)=>{
     authorize(event);
     if(action==='accounts'){
       if(updater?.busy&&payload?.action!=='list')throw Error('正在更新应用，请稍候。');

@@ -40,6 +40,7 @@
       "web/features/accounts/account.js",
       "web/features/accounts/accounts.js",
       "web/features/accounts/client-accounts.js",
+      "web/features/accounts/cli-access.js",
       "web/features/clients/client-lifecycle.css",
       "web/features/clients/client-lifecycle.js",
       "web/features/accounts/account.css",

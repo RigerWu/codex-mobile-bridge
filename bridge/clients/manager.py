@@ -57,6 +57,9 @@ class DesktopSessions:
         self.config = json.loads(self.config_path.read_text()) if self.config_path.exists() else {}
         self.adapters = {'deepseek': DeepSeek(self.directory/'deepseek', self.config.get('deepseekHome')),
                          'claude': Claude(self.directory/'claude', auto_connect=False)}
+        if bridge is not None and getattr(bridge, 'cli_access', None) is not None:
+            bridge.desktop_sessions = self
+            self.adapters['claude'].cli.profile_resolver = bridge.cli_access.claude_profile
         self.deepseek_restore_error = None
         if self.config.get('deepseekAdapterDirectory'):
             try:

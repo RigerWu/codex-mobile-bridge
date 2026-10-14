@@ -32,6 +32,7 @@ from bridge.features.sessions.create import rename_thread, independent_directory
 from bridge.features.sessions.timeline import Timeline
 from bridge.features.accounts.account import Account
 from bridge.features.accounts.accounts import Accounts, operation
+from bridge.features.accounts.cli_access import CliAccess
 from bridge.features.sessions.goal import GoalRPC, GoalError, GoalUnavailable, GoalUnsupported, goal_activation, goal_identity, normalize_goal_result, normalize_ui_locale, goal_command_fingerprint, goal_state_confirms_command, native_goal_absent, normalize_goal, plan_goal_command, read_native_goal
 from bridge.features.workspace.uploads import Uploads, image_type
 from bridge.clients.codex.remote import upload_file
@@ -147,6 +148,7 @@ class Bridge:
         executable_getter = (lambda: self.catalog_reader.executable) if host == 'local' else None
         self.account = Account(codex_home, data_dir, codex_bin, executable_getter=executable_getter) if host == 'local' else None
         self.accounts = Accounts(self) if host == "local" else None
+        self.cli_access = CliAccess(self) if host == "local" else None
         self.goal = goal_rpc or (GoalRPC(codex_home, codex_bin, executable_getter=executable_getter) if host == 'local' else None)
         self.owner_goal = owner_goal
         self.goal_transport = 'owner' if owner_goal else 'sidecar'

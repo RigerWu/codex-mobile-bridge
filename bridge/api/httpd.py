@@ -523,6 +523,17 @@ class Handler(BaseHTTPRequestHandler):
                 self.read_json()
                 self.server.auth.logout(self.token())
                 return self.output(200, {"ok": True}, cookie=self.cookie("", clear=True))
+            if path == '/api/cli-access':
+                if query:
+                    raise ValueError('CLI 接入请求包含不支持的参数')
+                manager = self.server.bridge.cli_access
+                if manager is None:
+                    return self.output(503, {'error': '本机 CLI 接入不可用'})
+                if write:
+                    if self.server.auth.config.get('mode') == 'none':
+                        raise PermissionError('免密访问不能修改 CLI 接入')
+                    return self.output(200, manager.change(self.read_json()))
+                return self.output(200, manager.public())
             if not write and path == '/api/accounts':
                 result = self.server.bridge.accounts.public()
                 result['canSwitch'] = self.server.auth.config.get('mode') != 'none'

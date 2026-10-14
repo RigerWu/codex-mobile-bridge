@@ -4,6 +4,7 @@ import os
 import shlex
 import subprocess
 import threading
+import time
 import unittest
 from pathlib import Path
 from unittest.mock import Mock, patch
@@ -290,6 +291,29 @@ class CliSessionTests(unittest.TestCase):
         self.assertEqual(self.states[-1][1]['turnPlan'][0]['step'], 'First')
         self.sessions._event({'method': 'thread/goal/cleared', 'params': {'threadId': 'thread-a'}})
         self.assertNotIn('threadGoal', self.states[-1][1])
+
+    def test_completed_goal_read_timeout_keeps_live_writer(self):
+        self.sessions.attach('thread-a', explicit=True)
+        self.sessions._event({'method': 'thread/goal/updated', 'params': {
+            'threadId': 'thread-a', 'goal': {'objective': 'Build', 'status': 'complete'}}})
+        original = self.fake.request
+        failed = threading.Event()
+        def request(method, params, **kwargs):
+            if method == 'thread/read':
+                failed.set()
+                raise AppServerUnavailable('Codex runtime read timed out')
+            return original(method, params, **kwargs)
+        self.fake.request = request
+        self.sessions._queue_refresh('thread-a')
+        self.assertTrue(failed.wait(2))
+        deadline = time.monotonic() + 2
+        while 'thread-a' in self.sessions.refreshing and time.monotonic() < deadline:
+            time.sleep(.01)
+        self.assertIn('thread-a', self.sessions.joined)
+        self.assertEqual(self.disconnections, [])
+        self.assertEqual(self.sessions.states['thread-a']['threadGoal']['status'], 'complete')
+        self.fake.request = original
+        self.assertEqual(self.sessions.refresh('thread-a')['threadGoal']['status'], 'complete')
 
     def test_native_settings_event_survives_thread_refresh(self):
         self.sessions.attach('thread-a', explicit=True)

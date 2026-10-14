@@ -782,6 +782,10 @@ class CliSessions:
                         if thread_id not in self.refresh_pending:
                             break
                         self.refresh_pending.discard(thread_id)
+            except AppServerUnavailable:
+                # A timed-out read does not revoke the already joined writer.
+                # A real proxy disconnect invokes _disconnect independently.
+                pass
             except AppServerError:
                 self._invalidate(thread_id)
             finally:

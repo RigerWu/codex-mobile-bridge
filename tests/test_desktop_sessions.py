@@ -62,6 +62,8 @@ class Adapters(unittest.TestCase):
         with self.assertRaises(ValueError): self.manager.call('deepseek', 'send', 'session-one', {'id':str(uuid.uuid4()),'text':''})
 
     def test_client_switch_requires_configuration_and_persists(self):
+        self.manager.adapters['claude'].cli.status = Mock(return_value={
+            'cliAvailable': False, 'cliAuthReady': False})
         adapter = Mock()
         adapter.call.side_effect = lambda action, *args: ({'connected': True, 'configured': True} if action == 'status' else
             {'sessions': [{'id': 'original', 'cwd': str(self.root)}]} if action == 'list' else {'models': [{'id': 'upstream/model'}]})

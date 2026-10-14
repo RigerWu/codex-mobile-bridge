@@ -50,7 +50,7 @@ class ClientNavigation {
     for(const [id,name] of [['codex','Codex'],['claude','Claude'],['deepseek','DeepSeek Harness']]){const row=document.createElement('label'),box=document.createElement('input'),caption=document.createElement('span');row.className='display-option';box.type='checkbox';box.id='appearance-switch-'+id;box.checked=this.preference('switch:'+id);box.onchange=()=>{this.preference('switch:'+id,box.checked);this.paint();};caption.textContent=name;row.append(caption,box);switchPreferences.append(row);}const switchHint=document.createElement('p');switchHint.className='muted';switchHint.dataset.i18n='隐藏图标不关闭应用，仍可在应用管理中打开聊天。';switchHint.textContent=BridgeI18n.t('隐藏图标不关闭应用，仍可在应用管理中打开聊天。');switchPreferences.append(switchHint);preferences.after(switchPreferences);
     const swipeRow=document.createElement('label'),swipeBox=document.createElement('input'),swipeCaption=document.createElement('span');swipeRow.className='display-option';swipeBox.type='checkbox';swipeBox.id='appearance-swipe-clients';swipeBox.checked=this.preference('swipe-clients',undefined,true);swipeBox.onchange=()=>{this.preference('swipe-clients',swipeBox.checked);this.cancelListSwipe();};swipeCaption.dataset.i18n='左右滑动切换应用';swipeCaption.textContent=BridgeI18n.t('左右滑动切换应用');swipeRow.append(swipeCaption,swipeBox);switchPreferences.append(swipeRow);this.bindListGestures();
     const language=document.getElementById('language');if(language)preferences.append(language.closest('label'));
-    const applications=make('应用管理',()=>{settings.close();this.openManager();});applications.dataset.i18nAriaLabel='应用管理';applications.setAttribute('aria-label',BridgeI18n.t('应用管理'));this.settingsNotifications=make('第三方通知',()=>{if(window.BridgeSharedRelay)return;settings.close();this.notifications.click();});this.settingsNotifications.removeAttribute('data-i18n');this.settingsNotifications.dataset.i18nAriaLabel='第三方通知';this.settingsNotifications.setAttribute('aria-label',BridgeI18n.t('第三方通知'));this.settingsActions.append(applications,this.settingsNotifications);
+    const applications=make('应用管理',()=>{settings.close();this.openManager();});applications.dataset.i18nAriaLabel='应用管理';applications.setAttribute('aria-label',BridgeI18n.t('应用管理'));this.settingsNotifications=make('第三方通知',()=>{if(window.BridgeSharedRelay)return;settings.close();this.notifications.click();});this.settingsNotifications.removeAttribute('data-i18n');this.settingsNotifications.dataset.i18nAriaLabel='第三方通知';this.settingsNotifications.setAttribute('aria-label',BridgeI18n.t('第三方通知'));this.settingsActions.append(applications,this.settingsNotifications,document.getElementById('open-session-diagnostics'));
     this.account=document.getElementById('accounts-button');this.notifications=document.getElementById('pushplus-settings');
     // Older native shells move these controls after page load. Keep the new
     // two-row navigation intact while preserving their native home action.
@@ -71,9 +71,9 @@ class ClientNavigation {
   syncHome(){this.home.hidden=!BridgeHost.hasNativeLayout();}
   paintSettingsActions(){
     this.settingsNotifications.hidden=!!window.BridgeSharedRelay;
-    const count=1+Number(!this.switchToggle.hidden)+Number(!this.settingsNotifications.hidden);
+    const count=2+Number(!this.switchToggle.hidden)+Number(!this.settingsNotifications.hidden);
+    this.settingsActions.classList.toggle('three-actions',count===3);
     this.settingsActions.classList.toggle('two-actions',count===2);
-    this.settingsActions.classList.toggle('one-action',count===1);
   }
   preference(key,value,fallback=true){if(value!==undefined)localStorage.setItem('navigation:'+key,String(value));const saved=localStorage.getItem('navigation:'+key);return saved==null?fallback:saved!=='false';}
   bindListGestures(){

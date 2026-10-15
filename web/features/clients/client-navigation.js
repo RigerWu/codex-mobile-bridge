@@ -113,6 +113,8 @@ class ClientNavigation {
   swipeRows(){return this.provider==='codex'?document.getElementById('sessions'):this.view.rowsRoot;}
   copySwipeRows(source){
     const clone=source.cloneNode(true);clone.classList.add('client-swipe-rows');
+    const gutter=source.offsetWidth-source.clientWidth;
+    if(gutter>0)clone.style.paddingRight=(parseFloat(getComputedStyle(source).paddingRight)+gutter)+'px';
     // A preview is visual only: no duplicate IDs, focus targets or native actions.
     for(const node of [clone,...clone.querySelectorAll('*')]){
       for(const attr of [...node.attributes])if(['id','name','href','autofocus'].includes(attr.name)||attr.name.startsWith('on'))node.removeAttribute(attr.name);

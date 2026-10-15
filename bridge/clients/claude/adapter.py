@@ -85,7 +85,7 @@ class Claude:
                                       developer_mode_enabled(self.discovery['dataHome'])),
                 'connected': self.status()['connected']}
 
-    def prepare(self, reset=False):
+    def prepare(self, reset=False, *, foreground=False):
         self.directory.mkdir(parents=True, exist_ok=True, mode=0o700)
         path = self.directory/'connection.json'
         if not path.exists():
@@ -112,7 +112,7 @@ class Claude:
         target = self.directory/'connect-desktop.js'
         target.write_text(script, encoding='utf-8'); target.chmod(0o600)
         console = self.directory/'console-connect.js'
-        if sys.platform == 'win32':
+        if sys.platform == 'win32' and foreground:
             console.write_bytes(console_source(source, config, multiline=True).encode('utf-8'))
         else:
             console.write_text(console_source(source, config), encoding='utf-8')
@@ -463,7 +463,8 @@ class Claude:
                             self.desktop.resume_after = time.time()
                             self.desktop.write({'generation': self.desktop.generation, 'seq': self.desktop.seq, 'type': 'idle'})
                             self.desktop.stopped = False
-                    prepared = self.prepare(reset=self.desktop is not None and not existing_only)
+                    prepared = self.prepare(reset=self.desktop is not None and not existing_only,
+                                            foreground=foreground)
                 # Signed reconnect may finish while the app was being located.
                 for _ in range(5):
                     if self.desktop.connected or cancel.wait(.2): break

@@ -3,7 +3,6 @@ import os
 import plistlib
 import struct
 import subprocess
-import sys
 import tempfile
 import threading
 import unittest
@@ -187,13 +186,15 @@ assert.equal(start.cwd,cwd);assert.equal(start.message,'');})();
         self.assertEqual(Path(prepared['scriptPath']).read_text(encoding='utf-8'),
                          source.replace('__BRIDGE_CONFIG__', json.dumps(config)))
         self.assertTrue(Path(prepared['consolePath']).read_text(encoding='utf-8') ==
-                        console_source(source, config, multiline=sys.platform == 'win32'))
+                        console_source(source, config))
 
     @patch('bridge.clients.claude.adapter.sys.platform', 'win32')
     def test_windows_prepare_writes_bounded_lf_console_source(self):
         adapter = Claude(self.root/'Windows Test', auto_connect=False)
         self.addCleanup(adapter.close)
-        prepared = adapter.prepare()
+        passive = adapter.prepare()
+        self.assertNotIn(b'\n', Path(passive['consolePath']).read_bytes())
+        prepared = adapter.prepare(foreground=True)
         raw = Path(prepared['consolePath']).read_bytes()
         source = raw.decode('utf-8')
         self.assertGreater(source.count('\n'), 0)
@@ -205,6 +206,27 @@ assert.equal(start.cwd,cwd);assert.equal(start.message,'');})();
                   'request': 'request.json', 'response': 'response.json'}
         template = (ROOT/'bridge/clients/claude/connector.js').read_text(encoding='utf-8')
         self.assertTrue(source.replace('\n', ' ') == console_source(template, config))
+
+    @patch('bridge.clients.claude.adapter.sys.platform', 'win32')
+    def test_windows_explicit_native_passes_multiline_source_to_helper(self):
+        adapter = Claude(self.root/'Windows Test', auto_connect=False)
+        self.addCleanup(adapter.close)
+        adapter.discovery = {'installed': True, 'executable': str(self.executable),
+                             'dataHome': str(self.root/'profile'), 'dataHomeExplicit': True,
+                             'automaticConnection': 'native-console'}
+        seen = []
+        def native(action, **kwargs):
+            if action == 'connect':
+                seen.append(Path(kwargs['script']).read_bytes())
+                return {'setupState': 'failed', 'reason': 'fixture'}
+            return {'setupState': 'ready'}
+        with patch('bridge.clients.claude.adapter.native_action', side_effect=native), \
+             patch('bridge.clients.claude.adapter.running_app', return_value=42), \
+             patch('bridge.clients.claude.adapter.developer_mode_enabled', return_value=True):
+            adapter._connect_native(False, self.root/'cancel', foreground=True)
+        self.assertEqual(len(seen), 1)
+        self.assertGreater(seen[0].count(b'\n'), 0)
+        self.assertNotIn(b'\r', seen[0])
 
 
 class ClaudeProfileEvidence(unittest.TestCase):
@@ -677,8 +699,8 @@ class ClaudeNativeConnection(unittest.TestCase):
             self.assertFalse(self.adapter.desktop.connected)
             self.assertEqual(self.adapter.desktop.capabilities, {})
         prepare = self.adapter.prepare
-        def replaced(reset=False):
-            value = prepare(reset=reset)
+        def replaced(reset=False, foreground=False):
+            value = prepare(reset=reset, foreground=foreground)
             heartbeat()  # The old running injector follows the new generation.
             return value
         actions = []
@@ -814,7 +836,7 @@ class ClaudeNativeConnection(unittest.TestCase):
         (self.adapter.directory/'response.json').write_text(old_response)
         self.assertFalse(self.adapter.status()['connected'])
         source = Path(prepared['consolePath']).read_text(encoding='utf-8')
-        self.assertEqual('\n' in source, sys.platform == 'win32')
+        self.assertNotIn('\n', source)
         self.assertIn(self.adapter.desktop.generation, source)
 
     def test_each_console_injection_has_a_fresh_error_inspection_marker(self):

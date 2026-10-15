@@ -954,6 +954,21 @@ class ClaudeKeyboard {
         if(prompt.TryGetCurrentPattern(ValuePattern.Pattern,out pattern)) value=((ValuePattern)pattern).Current.Value;
         return ReadContents(text,value).TrimEnd('\r','\n');
     }
+    static bool ConsoleSourceShape(string text,bool background) {
+        const string marker="/* codex bridge connector */";
+        if(text==null||text.Length>300000||text.Contains("\r")||
+           !text.StartsWith(marker,StringComparison.Ordinal))return false;
+        if(!text.Contains("\n"))return true;
+        if(background)return false;
+        var lines=text.Split('\n');
+        if(lines.Length<2||lines.Length>16)return false;
+        for(int i=0;i<lines.Length;i++) {
+            if(lines[i].Length==0||lines[i].Length>3500)return false;
+            if(i<lines.Length-1&&!lines[i].EndsWith(";",StringComparison.Ordinal)&&
+               !lines[i].EndsWith("{",StringComparison.Ordinal))return false;
+        }
+        return true;
+    }
     static void SubmitVerifiedConsole(string text,Func<string> readDraft,Action<string> replace,
         Func<string> readDocument,Action check,Action pause,Func<bool> expired,Action submit,bool allowConnectorDraft=true,
         Action refreshReadback=null,Func<bool> refreshDue=null) {
@@ -1012,6 +1027,45 @@ class ClaudeKeyboard {
         check();
         send(new[]{Key(13,false),Key(13,true)});
     }
+    static int UniqueSegmentStart(string expected,string observed) {
+        if(String.IsNullOrEmpty(observed)||observed.Length<32)return -1;
+        int start=expected.IndexOf(observed,StringComparison.Ordinal);
+        return start>=0&&expected.LastIndexOf(observed,StringComparison.Ordinal)==start?start:-1;
+    }
+    static bool VirtualizedConsoleGap(string expected,string observed) {
+        for(int split=observed.IndexOf('\n');split>=0;split=observed.IndexOf('\n',split+1)) {
+            string before=observed.Substring(0,split),after=observed.Substring(split+1);
+            int first=UniqueSegmentStart(expected,before),second=UniqueSegmentStart(expected,after);
+            if(first>=0&&second>first+before.Length)return true;
+        }
+        return false;
+    }
+    static string CollectConsoleSource(string expected,Func<string> read,Action home,Action down,
+        Action check,Action pause,Func<bool> expired) {
+        bool[] covered=new bool[expected.Length];int count=0,frontier=0;
+        check();home();
+        int steps=Math.Min(expected.Split('\n').Length+2,18);
+        for(int step=0;step<steps;step++) {
+            check();if(expired())throw new Exception("Console 全文核对超时，未执行");
+            if(step>0){down();check();}
+            pause();check();if(expired())throw new Exception("Console 全文核对超时，未执行");
+            string observed=read();
+            if(observed==null)throw new Exception("Console 片段无法读取，未执行");
+            if(observed==expected)return expected;
+            int start=UniqueSegmentStart(expected,observed);
+            if(start<0) {
+                if(VirtualizedConsoleGap(expected,observed))continue;
+                throw new Exception("Console 片段与连接脚本不符，未执行");
+            }
+            int end=start+observed.Length;
+            if(step==0&&start!=0||start>frontier)
+                throw new Exception("Console 片段未连续覆盖连接脚本，未执行");
+            for(int i=start;i<end;i++)if(!covered[i]){covered[i]=true;count++;}
+            if(count==expected.Length)return expected;
+            if(end>frontier)frontier=end;
+        }
+        throw new Exception("Console 脚本尚未完整写入，未执行；请通过手动初始化重试");
+    }
     static void WriteConsoleOnce(AutomationElement prompt,string text) {
         CheckPrompt(prompt);
         object valueObject,textObject;
@@ -1020,13 +1074,20 @@ class ClaudeKeyboard {
             !prompt.TryGetCurrentPattern(TextPattern.Pattern,out textObject))
             throw new Exception("当前 Claude Console 不支持一次写入，请在电脑端手动初始化连接");
         var value=(ValuePattern)valueObject;var document=(TextPattern)textObject;
-        var timer=Stopwatch.StartNew();
+        var timer=Stopwatch.StartNew();string verified=null;
         SubmitVerifiedConsole(text,()=>Contents(prompt),value.SetValue,
-            ()=>document.DocumentRange.GetText(-1).TrimEnd('\r','\n'),()=>CheckPrompt(prompt),
+            ()=>verified??document.DocumentRange.GetText(-1).TrimEnd('\r','\n'),()=>CheckPrompt(prompt),
             ()=>Thread.Sleep(50),()=>timer.Elapsed.TotalSeconds>=6,delegate {
                 Stage("脚本已完整写入并核对，正在提交");
                 SubmitConsoleAtEnd(()=>CheckPrompt(prompt),Send);
-            },false,()=>RefreshConsoleReadback(prompt,document,text,()=>timer.Elapsed.TotalSeconds>=6),
+            },false,()=>{
+                if(text.Contains("\n"))verified=CollectConsoleSource(text,
+                    ()=>document.DocumentRange.GetText(-1).TrimEnd('\r','\n'),
+                    ()=>{CheckPrompt(prompt);Send(new[]{Key(17,false),Key(36,false),Key(36,true),Key(17,true)});},
+                    ()=>{CheckPrompt(prompt);Send(new[]{Key(17,false),Key(40,false),Key(40,true),Key(17,true)});},
+                    ()=>CheckPrompt(prompt),()=>Thread.Sleep(200),()=>timer.Elapsed.TotalSeconds>=6);
+                else RefreshConsoleReadback(prompt,document,text,()=>timer.Elapsed.TotalSeconds>=6);
+            },
             ()=>timer.ElapsedMilliseconds>=250);
     }
     static void CheckWindowSelection() {
@@ -1198,6 +1259,43 @@ class ClaudeKeyboard {
         catch(Exception){refused=true;}
         if(!refused||keyBatches.Count!=1||keyBatches[0][0].data.key.vk!=17)
             throw new Exception("Console 文末导航后失焦不得提交自检失败");
+    }
+    static int CollectorSelfCheckEnters(string expected,string[] views,bool timeout=false,bool loseFocus=false) {
+        int cursor=0,writes=0,enters=0;string verified=null;
+        Action check=()=>{if(loseFocus&&cursor>=1)throw new Exception("focus changed");};
+        try {
+            SubmitVerifiedConsole(expected,()=>"",value=>{if(value!=expected)throw new Exception("wrong source");writes++;},
+                ()=>verified??"partial",check,()=>{},()=>false,()=>enters++,false,
+                ()=>{verified=CollectConsoleSource(expected,
+                    ()=>views[Math.Min(cursor,views.Length-1)],()=>cursor=0,()=>cursor++,
+                    check,()=>{},()=>timeout);},()=>true);
+        } catch {return enters;}
+        if(writes!=1)throw new Exception("Console 分段写入次数自检失败");
+        return enters;
+    }
+    static void CheckConsoleCollection() {
+        const string marker="/* codex bridge connector */";
+        string shaped=marker+"(async()=>{\nvoid 0;\n})();";
+        if(!ConsoleSourceShape(shaped,false)||ConsoleSourceShape(shaped,true)||
+           ConsoleSourceShape(shaped.Replace("\n","\r\n"),false)||
+           ConsoleSourceShape(marker+"void 0\n();",false)||
+           ConsoleSourceShape(marker+new String('x',3500)+";\nvoid 0;",false)||
+           !ConsoleSourceShape(marker+"void 0;",true))
+            throw new Exception("Console 有限行格式自检失败");
+        var builder=new StringBuilder();
+        for(int i=0;i<1024;i++){if(i>0&&i%128==0)builder.Append('\n');builder.Append(i.ToString("x4"));}
+        string expected=builder.ToString();
+        string first=expected.Substring(0,1500),middle=expected.Substring(1000,1600),last=expected.Substring(2200);
+        string virtualGap=expected.Substring(0,80)+"\n"+expected.Substring(2000);
+        if(CollectorSelfCheckEnters(expected,new[]{first,virtualGap,middle,middle,middle,last})!=1||
+           CollectorSelfCheckEnters(expected,new[]{first,expected.Substring(1499)})!=1||
+           CollectorSelfCheckEnters(expected,new[]{first,expected.Substring(1800)})!=0||
+           CollectorSelfCheckEnters(expected,new[]{first,"foreign Console draft"})!=0||
+           CollectorSelfCheckEnters(expected,new[]{last})!=0||
+           CollectorSelfCheckEnters(expected,new[]{first})!=0||
+           CollectorSelfCheckEnters(expected,new[]{first,middle,last},timeout:true)!=0||
+           CollectorSelfCheckEnters(expected,new[]{first,middle,last},loseFocus:true)!=0)
+            throw new Exception("Console 分段全文覆盖与零误提交自检失败");
     }
     static void CheckDetachedReuse() {
         var tools=new AppWindow {Handle=new IntPtr(21),Pid=7,Visible=true,Title="DevTools - app://localhost"};
@@ -1407,6 +1505,7 @@ class ClaudeKeyboard {
                 CheckMenuNavigation();
                 CheckNativeLaunch();
                 CheckDirectSubmission();
+                CheckConsoleCollection();
                 CheckDetachedReuse();
                 CheckNativeQuit();
                 CheckBackgroundConnection();
@@ -1443,7 +1542,7 @@ class ClaudeKeyboard {
             }
             string script=backgroundAction?args[1].Substring("--connect-background=".Length):args[1];
             string text=File.ReadAllText(script,Encoding.UTF8);
-            if(text.Length>300000||text.Contains("\n")||text.Contains("\r")||!text.StartsWith("/* codex bridge connector */")) throw new Exception("连接脚本格式无效");
+            if(!ConsoleSourceShape(text,backgroundAction))throw new Exception("连接脚本格式无效");
             if(backgroundAction){RunBackgroundConnection(process,text);return 0;}
             Stage("正在等待 Claude 窗口");
             GetAsyncKeyState(27); // Clear an old Escape press, subsequent presses cancel.

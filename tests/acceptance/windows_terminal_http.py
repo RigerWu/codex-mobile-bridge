@@ -73,6 +73,7 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--gateway', type=Path, required=True, help='Installed Test gateway exe used as ConPTY child')
     parser.add_argument('--test-root', type=Path, required=True, help='Isolated project .tmp directory')
+    parser.add_argument('--extended-cwd', action='store_true', help='Use a synthetic extended local drive cwd')
     args = parser.parse_args()
     require(sys.platform == 'win32', 'This acceptance requires Windows ConPTY')
     gateway = args.gateway.resolve(strict=True)
@@ -80,8 +81,9 @@ def main():
     test_root = args.test_root.absolute()
     require('.tmp' in test_root.parts and not test_root.is_symlink(), 'Use a project .tmp directory')
     run = test_root / ('terminal-http-' + uuid.uuid4().hex[:8])
-    workspace = run / 'workspace'
+    workspace = run / ('workspace 中文 space' if args.extended_cwd else 'workspace')
     (workspace / 'nested').mkdir(parents=True)
+    stored_cwd = '\\\\?\\' + str(workspace) if args.extended_cwd else str(workspace)
 
     source_root = Path(__file__).resolve().parents[2]
     sys.path.insert(0, str(source_root))
@@ -94,7 +96,7 @@ def main():
     class SyntheticBridge:
         host = 'local'
         def __init__(self):
-            self.store = type('Store', (), {'get': lambda _, identifier: {'cwd': str(workspace)}
+            self.store = type('Store', (), {'get': lambda _, identifier: {'cwd': stored_cwd}
                               if identifier == thread_id else None})()
             self.terminals = TerminalManager()
         def for_host(self, host):
@@ -116,6 +118,7 @@ def main():
     http = HTTP(port)
     path = f'/api/sessions/{thread_id}/terminal'
     summary = {'schema': 1, 'status': 'failed', 'gatewayChild': str(gateway), 'run': str(run),
+               'extendedCwd': args.extended_cwd,
                'threadId': thread_id, 'checks': {}, 'error': None}
     cursor, output = 0, ''
 
@@ -139,12 +142,20 @@ def main():
         require(http.request('POST', path, {'action': 'open', 'id': tab_id, 'cols': 80, 'rows': 24}, csrf=False)[0] == 403,
                 'Terminal open must require CSRF')
         info = http.checked('GET', path)
-        require(Path(info['cwd']) == workspace, 'Synthetic chat cwd was not resolved')
+        require(info['cwd'] == stored_cwd, 'Synthetic chat cwd was not resolved')
         with patch.object(sys, 'executable', str(gateway)), patch.object(sys, 'frozen', True, create=True):
             opened = http.checked('POST', path, {'action': 'open', 'id': tab_id, 'cols': 80, 'rows': 24})
         require(opened['running'], 'ConPTY did not start')
         until(lambda: streamed(lambda text: '>' in text), 'Initial cmd prompt')
         summary['checks']['authCsrfOpen'] = True
+
+        if args.extended_cwd:
+            marker = run / 'startup-cwd.txt'
+            input_text('cd > "' + str(marker) + '"\r')
+            until(marker.exists, 'Initial CMD cwd')
+            require(run.name in marker.read_bytes().decode('ascii', 'ignore'),
+                    'CMD did not start in the synthetic chat cwd')
+            summary['checks']['extendedLocalCwd'] = True
 
         input_text('cd nested\rset CMB_HTTP_STATE=retained\r')
         reopened = http.checked('POST', path, {'action': 'open', 'id': tab_id, 'cols': 80, 'rows': 24})

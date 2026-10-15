@@ -353,6 +353,7 @@ const en={
 "选择需要接入的应用；Claude 完全退出或重新加载后需初始化连接，初始化会使用电脑前台和键盘焦点。":"Select apps to connect. After a complete quit or reload, Claude needs connection initialization, using the computer's foreground window and keyboard focus.",
 "需要初始化连接":"Connection initialization required",
 "初始化连接":"Initialize connection",
+"启动 Desktop":"Start Desktop",
 "尝试重连":"Try reconnecting",
 "重新连接 Desktop":"Reconnect Desktop",
 "重新初始化连接":"Reinitialize connection",

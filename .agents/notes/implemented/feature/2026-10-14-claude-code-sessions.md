@@ -16,6 +16,8 @@ Writes use the existing UUID receipt ledger. Known pre-spawn rejections return b
 
 Display status resolves CLI availability immediately and refreshes its cached authentication result in the background. Desktop initialization and its ready check use only Desktop connection and session evidence, so CLI authentication and saved-history scans cannot delay them. Explicit CLI creation and resume still perform fresh authentication checks; the display cache never authorizes a write.
 
+In Web and phone app management, CLI availability does not hide the Desktop launch control. The gateway reports `canStartDesktop` only for an installed, native-console-capable Claude Desktop whose process is confirmed stopped. A confirmed single running main process reports `canInitializeDesktop` so an idle setup still exposes initialization unless reconnect is available. Unknown process state offers neither action. Both initialization controls use the existing confirmation and `initializeDesktop` request; enabling CLI access alone never sends that intent.
+
 ## Alternatives considered
 
 The native print-mode CLI accepts concurrent writers for one UUID, so relying on an upstream lock is insufficient. Opening an existing live terminal chat in another process is rejected. Registry evidence can verify a currently running writer, but cannot create an atomic lock against an independently started terminal.
@@ -24,9 +26,13 @@ Using the combined Desktop and CLI list to verify Desktop readiness exposes ever
 
 Routing the user's credentials through a new SDK service adds a second configuration owner. Spawning the installed CLI with the original profile/cwd keeps native configuration and authentication behavior. SSH Claude Code is excluded until equivalent source/profile and process checks exist.
 
+Using the app enable switch as the Desktop launch trigger would also start Desktop for CLI-only selections. The explicit launch control keeps the two choices independent.
+
 ## Consequences
 
 Closed local sessions can resume and expose native controls in the existing mobile/Web interface. Unknown original permissions, unavailable original configuration or uncertain writer evidence remain non-writable. The registry guard compares each writer's process start identity, and Linux additionally binds the machine ID and PID namespace. A terminal opened between the final registry check and spawn remains a narrow upstream concurrency limitation.
+
+An installed, stopped Desktop remains launchable from app management even when Claude Code is available. Unknown process state, unsupported automatic connection, absent installation or stopped gateway hides that control. A renderer test verifies the button and its existing request payload; backend lifecycle fixtures cover those capability boundaries. The control has not been exercised against a real Desktop in this check.
 
 For a selected managed API profile, authentication checks and CLI launch omit ambient `ANTHROPIC_*` values and the documented Claude provider-routing variables. The native profile's settings remain the source of the selected credentials and provider.
 

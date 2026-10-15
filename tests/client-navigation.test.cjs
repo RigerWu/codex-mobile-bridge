@@ -230,6 +230,40 @@ test('app management offers force only through close choices and retains a disab
  }
 });
 
+test('app management explicitly starts supported Claude Desktop alongside CLI access',async()=>{
+ const ui=managerFixture(),nav=ui.nav,client={id:'claude',name:'Claude',enabled:false,installed:true,
+  selectable:true,connected:false,running:false,cliAvailable:true,canStartDesktop:true,setupStatus:'ready-to-connect'};
+ nav.clients=[client];nav.gatewayRunning=true;nav.renderManager();
+ let start=ui.controls().find(node=>node.textContent==='启动 Desktop');assert.ok(start);
+ client.enabled=true;client.retryable=true;nav.renderManager();
+ start=ui.controls().find(node=>node.textContent==='启动 Desktop');assert.ok(start);
+ assert.equal(ui.controls().some(node=>node.textContent==='重试连接'),false);
+ ui.setInitializeChoice(true);const calls=[];
+ nav.request=async(url,body)=>{calls.push({url,body});return {clients:[{...client,connectionState:'connecting'}]};};
+ await start.onclick();
+ assert.deepEqual(ui.initializations,['claude']);
+ assert.equal(calls.length,1);assert.equal(calls[0].url,'/api/clients');
+ assert.equal(calls[0].body.initializeDesktop,true);assert.equal(calls[0].body.enabled,true);
+ assert.equal(require('../web/shared/i18n.js').translateEnglish('启动 Desktop'),'Start Desktop');
+ for(const changed of [{running:true,canStartDesktop:false},{installed:false,canStartDesktop:false},
+   {canStartDesktop:false,setupStatus:'unsupported'}]){
+  nav.clients=[{...client,...changed}];nav.renderManager();
+  assert.equal(ui.controls().some(node=>node.textContent==='启动 Desktop'),false);
+ }
+});
+
+test('app management keeps Desktop initialization for a running unconnected Claude beside CLI',async()=>{
+ const ui=managerFixture(),nav=ui.nav,client={id:'claude',name:'Claude',enabled:true,installed:true,
+  selectable:true,connected:false,running:true,cliAvailable:true,canStartDesktop:false,canInitializeDesktop:true,setupStatus:'idle'};
+ nav.clients=[client];nav.gatewayRunning=true;nav.renderManager();
+ const initialize=ui.controls().find(node=>node.textContent==='初始化连接');assert.ok(initialize);
+ assert.equal(ui.controls().some(node=>node.textContent==='启动 Desktop'),false);
+ ui.setInitializeChoice(true);const calls=[];nav.request=async(url,body)=>{calls.push({url,body});return {clients:[client]};};
+ await initialize.onclick();
+ assert.deepEqual(ui.initializations,['claude']);
+ assert.equal(calls.length,1);assert.equal(calls[0].body.initializeDesktop,true);
+});
+
 function touchFixture(){
  const ui=fixture(),nav=ui.nav,list={};ui.document.querySelector=()=>null;
  // Provide browser-only globals for the production gesture handlers.

@@ -866,7 +866,8 @@ class DesktopSessions:
                              'setupStatus': ('recovered' if provider == 'deepseek' and setup_status == 'recovered' else 'ready') if ready and not pending_restart else setup_status, 'configured': configured, 'connected': connected,
                              'enabled': self.enabled(provider), 'reason': reason,
                              **({'cliAvailable': status.get('cliAvailable') is True,
-                                 'cliAuthReady': status.get('cliAuthReady') is True} if provider == 'claude' else {})})
+                                 'cliAuthReady': status.get('cliAuthReady') is True,
+                                 'canStartDesktop': status.get('automaticConnection') == 'native-console'} if provider == 'claude' else {})})
             from bridge.clients.lifecycle import inspect_clients
             descriptors = []
             for row in rows:
@@ -904,10 +905,15 @@ class DesktopSessions:
                 row['selectable'] = bool(row['configured'] or row['installed'] and row['setupStatus'] != 'unsupported'
                                          or row.get('cliAvailable'))
                 if row['id'] == 'claude':
+                    desktop_supported = row['canStartDesktop'] and self.gateway_running and row['installed'] and not row['connected']
+                    native_state = native or {}
+                    row['canStartDesktop'] = bool(desktop_supported and not row['running'] and native_state.get('unknown') is False)
+                    row['canInitializeDesktop'] = bool(desktop_supported and row['running'] and
+                                                       len(native_state.get('mainPids', [])) == 1 and native_state.get('unknown') is False)
                     row['initializationMode'] = 'background' if sys.platform == 'win32' else 'foreground'
                     row['reconnectSupported'] = self._claude_reconnect_supported()
                     row['canReconnect'] = bool(row['reconnectSupported'] and self.gateway_running and row['enabled'] and
-                                               len(native.get('mainPids', [])) == 1 and not native.get('unknown', True) and
+                                               len(native_state.get('mainPids', [])) == 1 and not native_state.get('unknown', True) and
                                                row['setupStatus'] != 'connecting')
                     row['canConfirmQuit'] = bool(sys.platform in ('darwin', 'win32') and row['mainRunning'])
                 if not self.gateway_running and row['enabled'] and row['setupStatus'] != 'recovery-required':

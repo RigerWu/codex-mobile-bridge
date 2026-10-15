@@ -223,6 +223,22 @@ class PairingHTTPTests(unittest.TestCase):
         self.assertEqual(response.status, 403)
         response.read(); connection.close()
 
+    def test_custom_port_requires_exact_host_origin_pair(self):
+        self.server.local_access = False
+        public = 'https://bridge.example:8443'
+        ordinary = 'https://bridge.example'
+        self.server.origins.update((public, ordinary))
+        self.server.hosts.update(('bridge.example:8443', 'bridge.example'))
+        self.server.secure_hosts.update(('bridge.example:8443', 'bridge.example'))
+        self.assertEqual(self.request('/api/auth', origin=public, host='bridge.example:8443')[0], 200)
+        self.assertEqual(self.request('/api/auth', origin=ordinary, host='bridge.example')[0], 200)
+        self.assertEqual(self.request('/api/auth', origin=public, host='bridge.example')[0], 403)
+        self.assertEqual(self.request('/api/auth', origin=ordinary, host='bridge.example:8443')[0], 403)
+        code, _, cookie = self.request('/api/login', {'username': 'test', 'password': 'test-password-long'},
+                                       origin=public, host='bridge.example:8443')
+        self.assertEqual(code, 200)
+        self.assertIn('Secure', cookie)
+
     def test_forbidden_local_response_closes_before_reusing_client_for_public_entry(self):
         self.server.local_access = False
         connection = http.client.HTTPConnection('127.0.0.1', self.server.server_port, timeout=3)

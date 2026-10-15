@@ -8,6 +8,7 @@ using System.Runtime.InteropServices;
 using System.Text;
 using System.Threading;
 using System.Windows.Automation;
+using System.Windows.Automation.Text;
 
 class ClaudeKeyboard {
     [StructLayout(LayoutKind.Sequential)] struct INPUT { public uint type; public UNION data; }
@@ -954,7 +955,8 @@ class ClaudeKeyboard {
         return ReadContents(text,value).TrimEnd('\r','\n');
     }
     static void SubmitVerifiedConsole(string text,Func<string> readDraft,Action<string> replace,
-        Func<string> readDocument,Action check,Action pause,Func<bool> expired,Action submit,bool allowConnectorDraft=true) {
+        Func<string> readDocument,Action check,Action pause,Func<bool> expired,Action submit,bool allowConnectorDraft=true,
+        Action refreshReadback=null,Func<bool> refreshDue=null) {
         check();
         string pending=readDraft().Trim('\r','\n',' ','\t','\u200b','\ufeff');
         if(!String.IsNullOrWhiteSpace(pending)&&(!allowConnectorDraft||!pending.StartsWith("/* codex bridge connector */")))
@@ -962,13 +964,38 @@ class ClaudeKeyboard {
         check();replace(text);
         // Chromium applies accessibility edits asynchronously. ValuePattern may
         // echo the new value before CodeMirror's actual document has changed.
+        bool refreshed=false;
         while(true) {
             check();
-            if(readDocument()==text)break;
+            string observed=readDocument();
+            if(observed==text)break;
             if(expired())throw new Exception("Console 脚本尚未完整写入，未执行；请通过手动初始化重试");
+            if(!refreshed&&refreshReadback!=null&&observed.Length>0&&(refreshDue==null||refreshDue())) {
+                refreshed=true;check();refreshReadback();
+            }
             pause();
         }
         check();submit();
+    }
+    static void RefreshConsoleReadback(AutomationElement prompt,TextPattern document,string text) {
+        CheckPrompt(prompt);
+        Send(new[]{Key(17,false),Key(36,false),Key(36,true),Key(17,true)});
+        CheckPrompt(prompt);
+        var range=document.DocumentRange;
+        string visible=range.GetText(-1).TrimEnd('\r','\n');
+        if(visible==text)return;
+        if(String.IsNullOrEmpty(visible)||!text.StartsWith(visible,StringComparison.Ordinal))
+            throw new Exception("无法核对 Console 脚本前半段，未执行");
+        var caret=range.Clone();
+        caret.MoveEndpointByRange(TextPatternRangeEndpoint.End,caret,TextPatternRangeEndpoint.Start);
+        int middle=Math.Min(text.Length/2,visible.Length-1);
+        if(caret.MoveEndpointByUnit(TextPatternRangeEndpoint.End,TextUnit.Character,middle)!=middle)
+            throw new Exception("无法定位 Console 脚本中段，未执行");
+        caret.MoveEndpointByRange(TextPatternRangeEndpoint.Start,caret,TextPatternRangeEndpoint.End);
+        CheckPrompt(prompt);
+        caret.Select();
+        CheckPrompt(prompt);
+        Send(new[]{Key(39,false),Key(39,true)});
     }
     static void WriteConsoleOnce(AutomationElement prompt,string text) {
         CheckPrompt(prompt);
@@ -984,7 +1011,7 @@ class ClaudeKeyboard {
             ()=>Thread.Sleep(50),()=>timer.Elapsed.TotalSeconds>=6,delegate {
                 Stage("脚本已完整写入并核对，正在提交");
                 Send(new[]{Key(13,false),Key(13,true)});
-            });
+            },false,()=>RefreshConsoleReadback(prompt,document,text),()=>timer.ElapsedMilliseconds>=250);
     }
     static void CheckWindowSelection() {
         var owned=new AppWindow {Handle=new IntPtr(11),Owner=new IntPtr(99),Pid=7,Visible=true,Title="Claude"};
@@ -1081,6 +1108,20 @@ class ClaudeKeyboard {
             ()=>{throw new OperationCanceledException();},()=>{},()=>false,()=>submits++);}
         catch(OperationCanceledException){refused=true;}
         if(!refused||writes!=0||submits!=0)throw new Exception("Console 写入前取消自检失败");
+        writes=0;submits=0;pauses=0;int refreshes=0;
+        SubmitVerifiedConsole(text,()=>"",value=>writes++,()=>refreshes==0?"visible suffix":text,
+            ()=>{},()=>pauses++,()=>pauses>=2,()=>submits++,false,()=>refreshes++,()=>true);
+        if(writes!=1||submits!=1||refreshes!=1)throw new Exception("Console 前台可访问区刷新自检失败");
+        writes=0;submits=0;pauses=0;refreshes=0;refused=false;
+        try {SubmitVerifiedConsole(text,()=>"",value=>writes++,()=>"visible suffix",
+            ()=>{},()=>pauses++,()=>pauses>=2,()=>submits++,false,()=>refreshes++,()=>true);}
+        catch(Exception){refused=true;}
+        if(!refused||writes!=1||submits!=0||refreshes!=1)throw new Exception("Console 刷新后不完整脚本拒绝执行自检失败");
+        writes=0;submits=0;refreshes=0;refused=false;
+        try {SubmitVerifiedConsole(text,()=>"/* codex bridge connector */old",value=>writes++,()=>text,
+            ()=>{},()=>{},()=>true,()=>submits++,false,()=>refreshes++,()=>true);}
+        catch(Exception){refused=true;}
+        if(!refused||writes!=0||submits!=0||refreshes!=0)throw new Exception("Console 前台已有草稿保护自检失败");
     }
     static void CheckDetachedReuse() {
         var tools=new AppWindow {Handle=new IntPtr(21),Pid=7,Visible=true,Title="DevTools - app://localhost"};

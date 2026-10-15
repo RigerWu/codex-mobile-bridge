@@ -153,3 +153,15 @@
 .wb-side-queue{flex:none;max-height:25%;overflow:auto;margin:0 14px}.wb-side-queue:empty{display:none}
 .wb-side-landing~.wb-status:empty{display:none}.wb-side-content:not(.has-side-chat)>.wb-status{margin:0 24px 24px;text-align:center}
 .wb-side-messages{overflow-anchor:none}
+/* Browser keyboard: keep command input and scrollback in the visual viewport. */
+.browser-terminal-keyboard #chat.workbench-active>.chat-head,.browser-terminal-keyboard .client-switch-dock{display:none}
+.browser-terminal-keyboard .workbench-tabs{min-height:36px;padding-top:0;padding-bottom:0}
+.browser-terminal-keyboard .wb-terminal{padding-bottom:0}
+.browser-terminal-keyboard .wb-terminal-head{padding:2px 8px}
+.browser-terminal-keyboard .wb-terminal-head button{min-height:30px;padding:3px 8px}
+.browser-terminal-keyboard .wb-terminal-shell-hint,.browser-terminal-keyboard .wb-pty>.wb-status{display:none}
+.browser-terminal-keyboard .wb-terminal-screen{min-height:40px}
+.browser-terminal-keyboard .wb-terminal-keys{padding:3px 8px}
+.browser-terminal-keyboard .wb-terminal-keys button{min-height:30px}
+.browser-terminal-keyboard .wb-terminal-input{padding:3px 8px}
+.browser-terminal-keyboard .wb-terminal-input textarea{max-height:72px}

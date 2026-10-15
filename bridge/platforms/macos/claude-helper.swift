@@ -203,7 +203,6 @@ final class Connector {
     func console() throws -> AXUIElement {
         try activate()
         guard let initial = child(root, kAXFocusedWindowAttribute) else { try fail("needs-attention", "无法确认 Claude Console 输入焦点") }
-        let previous = attribute(root, kAXWindowsAttribute) as? [AXUIElement] ?? []
         if let prompt = find(initial, matching: isPrompt) { return prompt }
         // macOS Chromium exposes the tab name as AXDescription, with no title.
         // When DevTools is already open on Elements, select its Console directly.
@@ -219,7 +218,7 @@ final class Connector {
             guard let window = child(root, kAXFocusedWindowAttribute) else { try fail("needs-attention", "无法确认 Claude Console 输入焦点") }
             if !CFEqual(window, initial) {
                 var owner: pid_t = 0
-                guard !previous.contains(where: { CFEqual($0, window) }), AXUIElementGetPid(window, &owner) == .success,
+                guard AXUIElementGetPid(window, &owner) == .success,
                       devToolsWindow(role: text(window, kAXRoleAttribute), title: text(window, kAXTitleAttribute), owner: owner, expectedOwner: app.processIdentifier) else {
                     try fail("needs-attention", "Claude 窗口已改变，自动连接已停止，请重试")
                 }

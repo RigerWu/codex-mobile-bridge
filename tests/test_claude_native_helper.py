@@ -83,6 +83,14 @@ print("15 desktop-state fixtures passed without GUI APIs")
 
 @unittest.skipUnless(sys.platform == 'darwin' and shutil.which('swiftc'), 'macOS Swift compiler required')
 class NativeConsoleSelectors(unittest.TestCase):
+    def test_product_console_accepts_only_same_process_devtools_when_refocused(self):
+        harness = ROOT/'tests/fixtures/claude_console_ax_harness.py'
+        result = subprocess.run([sys.executable, str(harness)], capture_output=True, text=True, timeout=90)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn('existing_open_refocus: result=success', result.stdout)
+        for case in ('other_app_refocus', 'ordinary_refocus', 'ambiguous_refocus'):
+            self.assertIn(case + ': result=needs-attention', result.stdout)
+
     def test_observed_console_selectors_submission_and_window_guards(self):
         with tempfile.TemporaryDirectory(dir=ROOT/'.tmp') as folder:
             folder = Path(folder)

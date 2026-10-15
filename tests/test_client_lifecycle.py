@@ -23,6 +23,8 @@ class ClientLifecycleTests(unittest.TestCase):
         self.root = Path(self.temp.name)
         self.claude, self.dsh = Mock(), Mock()
         self.claude.status.return_value = {'connected': True}
+        self.claude.desktop_listing.return_value = {'connected': True, 'sessions': [
+            {'id': 'one', 'status': 'idle', 'runtimeKnown': True, 'requests': []}]}
         self.claude.call.side_effect = lambda action, *args: ({'connected': True, 'complete': True,
             'sessions': [{'id': 'one', 'status': 'idle', 'runtimeKnown': True, 'requests': []}]} if action == 'list' else {'models': [{'id': 'model'}]})
         self.dsh.reused = False
@@ -699,6 +701,18 @@ class ClientLifecycleTests(unittest.TestCase):
         self.launch.assert_called_once()
         self.claude.connect.assert_not_called()
         self.claude.reconnect.assert_called_once_with()
+
+    def test_cli_only_cold_status_does_not_start_desktop(self):
+        self.claude.status.return_value = {'connected': False, 'cliAvailable': True,
+                                           'cliAuthReady': False}
+        for platform in ('darwin', 'win32'):
+            with self.subTest(platform=platform), patch('bridge.clients.manager.sys.platform', platform):
+                row = next(row for row in self.manager.toggle_client(
+                    {'provider': 'claude', 'enabled': True})['clients'] if row['id'] == 'claude')
+                self.assertTrue(row['selectable'])
+                self.launch.assert_not_called()
+                self.claude.connect.assert_not_called()
+                self.claude.reconnect.assert_not_called()
 
     def test_macos_account_recovery_only_restores_existing_connection(self):
         self.manager._launch_account_client('claude', self.manager._descriptor('claude'))

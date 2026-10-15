@@ -265,7 +265,7 @@ const en={
 "当前 Linux 运行环境不支持安全强制关闭，请在电脑端退出应用":"This Linux runtime cannot safely force quit apps. Quit the app on your computer.",
 "此系统不支持客户端强制结束":"This system does not support force quitting desktop clients.",
 "已核验电脑端安装版本已更新":"The installed desktop version has been verified as updated",
-"CMD 跨盘切换请使用 cd /d。":"In CMD, use cd /d to change both the drive and directory.",
+"跨盘切换示例：cd /d D:\\（进入 D 盘根目录）。":"Example: cd /d D:\\ switches to the root of drive D.",
 "强制关闭 App":"Force quit App",
 "关闭电脑 App…":"Close desktop app…",
 "强制关闭确认":"Confirm force quit",

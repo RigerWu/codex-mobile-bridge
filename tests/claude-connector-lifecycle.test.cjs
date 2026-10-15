@@ -7,7 +7,7 @@ const packet=(cfg,value)=>{const payload=JSON.stringify({generation:cfg.generati
 const waitFor=async predicate=>{const until=Date.now()+3000;while(!predicate()){if(Date.now()>until)throw Error('timeout');await new Promise(resolve=>setTimeout(resolve,10));}};
 function runtime(configs,{fastTimeouts=false}={}){
  const requests=new Map(configs.map(cfg=>[cfg.cwd,packet(cfg,{type:'idle',seq:0})]));
- const writes=[],calls=[];let nativeStops=0,delayRead=false,readHeld=false,releaseRead,delayWrite=false,releaseWrite,delaySign=false,signHeld=false,releaseSign;
+ const writes=[],calls=[],errors=[];let nativeStops=0,delayRead=false,readHeld=false,releaseRead,delayWrite=false,releaseWrite,delaySign=false,signHeld=false,releaseSign;
  const original=function(models){return models;};
  const api={setAvailableCodeModels:original,
   async getAll(){return configs.map((cfg,i)=>({sessionId:'session-'+i,cwd:cfg.cwd,title:'Codex Bridge Connector'}));},
@@ -20,9 +20,9 @@ function runtime(configs,{fastTimeouts=false}={}){
  const crypto={subtle:{importKey:(...args)=>webcrypto.subtle.importKey(...args),verify:(...args)=>webcrypto.subtle.verify(...args),
   sign:(...args)=>delaySign?(delaySign=false,signHeld=true,new Promise(resolve=>{releaseSign=()=>webcrypto.subtle.sign(...args).then(resolve);})):webcrypto.subtle.sign(...args)}};
  const context={window,crypto,TextEncoder,Uint8Array,Date,
-  setTimeout:(fn,ms)=>setTimeout(fn,fastTimeouts&&ms===4000?30:ms),clearTimeout,console:{info(){},error(){}}};
+  setTimeout:(fn,ms)=>setTimeout(fn,fastTimeouts&&ms===4000?30:ms),clearTimeout,console:{info(){},error(message){errors.push(message);}}};
  const inject=cfg=>vm.runInNewContext(template.replace('__BRIDGE_CONFIG__',JSON.stringify(cfg)),context);
- return {window,api,writes,calls,requests,original,inject,nativeStops:()=>nativeStops,delayNextRead(){delayRead=true;},readPending(){return readHeld;},releaseRead(contents){releaseRead(contents);},delayNextSign(){delaySign=true;},signPending(){return signHeld;},releaseSign(){releaseSign();},delayNextWrite(){delayWrite=true;},writePending(){return !!releaseWrite;},releaseWrite(){delayWrite=false;releaseWrite();}};
+ return {window,api,writes,calls,errors,requests,original,inject,nativeStops:()=>nativeStops,delayNextRead(){delayRead=true;},readPending(){return readHeld;},releaseRead(contents){releaseRead(contents);},delayNextSign(){delaySign=true;},signPending(){return signHeld;},releaseSign(){releaseSign();},delayNextWrite(){delayWrite=true;},writePending(){return !!releaseWrite;},releaseWrite(){delayWrite=false;releaseWrite();}};
 }
 test('signed stop detaches one gateway and permits a different workspace to connect',async()=>{
  const first=config('/gateway-a','first'),second=config('/gateway-b','second'),ui=runtime([first,second]);
@@ -66,6 +66,7 @@ test('two injectors awaiting one handoff cannot both own the renderer',async()=>
  const results=await Promise.all(attempts);await oldRunning;
  assert.equal(results.filter(row=>row.ok).length,1);
  assert.match(results.find(row=>!row.ok).error.message,/状态已变化/);
+ assert.match(ui.errors.at(-1),/BRIDGE_OWNER_UNCONFIRMED.*\[(second|third)\]/);
  assert.equal(ui.nativeStops(),0);
 });
 test('an unread signed request prevents foreign handoff',async()=>{
@@ -74,6 +75,7 @@ test('an unread signed request prevents foreign handoff',async()=>{
  const old=ui.window.__claudeMobileBridge;
  ui.requests.set(first.cwd,packet(first,{type:'request',seq:1,surface:'code',method:'getAll',args:[],expires:0}));
  await assert.rejects(ui.inject(second),/未确认请求/);
+ assert.match(ui.errors.at(-1),/BRIDGE_OWNER_UNCONFIRMED.*\[second\]/);
  assert.equal(ui.window.__claudeMobileBridge,old);
  assert.equal(old.status().stopped,false);
  old.stop();await oldRunning;
@@ -98,6 +100,7 @@ test('foreign handoff waits for a pending response write',async()=>{
  ui.requests.set(first.cwd,packet(first,{type:'request',seq:1,surface:'code',method:'getAll',args:[],expires:0}));
  await waitFor(()=>old.status().writing&&ui.writePending());
  await assert.rejects(ui.inject(second),/请求进行中/);
+ assert.match(ui.errors.at(-1),/BRIDGE_OWNER_BUSY.*\[second\]/);
  assert.equal(ui.window.__claudeMobileBridge,old);
  ui.releaseWrite();old.stop();await oldRunning;
 });

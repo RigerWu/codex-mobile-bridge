@@ -15,6 +15,12 @@
   };
   const sameWorkspace = cwd => typeof cwd === 'string' &&
     normalizedWorkspace(cwd) === normalizedWorkspace(config.cwd);
+  function ownerError(code, message) {
+    window.__codingRemoteInjectionError = message;
+    console.error('Error: BRIDGE_OWNER_' + code + ' ' + message + ' [' +
+      (config.inspectionMarker || config.generation) + ']');
+    throw new Error(message);
+  }
   const existing = window.__claudeMobileBridge;
   let sameOwner = false, canHandoff = false;
   if (existing) {
@@ -38,22 +44,30 @@
       const message = state?.busy && !state.handoffPending || state?.writing || sameOwner ?
         'Claude 桥接仍有请求进行中，请稍后重试连接' :
         '旧版 Claude 桥接尚不能安全交接；请先在旧网关关闭 Claude 接入，或升级旧网关后重试';
-      window.__codingRemoteInjectionError = message;
-      console.error('Error: ' + message + ' [' + (config.inspectionMarker || config.generation) + ']');
-      throw new Error(message);
+      ownerError(state?.busy && !state.handoffPending || state?.writing ? 'BUSY' : 'LEGACY', message);
     }
   }
   async function replaceExisting() {
     if (!existing) return;
-    if (!sameOwner && existing.status()?.suspended !== true) {
-      if (!canHandoff || !await existing.handoff(config.cwd))
-        throw new Error('旧网关仍有未确认请求或未完成接替，请在旧网关检查结果后重试');
+    let state;
+    try { state = existing.status(); } catch {
+      ownerError('UNCONFIRMED', 'Claude 桥接状态已变化，请刷新后重试连接');
     }
-    const state = existing.status();
+    if (!sameOwner && state?.suspended !== true) {
+      let released = false;
+      try { released = canHandoff && await existing.handoff(config.cwd); } catch {}
+      if (!released)
+        ownerError('UNCONFIRMED', '旧网关仍有未确认请求或未完成接替，请在旧网关检查结果后重试');
+    }
+    try { state = existing.status(); } catch {
+      ownerError('UNCONFIRMED', 'Claude 桥接状态已变化，请刷新后重试连接');
+    }
     if (!state || window.__claudeMobileBridge !== existing || state.busy || state.writing ||
         !sameOwner && state.suspended !== true)
-      throw new Error('Claude 桥接状态已变化，请刷新后重试连接');
-    existing.stop();
+      ownerError('UNCONFIRMED', 'Claude 桥接状态已变化，请刷新后重试连接');
+    try { existing.stop(); } catch {
+      ownerError('UNCONFIRMED', 'Claude 桥接状态已变化，请刷新后重试连接');
+    }
   }
   const encoder = new TextEncoder();
   const key = await crypto.subtle.importKey('raw', encoder.encode(config.token),
@@ -110,7 +124,7 @@
     await replaceExisting();
     // A second injector may have completed the same asynchronous handoff.
     if (window.__claudeMobileBridge !== existing)
-      throw new Error('Claude 桥接状态已变化，请刷新后重试连接');
+      ownerError('UNCONFIRMED', 'Claude 桥接状态已变化，请刷新后重试连接');
     try {
       installObservers();
       window.__claudeMobileBridge = bridge;

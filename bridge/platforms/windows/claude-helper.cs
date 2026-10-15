@@ -56,6 +56,13 @@ class ClaudeKeyboard {
     static int quitPid;
     static int session=Process.GetCurrentProcess().SessionId;
     static void Stage(string text) {Console.WriteLine(text);Console.Out.Flush();}
+    static string OwnerIssue(string value,string marker) {
+        if(String.IsNullOrEmpty(marker)||!value.Contains("["+marker+"]"))return null;
+        if(value.Contains("BRIDGE_OWNER_BUSY"))return "OWNER_BUSY";
+        if(value.Contains("BRIDGE_OWNER_UNCONFIRMED"))return "OWNER_UNCONFIRMED";
+        if(value.Contains("BRIDGE_OWNER_LEGACY")||value.Contains("Claude 桥接连接被其他网关占用"))return "OWNER_LEGACY";
+        return null;
+    }
     static string DesktopName(IntPtr desktop) {
         var value=new StringBuilder(256);uint needed;
         return desktop!=IntPtr.Zero&&GetUserObjectInformation(desktop,2,value,512,out needed)?value.ToString():null;
@@ -1268,6 +1275,12 @@ class ClaudeKeyboard {
         Console.OutputEncoding=new UTF8Encoding(false);
         try {
             if(args.Length==1&&args[0]=="--self-check") {
+                if(OwnerIssue("Error: BRIDGE_OWNER_BUSY [current]","current")!="OWNER_BUSY"||
+                   OwnerIssue("Error: BRIDGE_OWNER_UNCONFIRMED [current]","current")!="OWNER_UNCONFIRMED"||
+                   OwnerIssue("Error: BRIDGE_OWNER_LEGACY [current]","current")!="OWNER_LEGACY"||
+                   OwnerIssue("Error: Claude 桥接连接被其他网关占用 [current]","current")!="OWNER_LEGACY"||
+                   OwnerIssue("Error: BRIDGE_OWNER_BUSY [old]","current")!=null||
+                   OwnerIssue("Error: BRIDGE_OWNER_BUSY", "current")!=null)throw new Exception("桥接错误隔离自检失败");
                 if(Marshal.SizeOf(typeof(INPUT))!=(IntPtr.Size==8?40:28)||!PromptName("Console prompt","")||PromptName("Message Claude","")) throw new Exception("键盘组件自检失败");
                 if(ReadContents("script","")!="script"||ReadContents("","value")!="value"||ReadContents(null,"value")!="value"||ReadContents("",null)!="")throw new Exception("Console 文本读取自检失败");
                 if(!DevToolsTitle("Developer Tools - app://localhost/new")||!DevToolsTitle("DevTools - app://localhost")||DevToolsTitle("Claude"))throw new Exception("开发者工具窗口匹配自检失败");
@@ -1305,7 +1318,8 @@ class ClaudeKeyboard {
                 var texts=AutomationElement.FromHandle(WaitAppWindow(process,false)).FindAll(TreeScope.Descendants,new PropertyCondition(AutomationElement.ControlTypeProperty,ControlType.Text));
                 foreach(AutomationElement item in texts) {
                     string value=item.Current.Name;
-                    if(args.Length==4 && value.Contains("Claude 桥接连接被其他网关占用") && value.Contains("["+args[3]+"]")) {Stage("OWNER_CONFLICT");return 0;}
+                    string ownerIssue=args.Length==4?OwnerIssue(value,args[3]):null;
+                    if(ownerIssue!=null) {Stage(ownerIssue);return 0;}
                     if((value.StartsWith("Error:")||value.StartsWith("Uncaught"))&&(value.Contains("尚未信任目录")||value.Contains("WorkspaceTrustError")||value.Contains("trust_required"))) {Stage("NEEDS_TRUST");return 0;}
                 }
                 Stage("NO_TRUST_ERROR");return 0;

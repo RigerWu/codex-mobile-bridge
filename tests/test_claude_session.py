@@ -150,7 +150,8 @@ class ClaudeSessionTests(unittest.TestCase):
             with self.subTest(replacement=replacement):
                 self.adapter.setup_cancel = threading.Event()
                 original = self.adapter.setup_cancel
-                self.adapter.desktop = Mock(connected=False, capabilities={})
+                self.adapter.desktop = Mock(connected=False, capabilities={}, unconfirmed_mutations=set())
+                self.adapter.desktop.lock.locked.return_value = False
                 def native(action, **kwargs):
                     if action == 'connect':
                         self.adapter.desktop.connected = True

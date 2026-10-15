@@ -498,6 +498,14 @@ class Claude:
                                     'Claude 桌面连接暂未响应，请检查电脑端状态后重试；未重启客户端')
                                 return
                         self.connection_probe_failed = False
+                        # The signed renderer receipt (and required read probe)
+                        # makes the mailbox usable. Closing DevTools is separate
+                        # UI cleanup and must not keep normal calls blocked.
+                        with self.setup_lock:
+                            if not self._attempt_state(cancel, 'connected', '桌面连接可用',
+                                                       consoleCleanupPending=True):
+                                return
+                            self.reconnecting = False
                         try:
                             cleanup = native_action('close-devtools', pid=pid, executable=executable, cancelled=cancel)
                             pending = cleanup.get('setupState') not in ('connected', 'submitted')

@@ -58,6 +58,13 @@ func output(_ state: String, _ reason: String) {
     let data = try! JSONSerialization.data(withJSONObject: value)
     print(String(data: data, encoding: .utf8)!)
 }
+func bridgeOwnerIssue(_ value: String, marker: String) -> String? {
+    guard value.contains("[\(marker)]") else { return nil }
+    if value.contains("BRIDGE_OWNER_BUSY") { return "busy" }
+    if value.contains("BRIDGE_OWNER_UNCONFIRMED") { return "unconfirmed" }
+    if value.contains("BRIDGE_OWNER_LEGACY") || value.contains("Claude 桥接连接被其他网关占用") { return "legacy" }
+    return nil
+}
 func attribute(_ element: AXUIElement, _ name: String) -> CFTypeRef? {
     var value: CFTypeRef?
     return AXUIElementCopyAttributeValue(element, name as CFString, &value) == .success ? value : nil
@@ -367,10 +374,15 @@ final class Connector {
         let conflict = marker.flatMap { expected in find(root, matching: {
             guard text($0, kAXRoleAttribute) == "AXStaticText" else { return false }
             let value = text($0, kAXValueAttribute).isEmpty ? text($0, kAXTitleAttribute) : text($0, kAXValueAttribute)
-            return value.contains("Claude 桥接连接被其他网关占用") && value.contains("[\(expected)]")
+            return bridgeOwnerIssue(value, marker: expected) != nil
         }) }
-        if conflict != nil {
-            output("owner-conflict", "Claude 桥接连接被其他网关占用，请先停止旧网关；旧版连接还需重新加载 Claude")
+        if let conflict = conflict, let marker = marker {
+            let value = text(conflict, kAXValueAttribute).isEmpty ? text(conflict, kAXTitleAttribute) : text(conflict, kAXValueAttribute)
+            let issue = bridgeOwnerIssue(value, marker: marker)
+            let reason = issue == "busy" ? "Claude 桥接仍有请求进行中，请稍后重试连接" :
+                issue == "unconfirmed" ? "旧网关仍有未确认请求或未完成接替，请在旧网关检查结果后重试" :
+                "旧版 Claude 桥接尚不能安全交接；请先在旧网关关闭 Claude 接入，或升级旧网关后重试"
+            output("owner-conflict", reason)
             return
         }
         let error = find(root, matching: {

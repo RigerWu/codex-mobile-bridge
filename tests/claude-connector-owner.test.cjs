@@ -1,10 +1,10 @@
 'use strict';
 const test=require('node:test'),assert=require('node:assert/strict'),fs=require('node:fs'),vm=require('node:vm');
 const {webcrypto,createHmac}=require('node:crypto');
-const config={cwd:'/gateway-b',request:'request.json',response:'response.json',token:'fixture',generation:'generation-b',reconnect:true,connectorRevision:5};
+const config={cwd:'/gateway-b',request:'request.json',response:'response.json',token:'fixture',generation:'generation-b',inspectionMarker:'current-attempt',reconnect:true,connectorRevision:5};
 const source=fs.readFileSync('bridge/clients/claude/connector.js','utf8').replace('__BRIDGE_CONFIG__',JSON.stringify(config));
 function fixture(old,ownerCwd='/gateway-a'){
- let stopped=0,writes=0,starts=0;
+ let stopped=0,writes=0,starts=0,errors=[];
  const payload=JSON.stringify({generation:config.generation,type:'idle',seq:0});
  const envelope=JSON.stringify({payload,signature:createHmac('sha256',config.token).update(payload).digest('hex')});
  const api={
@@ -14,20 +14,22 @@ function fixture(old,ownerCwd='/gateway-a'){
   async start(){starts++;return {sessionId:'new-session'};}
  };
  const window={'claude.web':{LocalSessions:api},__claudeMobileBridge:{
-  status:()=>old,stop(){stopped++;},...(old?.owns?{owns:old.owns}:{})}};
- const context={window,crypto:webcrypto,TextEncoder,Uint8Array,Date,setTimeout,clearTimeout,console:{info(){},error(){}}};
- return {window,run:()=>vm.runInNewContext(source,context),counts:()=>({stopped,writes,starts})};
+  status:()=>old,stop(){stopped++;},...(old?.owns?{owns:old.owns}:{}),
+  ...(old?.handoff?{handoff:old.handoff}:{})}};
+ const context={window,crypto:webcrypto,TextEncoder,Uint8Array,Date,setTimeout,clearTimeout,console:{info(){},error(message){errors.push(message);}}};
+ return {window,run:()=>vm.runInNewContext(source,context),counts:()=>({stopped,writes,starts}),errors};
 }
 for(const [name,status] of [
  ['live foreign legacy owner',{transport:'file',stopped:false,busy:false,sessionId:'legacy-session',lastWrite:Date.now()}],
  ['stale foreign legacy owner',{transport:'file',stopped:false,busy:false,sessionId:'legacy-session',lastWrite:1}],
  ['live foreign current owner',{transport:'file',stopped:false,busy:false,owns:()=>false,lastWrite:Date.now()}],
  ['unknown legacy owner',{transport:'file',stopped:false,busy:false,sessionId:'missing',lastWrite:Date.now()}]
-])test(name+' remains intact and reports conflict',async()=>{
+])test(name+' remains intact and reports an upgrade boundary',async()=>{
  const ui=fixture(status);
- await assert.rejects(ui.run(),/其他网关占用/);
+ await assert.rejects(ui.run(),/旧版 Claude 桥接尚不能安全交接/);
  assert.deepEqual(ui.counts(),{stopped:0,writes:0,starts:0});
- assert.match(ui.window.__codingRemoteInjectionError,/其他网关占用/);
+ assert.match(ui.window.__codingRemoteInjectionError,/关闭 Claude 接入.*升级旧网关/);
+ assert.match(ui.errors.at(-1),/BRIDGE_OWNER_LEGACY.*\[current-attempt\]/);
 });
 test('legacy same workspace may be replaced without exposing its token',async()=>{
  const ui=fixture({transport:'file',stopped:false,busy:false,sessionId:'legacy-session',lastWrite:Date.now()},config.cwd);
@@ -47,6 +49,14 @@ test('pending request or response write blocks even same-owner replacement',asyn
 });
 test('legacy stopped flag alone does not prove a signed release',async()=>{
  const ui=fixture({transport:'file',stopped:true,busy:false,sessionId:'legacy-session'});
- await assert.rejects(ui.run(),/其他网关占用/);
+ await assert.rejects(ui.run(),/旧版 Claude 桥接尚不能安全交接/);
+ assert.equal(ui.counts().stopped,0);
+});
+test('a handoff method with a different protocol revision is not trusted',async()=>{
+ let calls=0;
+ const ui=fixture({transport:'file',sessionId:'legacy-session',connectorRevision:4,
+                   handoff(){calls++;return true;}});
+ await assert.rejects(ui.run(),/旧版 Claude 桥接尚不能安全交接/);
+ assert.equal(calls,0);
  assert.equal(ui.counts().stopped,0);
 });

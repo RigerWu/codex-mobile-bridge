@@ -13,8 +13,39 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 
 
+class WindowsOwnerErrorSource(unittest.TestCase):
+    def test_native_helper_preserves_attempt_marker_and_emits_distinct_codes(self):
+        source = (ROOT/'bridge/platforms/windows/claude-helper.cs').read_text()
+        mapping = source[source.index('    static string OwnerIssue('):source.index('    static string DesktopName(')]
+        self.assertIn('value.Contains("["+marker+"]")', mapping)
+        for code in ('OWNER_BUSY', 'OWNER_UNCONFIRMED', 'OWNER_LEGACY'):
+            self.assertIn('return "'+code+'"', mapping)
+        self.assertIn('OwnerIssue(value,args[3])', source)
+        self.assertIn('if(ownerIssue!=null) {Stage(ownerIssue);return 0;}', source)
+
+
 @unittest.skipUnless(shutil.which('swift'), 'Swift interpreter required')
 class DesktopSessionGuards(unittest.TestCase):
+    def test_owner_errors_require_this_attempt_marker(self):
+        source = (ROOT/'bridge/platforms/macos/claude-helper.swift').read_text()
+        pure = source[source.index('func bridgeOwnerIssue('):source.index('func attribute(')]
+        fixture = '''import Foundation
+''' + pure + '''
+precondition(bridgeOwnerIssue("Error: BRIDGE_OWNER_BUSY [current]", marker: "current") == "busy")
+precondition(bridgeOwnerIssue("Error: BRIDGE_OWNER_UNCONFIRMED [current]", marker: "current") == "unconfirmed")
+precondition(bridgeOwnerIssue("Error: BRIDGE_OWNER_LEGACY [current]", marker: "current") == "legacy")
+precondition(bridgeOwnerIssue("Error: Claude 桥接连接被其他网关占用 [current]", marker: "current") == "legacy")
+precondition(bridgeOwnerIssue("Error: BRIDGE_OWNER_BUSY [old]", marker: "current") == nil)
+precondition(bridgeOwnerIssue("Error: BRIDGE_OWNER_BUSY", marker: "current") == nil)
+print("owner error marker fixtures passed")
+'''
+        with tempfile.TemporaryDirectory(dir=ROOT/'.tmp') as folder:
+            folder = Path(folder); script = folder/'owner-errors.swift'; script.write_text(fixture)
+            result = subprocess.run(['swift', '-module-cache-path', str(folder/'modules'), str(script)],
+                                    capture_output=True, text=True, timeout=90)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn('owner error marker fixtures passed', result.stdout)
+
     def test_pure_state_guards_without_starting_native_helper_or_reading_desktop(self):
         source = (ROOT/'bridge/platforms/macos/claude-helper.swift').read_text()
         pure = source[source.index('func desktopIssue('):source.index('func currentDesktopIssue(')]

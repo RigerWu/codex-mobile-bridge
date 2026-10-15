@@ -1,5 +1,5 @@
 'use strict';
-const fs=require('node:fs'),os=require('node:os'),path=require('node:path');
+const fs=require('node:fs'),path=require('node:path');
 const {execFileSync}=require('node:child_process');
 const asar=require('@electron/asar');
 
@@ -27,7 +27,9 @@ Module._resolveFilename=function(request,parent,...rest){
 `;
 
 function verifyAsar(archive){
-  const extracted=fs.mkdtempSync(path.join(os.tmpdir(),'cmb-packaged-qr-'));
+  const temporary=path.resolve(__dirname,'../.tmp');
+  fs.mkdirSync(temporary,{recursive:true});
+  const extracted=fs.mkdtempSync(path.join(temporary,'packaged-qr-'));
   try{
     asar.extractAll(archive,extracted);
     execFileSync(process.execPath,['--no-global-search-paths','-e',check,extracted],{

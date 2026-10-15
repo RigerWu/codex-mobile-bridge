@@ -47,7 +47,7 @@ test('the packaged QR renderer loads only its archive and generates a PNG',async
     fs.rmSync(path.join(app,'node_modules/dijkstrajs'),{recursive:true});
     const missing=path.join(temporary,'missing.asar');
     await asar.createPackage(app,missing);
-    assert.throws(()=>verify.verifyAsar(missing),/Cannot find module 'dijkstrajs'/);
+    assert.throws(()=>verify.verifyAsar(missing),/Packaged QR dependency escaped app\.asar: dijkstrajs|Cannot find module 'dijkstrajs'/);
   }finally{
     fs.rmSync(temporary,{recursive:true,force:true});
   }

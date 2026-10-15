@@ -1006,6 +1006,12 @@ class ClaudeKeyboard {
         CheckPrompt(prompt);
         Send(new[]{Key(39,false),Key(39,true)});
     }
+    static void SubmitConsoleAtEnd(Action check,Action<INPUT[]> send) {
+        check();
+        send(new[]{Key(17,false),Key(35,false),Key(35,true),Key(17,true)});
+        check();
+        send(new[]{Key(13,false),Key(13,true)});
+    }
     static void WriteConsoleOnce(AutomationElement prompt,string text) {
         CheckPrompt(prompt);
         object valueObject,textObject;
@@ -1019,7 +1025,7 @@ class ClaudeKeyboard {
             ()=>document.DocumentRange.GetText(-1).TrimEnd('\r','\n'),()=>CheckPrompt(prompt),
             ()=>Thread.Sleep(50),()=>timer.Elapsed.TotalSeconds>=6,delegate {
                 Stage("脚本已完整写入并核对，正在提交");
-                Send(new[]{Key(13,false),Key(13,true)});
+                SubmitConsoleAtEnd(()=>CheckPrompt(prompt),Send);
             },false,()=>RefreshConsoleReadback(prompt,document,text,()=>timer.Elapsed.TotalSeconds>=6),
             ()=>timer.ElapsedMilliseconds>=250);
     }
@@ -1165,6 +1171,30 @@ class ClaudeKeyboard {
             },()=>true);}
         catch(Exception){refused=true;}
         if(!refused||writes!=1||submits!=0||refreshes!=1||pauses!=2)throw new Exception("Console 刷新总超时自检失败");
+        var sequence=new List<string>();var keyBatches=new List<INPUT[]>();
+        SubmitVerifiedConsole(text,()=>"",value=>sequence.Add("write"),
+            ()=>{sequence.Add("read");return text;},()=>{},()=>{},()=>false,delegate {
+                SubmitConsoleAtEnd(()=>sequence.Add("check"),keys=>{
+                    keyBatches.Add(keys);sequence.Add(keyBatches.Count==1?"end":"enter");
+                });
+            },false);
+        if(String.Join(",",sequence.ToArray())!="write,read,check,end,check,enter"||keyBatches.Count!=2)
+            throw new Exception("Console 全文核对后文末提交顺序自检失败");
+        var endKeys=keyBatches[0];var enterKeys=keyBatches[1];
+        if(endKeys.Length!=4||endKeys[0].data.key.vk!=17||endKeys[0].data.key.flags!=0||
+            endKeys[1].data.key.vk!=35||endKeys[1].data.key.flags!=0||
+            endKeys[2].data.key.vk!=35||endKeys[2].data.key.flags!=2||
+            endKeys[3].data.key.vk!=17||endKeys[3].data.key.flags!=2||
+            enterKeys.Length!=2||enterKeys[0].data.key.vk!=13||enterKeys[0].data.key.flags!=0||
+            enterKeys[1].data.key.vk!=13||enterKeys[1].data.key.flags!=2)
+            throw new Exception("Console 文末与 Enter 按键释放配对自检失败");
+        keyBatches.Clear();checks=0;refused=false;
+        try {SubmitVerifiedConsole(text,()=>"",value=>{},()=>text,()=>{},()=>{},()=>false,
+            ()=>SubmitConsoleAtEnd(()=>{if(++checks==2)throw new Exception("focus changed");},
+                keys=>keyBatches.Add(keys)),false);}
+        catch(Exception){refused=true;}
+        if(!refused||keyBatches.Count!=1||keyBatches[0][0].data.key.vk!=17)
+            throw new Exception("Console 文末导航后失焦不得提交自检失败");
     }
     static void CheckDetachedReuse() {
         var tools=new AppWindow {Handle=new IntPtr(21),Pid=7,Visible=true,Title="DevTools - app://localhost"};

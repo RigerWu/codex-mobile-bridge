@@ -31,6 +31,7 @@
     "appId": "io.github.try2love.codexmobilebridge",
     "productName": "Codex Mobile Bridge",
     "beforePack": "./scripts/verify-build.cjs",
+    "afterPack": "./scripts/verify-packaged-qr.cjs",
     "directories": {
       "output": "dist/desktop"
     },

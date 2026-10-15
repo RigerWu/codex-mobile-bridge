@@ -59,6 +59,7 @@ def api():
     kernel = C.WinDLL('kernel32', use_last_error=True)
     signatures = {
         'CreatePipe': (W.BOOL, [C.POINTER(W.HANDLE), C.POINTER(W.HANDLE), C.c_void_p, W.DWORD]),
+        'SetConsoleCtrlHandler': (W.BOOL, [C.c_void_p, W.BOOL]),
         'CreatePseudoConsole': (C.c_long, [COORD, W.HANDLE, W.HANDLE, W.DWORD, C.POINTER(W.HANDLE)]),
         'ResizePseudoConsole': (C.c_long, [W.HANDLE, COORD]), 'ClosePseudoConsole': (None, [W.HANDLE]),
         'InitializeProcThreadAttributeList': (W.BOOL, [C.c_void_p, W.DWORD, W.DWORD, C.POINTER(C.c_size_t)]),
@@ -90,6 +91,8 @@ def checked(result):
 def child_main(shell):
     # The Python bootstrap may retain redirected CRT descriptors after ConPTY
     # attaches. Pass fresh console handles to cmd and its external children.
+    # The launcher may also inherit Ctrl+C ignore from its process group.
+    checked(api().SetConsoleCtrlHandler(None, False))
     with open('CONIN$', 'rb', buffering=0) as source, open('CONOUT$', 'wb', buffering=0) as sink:
         raise SystemExit(subprocess.call([shell], stdin=source, stdout=sink, stderr=sink))
 

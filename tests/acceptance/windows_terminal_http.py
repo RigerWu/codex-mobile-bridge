@@ -1,27 +1,36 @@
 #!/usr/bin/env python3
-"""Exercise an installed Windows gateway's terminal HTTP route in isolation.
+"""Isolated Windows HTTP terminal acceptance with an installed ConPTY child.
 
-Usage: python tests/acceptance/windows_terminal_http.py --gateway ABSOLUTE_EXE --test-root ABSOLUTE_DOT_TMP_DIR
-The script creates a synthetic Codex history row; it never starts a model CLI.
+This runs the source HTTP router with a synthetic chat and no client manager.
+The supplied installed gateway executable is launched only as the terminal
+bootstrap. No Codex or Claude client can be activated by this fixture.
 """
 import argparse
-import hashlib
 import http.client
 import json
 import os
 from pathlib import Path
 import secrets
-import socket
-import sqlite3
-import subprocess
 import sys
+import threading
 import time
 import uuid
+from unittest.mock import patch
 
 
 def require(value, message):
     if not value:
         raise AssertionError(message)
+
+
+def until(check, description, seconds=15):
+    deadline = time.monotonic() + seconds
+    while time.monotonic() < deadline:
+        value = check()
+        if value:
+            return value
+        time.sleep(.1)
+    raise AssertionError(description + ' timed out')
 
 
 class HTTP:
@@ -41,9 +50,7 @@ class HTTP:
         try:
             connection.request(method, path, json.dumps(body) if body is not None else None, headers)
             reply = connection.getresponse()
-            raw = reply.read()
-            status = reply.status
-            cookie = reply.getheader('Set-Cookie')
+            status, raw, cookie = reply.status, reply.read(), reply.getheader('Set-Cookie')
         finally:
             connection.close()
         self.trace.append({'method': method, 'route': path.split('?', 1)[0], 'status': status})
@@ -57,73 +64,60 @@ class HTTP:
     def login(self, password):
         status, value, cookie = self.request('POST', '/api/login',
                                               {'username': 'admin', 'password': password})
-        require(status == 200 and cookie and value.get('csrf'), 'Installed gateway login failed')
+        require(status == 200 and cookie and value.get('csrf'), 'HTTP login failed')
         self.cookie = cookie.split(';', 1)[0]
         self.csrf = value['csrf']
 
 
-def until(check, description, seconds=15):
-    deadline = time.monotonic() + seconds
-    while time.monotonic() < deadline:
-        try:
-            value = check()
-        except OSError:
-            value = None
-        if value:
-            return value
-        time.sleep(.1)
-    raise AssertionError(description + ' timed out')
-
-
-def free_port():
-    with socket.socket() as listener:
-        listener.bind(('127.0.0.1', 0))
-        return listener.getsockname()[1]
-
-
-def password_record(password):
-    salt = secrets.token_bytes(16)
-    return {'algorithm': 'pbkdf2-sha256', 'iterations': 600000, 'salt': salt.hex(),
-            'hash': hashlib.pbkdf2_hmac('sha256', password.encode(), salt, 600000).hex()}
-
-
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('--gateway', type=Path, required=True)
-    parser.add_argument('--test-root', type=Path, required=True)
+    parser.add_argument('--gateway', type=Path, required=True, help='Installed Test gateway exe used as ConPTY child')
+    parser.add_argument('--test-root', type=Path, required=True, help='Isolated project .tmp directory')
     args = parser.parse_args()
     require(sys.platform == 'win32', 'This acceptance requires Windows ConPTY')
     gateway = args.gateway.resolve(strict=True)
     require(gateway.is_file() and gateway.name.lower().endswith('.exe'), 'Supply an installed gateway exe')
     test_root = args.test_root.absolute()
-    require('.tmp' in test_root.parts and not test_root.is_symlink(), 'Use an isolated project .tmp directory')
+    require('.tmp' in test_root.parts and not test_root.is_symlink(), 'Use a project .tmp directory')
     run = test_root / ('terminal-http-' + uuid.uuid4().hex[:8])
-    run.mkdir(parents=True)
-    data, home, workspace = (run / name for name in ('data', 'codex-home', 'workspace'))
-    for path in (data, home, workspace, workspace / 'nested'):
-        path.mkdir()
+    workspace = run / 'workspace'
+    (workspace / 'nested').mkdir(parents=True)
+
+    source_root = Path(__file__).resolve().parents[2]
+    sys.path.insert(0, str(source_root))
+    from bridge.api.httpd import GatewayServer
+    from bridge.app.service import Bridge
+    from bridge.features.auth.auth import password_record
+    from bridge.features.terminals.manager import TerminalManager
+
     thread_id, tab_id = str(uuid.uuid4()), str(uuid.uuid4())
-    with sqlite3.connect(home / 'state_fixture.sqlite') as db:
-        db.execute('CREATE TABLE threads (id TEXT PRIMARY KEY, cwd TEXT, title TEXT, originator TEXT, '
-                   'updated_at INTEGER, archived INTEGER)')
-        db.execute('INSERT INTO threads VALUES (?, ?, ?, ?, ?, ?)',
-                   (thread_id, str(workspace), 'Terminal acceptance', 'Codex Desktop', int(time.time()), 0))
+    class SyntheticBridge:
+        host = 'local'
+        def __init__(self):
+            self.store = type('Store', (), {'get': lambda _, identifier: {'cwd': str(workspace)}
+                              if identifier == thread_id else None})()
+            self.terminals = TerminalManager()
+        def for_host(self, host):
+            if host != 'local': raise KeyError(host)
+            return self
+        terminal = Bridge.terminal
+        def close(self):
+            self.terminals.close()
+
     password = secrets.token_urlsafe(18)
-    port = free_port()
-    (data / 'config.json').write_text(json.dumps({'auth': {'mode': 'password', 'username': 'admin',
-        **password_record(password)}, 'origins': [], 'connections': []}), encoding='utf-8')
-    (data / 'desktop.json').write_text(json.dumps({'port': port, 'lan': False, 'tunnel': False,
-        'autoStart': False, 'connections': [], 'codexHome': str(home), 'ipcPath': '', 'codexBin': ''}), encoding='utf-8')
-    env = {**os.environ, 'CODEX_HOME': str(home), 'CMB_DATA_DIR': str(data)}
-    log = (run / 'gateway.log').open('wb')
-    process = subprocess.Popen([str(gateway), 'serve', '--data-dir', str(data)],
-                               stdin=subprocess.DEVNULL, stdout=log, stderr=subprocess.STDOUT, env=env)
+    config = {'auth': {'mode': 'password', 'username': 'admin', **password_record(password)}, 'origins': []}
+    bridge = SyntheticBridge()
+    server = GatewayServer(('127.0.0.1', 0), bridge, config, source_root / 'web')
+    port = server.server_address[1]
+    server.origins.add(f'http://127.0.0.1:{port}')
+    server.hosts.add(f'127.0.0.1:{port}')
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
     http = HTTP(port)
     path = f'/api/sessions/{thread_id}/terminal'
-    summary = {'schema': 1, 'status': 'failed', 'gateway': str(gateway), 'run': str(run),
+    summary = {'schema': 1, 'status': 'failed', 'gatewayChild': str(gateway), 'run': str(run),
                'threadId': thread_id, 'checks': {}, 'error': None}
-    cursor = 0
-    output = ''
+    cursor, output = 0, ''
 
     def poll():
         nonlocal cursor, output
@@ -132,57 +126,54 @@ def main():
         cursor = value['cursor']
         return value
 
-    def input_text(value):
-        http.checked('POST', path, {'action': 'input', 'id': tab_id, 'inputId': str(uuid.uuid4()), 'data': value})
-
     def streamed(marker):
         poll()
         return marker(output)
 
+    def input_text(value):
+        http.checked('POST', path, {'action': 'input', 'id': tab_id, 'inputId': str(uuid.uuid4()), 'data': value})
+
     try:
-        until(lambda: http.request('GET', '/api/auth')[0] == 200, 'Installed HTTP startup', 40)
         require(http.request('GET', path)[0] == 401, 'Terminal GET must require login')
         http.login(password)
         require(http.request('POST', path, {'action': 'open', 'id': tab_id, 'cols': 80, 'rows': 24}, csrf=False)[0] == 403,
                 'Terminal open must require CSRF')
         info = http.checked('GET', path)
         require(Path(info['cwd']) == workspace, 'Synthetic chat cwd was not resolved')
-        opened = http.checked('POST', path, {'action': 'open', 'id': tab_id, 'cols': 80, 'rows': 24})
+        with patch.object(sys, 'executable', str(gateway)), patch.object(sys, 'frozen', True, create=True):
+            opened = http.checked('POST', path, {'action': 'open', 'id': tab_id, 'cols': 80, 'rows': 24})
         require(opened['running'], 'ConPTY did not start')
         until(lambda: streamed(lambda text: '>' in text), 'Initial cmd prompt')
         summary['checks']['authCsrfOpen'] = True
 
         input_text('cd nested\rset CMB_HTTP_STATE=retained\r')
         reopened = http.checked('POST', path, {'action': 'open', 'id': tab_id, 'cols': 80, 'rows': 24})
-        require(reopened['running'], 'Opening the same tab restarted or closed its shell')
+        require(reopened['running'], 'Opening same tab restarted or closed its shell')
         require(http.checked('POST', path, {'action': 'resize', 'id': tab_id, 'cols': 100, 'rows': 30})['resized'],
                 'Resize failed')
         input_text('echo %CMB_HTTP_STATE%> continuity.txt\r')
         continuity = workspace / 'nested' / 'continuity.txt'
-        until(lambda: continuity.exists(), 'cd/env persistence')
+        until(continuity.exists, 'cd/env persistence')
         require(continuity.read_text().strip() == 'retained', 'Reopened tab lost cwd or environment')
         summary['checks']['reopenResizeCwdEnv'] = True
 
-        cursor = poll()['cursor']
-        output = ''
+        cursor = poll()['cursor']; output = ''
         input_text('ping 127.0.0.1 -n 2\r')
         until(lambda: streamed(lambda text: text.count('127.0.0.1') >= 3), 'Ping output', 20)
         input_text('echo done> ping-done.txt\r')
-        until(lambda: (workspace / 'nested' / 'ping-done.txt').exists(), 'Ping command completion')
+        until((workspace / 'nested' / 'ping-done.txt').exists, 'Ping command completion')
         summary['checks']['pingStream'] = True
 
-        cursor = poll()['cursor']
-        output = ''
+        cursor = poll()['cursor']; output = ''
         input_text('ping 127.0.0.1 -t\r')
         until(lambda: streamed(lambda text: text.count('127.0.0.1') >= 3), 'Continuous ping output', 20)
-        cursor = poll()['cursor']
-        output = ''
+        cursor = poll()['cursor']; output = ''
         input_text('\x03')
         until(lambda: streamed(lambda text: '>' in text), 'Prompt after Ctrl+C')
         input_text('echo survived> after-ctrl-c.txt\r')
         after = workspace / 'nested' / 'after-ctrl-c.txt'
-        until(lambda: after.exists(), 'Shell after Ctrl+C')
-        require(after.read_text().strip() == 'survived', 'Ctrl+C killed the shell')
+        until(after.exists, 'Shell after Ctrl+C')
+        require(after.read_text().strip() == 'survived', 'Ctrl+C killed shell')
         summary['checks']['ctrlCShellAlive'] = True
 
         http.checked('POST', path, {'action': 'close', 'id': tab_id})
@@ -193,20 +184,10 @@ def main():
         summary['error'] = type(exc).__name__ + ': ' + str(exc)
         raise
     finally:
+        bridge.close()
+        server.shutdown(); server.server_close(); thread.join(timeout=5)
         (run / 'http-trace.json').write_text(json.dumps(http.trace, indent=2), encoding='utf-8')
         (run / 'summary.json').write_text(json.dumps(summary, indent=2), encoding='utf-8')
-        try:
-            subprocess.run([str(gateway), 'stop', '--data-dir', str(data)], env=env,
-                           stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
-                           stderr=subprocess.DEVNULL, timeout=15)
-        except (OSError, subprocess.TimeoutExpired):
-            pass
-        try:
-            process.wait(timeout=10)
-        except subprocess.TimeoutExpired:
-            process.terminate()
-            process.wait(timeout=5)
-        log.close()
         print(json.dumps(summary, indent=2))
 
 

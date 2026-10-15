@@ -14,30 +14,56 @@ const BridgeHost = (() => {
   return Object.freeze({kind, isNativeApp, hasNativeLayout});
 })();
 if (typeof module === 'object' && module.exports) module.exports = BridgeHost;
+if(typeof document!=='undefined'&&BridgeHost.kind()==='browser')document.documentElement?.classList?.add?.('bridge-browser');
 
-// The software keyboard shrinks the visual viewport without shrinking 100dvh
-// in mobile browsers. Keep the terminal's flex layout inside the visible area.
+// Mobile browsers can pan or zoom the visual viewport around a focused editor
+// while the 100dvh shell remains tied to the layout viewport.
 if(typeof window!=='undefined'&&window.visualViewport&&typeof document!=='undefined'){
   const viewport=window.visualViewport;
-  const updateTerminalViewport=()=>{
+  let restingHeight=0;
+  let restingWidth=0;
+  let appliedHeight=null;
+  const updateEditorViewport=()=>{
     const body=document.body;
     if(!body)return;
-    const terminalInput=document.activeElement?.matches?.('.wb-terminal-input textarea, .wb-terminal-form textarea');
-    const active=BridgeHost.kind()==='browser'&&terminalInput&&viewport.scale===1&&viewport.height<window.innerHeight-100;
-    body.classList.toggle('browser-terminal-viewport',!!active);
-    body.classList.toggle('browser-terminal-keyboard',!!active);
-    if(active){
-      body.style.setProperty('--terminal-viewport-height',viewport.height+'px');
-      body.style.setProperty('--terminal-viewport-top',viewport.offsetTop+'px');
-    }else{
-      body.style.removeProperty('--terminal-viewport-height');
-      body.style.removeProperty('--terminal-viewport-top');
+    const input=document.activeElement;
+    const editor=input?.matches?.('.composer textarea, .wb-terminal-input textarea, .wb-terminal-form textarea');
+    const active=BridgeHost.kind()==='browser'&&editor;
+    const output=active&&(input.closest?.('.wb-terminal')?.querySelector('.xterm-viewport,.wb-terminal-output')
+      ||input.closest?.('.wb-side-content')?.querySelector('.wb-side-messages')
+      ||input.closest?.('.chat')?.querySelector('.timeline'));
+    const scrollTop=output?.scrollTop;
+    const atEnd=output&&output.scrollHeight-output.clientHeight-scrollTop<2;
+    if(active&&(!restingHeight||restingWidth!==document.documentElement.clientWidth)){
+      restingHeight=restingWidth?Math.max(window.innerHeight,viewport.height*viewport.scale):Math.max(body.getBoundingClientRect().height,window.innerHeight,viewport.height*viewport.scale);
+      restingWidth=document.documentElement.clientWidth;
     }
+    const keyboard=active&&viewport.height*viewport.scale<restingHeight-100;
+    body.classList.toggle('browser-editing-viewport',!!active);
+    body.classList.toggle('browser-editing-keyboard',!!keyboard);
+    body.classList.toggle('browser-terminal-keyboard',!!keyboard&&document.activeElement.matches('.wb-terminal-input textarea, .wb-terminal-form textarea'));
+    if(active){
+      if(appliedHeight!==viewport.height){
+        appliedHeight=viewport.height;
+        body.style.setProperty('--editing-viewport-height',viewport.height+'px');
+        body.style.setProperty('--editing-viewport-top',viewport.offsetTop+'px');
+      }
+    }else{
+      restingHeight=0;
+      restingWidth=0;
+      if(appliedHeight!==null){
+        appliedHeight=null;
+        body.style.removeProperty('--editing-viewport-height');
+        body.style.removeProperty('--editing-viewport-top');
+      }
+    }
+    if(output&&output.scrollTop!==scrollTop)output.scrollTop=atEnd?output.scrollHeight-output.clientHeight:scrollTop;
   };
-  document.addEventListener('focusin',updateTerminalViewport);
-  document.addEventListener('focusout',()=>queueMicrotask(updateTerminalViewport));
-  document.addEventListener('click',updateTerminalViewport);
-  viewport.addEventListener('resize',updateTerminalViewport);
-  viewport.addEventListener('scroll',updateTerminalViewport);
-  window.addEventListener('resize',updateTerminalViewport);
+  document.addEventListener('focusin',updateEditorViewport);
+  document.addEventListener('focusout',()=>queueMicrotask(updateEditorViewport));
+  document.addEventListener('click',updateEditorViewport);
+  // Moving the focused shell on visual-viewport scroll can trigger another
+  // Safari caret scroll, so only resize changes its position.
+  viewport.addEventListener('resize',updateEditorViewport);
+  window.addEventListener('resize',updateEditorViewport);
 }

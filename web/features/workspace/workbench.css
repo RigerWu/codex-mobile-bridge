@@ -154,7 +154,7 @@
 .wb-side-landing~.wb-status:empty{display:none}.wb-side-content:not(.has-side-chat)>.wb-status{margin:0 24px 24px;text-align:center}
 .wb-side-messages{overflow-anchor:none}
 /* Browser keyboard: keep command input and scrollback in the visual viewport. */
-.browser-terminal-keyboard #chat.workbench-active>.chat-head,.browser-terminal-keyboard .client-switch-dock{display:none}
+.browser-terminal-keyboard #chat.workbench-active>.chat-head,.browser-editing-keyboard .client-switch-dock{display:none}
 .browser-terminal-keyboard .workbench-tabs{min-height:36px;padding-top:0;padding-bottom:0}
 .browser-terminal-keyboard .wb-terminal{padding-bottom:0}
 .browser-terminal-keyboard .wb-terminal-head{padding:2px 8px}

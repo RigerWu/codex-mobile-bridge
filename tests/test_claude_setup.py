@@ -901,7 +901,8 @@ class NativeHelperProcess(unittest.TestCase):
                 process.communicate.side_effect = outputs
                 with patch('bridge.clients.claude.setup.helper_path', return_value=Path(__file__)), \
                      patch('bridge.clients.claude.setup.subprocess.Popen', return_value=process) as spawn, \
-                     patch('bridge.clients.claude.setup.time.monotonic', side_effect=[0, 31]):
+                     patch('bridge.platforms.windows.claude.time',
+                           Mock(monotonic=Mock(side_effect=[0, 31]))):
                     result = native_action('quit', pid=42, executable='C:/Claude.exe')
                 self.assertEqual(result['quitState'], 'failed' if evidence == 'none' else 'submitted')
                 spawn.assert_called_once()

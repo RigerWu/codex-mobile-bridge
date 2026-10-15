@@ -14,7 +14,8 @@ function fixture(old,ownerCwd='/gateway-a'){
   async start(){starts++;return {sessionId:'new-session'};}
  };
  const window={'claude.web':{LocalSessions:api},__claudeMobileBridge:{
-  status:()=>old,stop(){stopped++;},...(old?.owns?{owns:old.owns}:{})}};
+  status:()=>old,stop(){stopped++;},...(old?.owns?{owns:old.owns}:{}),
+  ...(old?.handoff?{handoff:old.handoff}:{})}};
  const context={window,crypto:webcrypto,TextEncoder,Uint8Array,Date,setTimeout,clearTimeout,console:{info(){},error(){}}};
  return {window,run:()=>vm.runInNewContext(source,context),counts:()=>({stopped,writes,starts})};
 }
@@ -23,11 +24,11 @@ for(const [name,status] of [
  ['stale foreign legacy owner',{transport:'file',stopped:false,busy:false,sessionId:'legacy-session',lastWrite:1}],
  ['live foreign current owner',{transport:'file',stopped:false,busy:false,owns:()=>false,lastWrite:Date.now()}],
  ['unknown legacy owner',{transport:'file',stopped:false,busy:false,sessionId:'missing',lastWrite:Date.now()}]
-])test(name+' remains intact and reports conflict',async()=>{
+])test(name+' remains intact and reports an upgrade boundary',async()=>{
  const ui=fixture(status);
- await assert.rejects(ui.run(),/其他网关占用/);
+ await assert.rejects(ui.run(),/旧版 Claude 桥接尚不能安全交接/);
  assert.deepEqual(ui.counts(),{stopped:0,writes:0,starts:0});
- assert.match(ui.window.__codingRemoteInjectionError,/其他网关占用/);
+ assert.match(ui.window.__codingRemoteInjectionError,/关闭 Claude 接入.*升级旧网关/);
 });
 test('legacy same workspace may be replaced without exposing its token',async()=>{
  const ui=fixture({transport:'file',stopped:false,busy:false,sessionId:'legacy-session',lastWrite:Date.now()},config.cwd);
@@ -47,6 +48,14 @@ test('pending request or response write blocks even same-owner replacement',asyn
 });
 test('legacy stopped flag alone does not prove a signed release',async()=>{
  const ui=fixture({transport:'file',stopped:true,busy:false,sessionId:'legacy-session'});
- await assert.rejects(ui.run(),/其他网关占用/);
+ await assert.rejects(ui.run(),/旧版 Claude 桥接尚不能安全交接/);
+ assert.equal(ui.counts().stopped,0);
+});
+test('a handoff method with a different protocol revision is not trusted',async()=>{
+ let calls=0;
+ const ui=fixture({transport:'file',sessionId:'legacy-session',connectorRevision:4,
+                   handoff(){calls++;return true;}});
+ await assert.rejects(ui.run(),/旧版 Claude 桥接尚不能安全交接/);
+ assert.equal(calls,0);
  assert.equal(ui.counts().stopped,0);
 });

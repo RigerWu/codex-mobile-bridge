@@ -16,11 +16,13 @@
   const sameWorkspace = cwd => typeof cwd === 'string' &&
     normalizedWorkspace(cwd) === normalizedWorkspace(config.cwd);
   const existing = window.__claudeMobileBridge;
-  let sameOwner = false;
+  let sameOwner = false, canHandoff = false;
   if (existing) {
     let state;
     try {
       state = existing.status();
+      canHandoff = state?.transport === 'file' &&
+        state.connectorRevision === config.connectorRevision && typeof existing.handoff === 'function';
       if (typeof existing.owns === 'function') sameOwner = existing.owns(config.cwd) === true;
       else if (state?.transport === 'file' && state.sessionId) {
         // Legacy connectors expose only a session ID. Check Desktop's live
@@ -31,16 +33,22 @@
         sameOwner = sameWorkspace(session?.cwd);
       }
     } catch { /* Unknown ownership is occupied, never permission to replace. */ }
-    if (!state || state.busy || state.writing || !sameOwner && state.suspended !== true) {
-      const message = sameOwner ? 'Claude 桥接仍有请求进行中，请稍后重试连接' :
-        'Claude 桥接连接被其他网关占用，请先停止旧网关；旧版连接还需重新加载 Claude';
+    if (!state || state.busy && !state.handoffPending || state.writing ||
+        !sameOwner && state.suspended !== true && !canHandoff) {
+      const message = state?.busy && !state.handoffPending || state?.writing || sameOwner ?
+        'Claude 桥接仍有请求进行中，请稍后重试连接' :
+        '旧版 Claude 桥接尚不能安全交接；请先在旧网关关闭 Claude 接入，或升级旧网关后重试';
       window.__codingRemoteInjectionError = message;
       console.error('Error: ' + message + ' [' + (config.inspectionMarker || config.generation) + ']');
       throw new Error(message);
     }
   }
-  function replaceExisting() {
+  async function replaceExisting() {
     if (!existing) return;
+    if (!sameOwner && existing.status()?.suspended !== true) {
+      if (!canHandoff || !await existing.handoff(config.cwd))
+        throw new Error('旧网关仍有未确认请求或未完成接替，请在旧网关检查结果后重试');
+    }
     const state = existing.status();
     if (!state || window.__claudeMobileBridge !== existing || state.busy || state.writing ||
         !sameOwner && state.suspended !== true)
@@ -98,8 +106,11 @@
       }
     }
   }
-  function activate(bridge) {
-    replaceExisting();
+  async function activate(bridge) {
+    await replaceExisting();
+    // A second injector may have completed the same asynchronous handoff.
+    if (window.__claudeMobileBridge !== existing)
+      throw new Error('Claude 桥接状态已变化，请刷新后重试连接');
     try {
       installObservers();
       window.__claudeMobileBridge = bridge;
@@ -273,7 +284,7 @@
   }
   if (config.transport === 'cdp') {
     let stopped = false, inFlight = 0, highWater = 0;
-    activate({
+    await activate({
       stop() { stopped = true; for (const undo of restore) undo(); },
       owns(cwd) { return sameWorkspace(cwd); },
       status() { return {transport:'cdp', stopped, busy:inFlight > 0, connectorRevision:config.connectorRevision, surfaces:capabilities}; },
@@ -325,6 +336,7 @@
   let generation = initial.generation;
   const generations = new Set([generation]);
   let stopped = false, suspended = initial.type === 'stop', busy = false, inFlight = 0, writing = 0, highWater = initial.seq, lastWrite = 0, dirty = true;
+  let handoff = null, completedHandoff = null;
   let wake, wakeRequested=false;
   const wakePoll=()=>{wakeRequested=true;wake?.();};
   const pause=async()=>{
@@ -336,14 +348,39 @@
     wakeRequested=false;
   };
   let state = {seq: 0, done: false};
-  activate({stop() { stopped = true;wakePoll(); for (const undo of restore) undo(); },
+  await activate({stop() { stopped = true;wakePoll(); for (const undo of restore) undo(); },
     owns(cwd) { return sameWorkspace(cwd); },
-    status() { return {transport: 'file', stopped, suspended, busy:busy || inFlight > 0,
-      writing:writing > 0, sessionId, lastWrite, connectorRevision:config.connectorRevision}; }});
+    status() { return {transport: 'file', stopped, suspended, busy:busy || inFlight > 0 || !!handoff,
+      handoffPending:!!handoff,
+      writing:writing > 0, sessionId, lastWrite, connectorRevision:config.connectorRevision}; },
+    async handoff(cwd) {
+      if (sameWorkspace(cwd) || stopped || suspended) return false;
+      if (handoff) return bounded(handoff.promise,6000,false).catch(() => false);
+      if (busy || inFlight || writing) return false;
+      let resolve;
+      const promise = new Promise(done => { resolve = done; });
+      const pending = {id:null,promise,resolve};
+      handoff = pending;
+      let current;
+      try { current = await read(); }
+      catch { if (handoff === pending) handoff = null; resolve(false); return false; }
+      if (handoff !== pending) return false;
+      if (busy || inFlight || writing || stopped || suspended ||
+          !current || current.generation !== generation || current.type !== 'idle' ||
+          current.seq !== highWater || highWater > 0 && state.done !== true) {
+        handoff = null; resolve(false); return false;
+      }
+      pending.id = generation + ':' + highWater + ':' + Date.now();
+      dirty = true; wakePoll();
+      // A timeout does not revoke the offer: the old writer may already have
+      // fenced itself and its acknowledgement may still be reaching Desktop.
+      return bounded(promise,6000,false).catch(() => false);
+    }});
   async function publish() {
     writing++;
     try {
-      let value = {...state, generation, connected: !stopped && !suspended,
+      let value = {...state, generation, connected: !stopped && !suspended && !handoff?.id,
+        ...(handoff?.id ? {handoffId:handoff.id} : {}),
         timestamp: Date.now() / 1000, connectorRevision:config.connectorRevision, surfaces: capabilities};
       let text = await pack(value);
       if (stopped) return;
@@ -368,6 +405,15 @@
         continue;
       }
       if (stopped) break;
+      if (handoff && msg?.type === 'handoff-ack' && msg.generation === generation &&
+          msg.handoffId === handoff.id && msg.seq === highWater) {
+        completedHandoff = handoff; handoff = null; suspended = true; stopped = true;
+        break;
+      }
+      if (handoff && msg?.type === 'request' && msg.generation === generation &&
+          Number.isSafeInteger(msg.seq) && msg.seq > highWater) {
+        const pending = handoff; handoff = null; pending.resolve(false); dirty = true;
+      }
       if (msg && msg.generation !== generation) {
         // A signed idle packet is the only restart handshake. Never replay a request.
         if (!config.reconnect || generations.has(msg.generation) || msg.type !== 'idle' || msg.seq !== 0) {
@@ -377,6 +423,7 @@
         highWater = 0; state = {seq: 0, done: false}; busy = false; suspended = false; dirty = true;
       }
       if (msg?.type === 'stop') {
+        if (handoff) { const pending = handoff; handoff = null; pending.resolve(false); }
         if (!config.reconnect) break;
         if (!suspended) { suspended = true; dirty = true; }
       }
@@ -418,5 +465,7 @@
       await pause();
     }
   } catch (error) { window.__codingRemoteInjectionError = String(error.message || error); console.error('Claude 文件桥接停止：', error); }
-  finally { stopped = true; for (const undo of restore) undo(); await publish().catch(() => {}); }
+  finally { stopped = true; for (const undo of restore) undo(); await publish().catch(() => {});
+    if (handoff) { handoff.resolve(false); handoff = null; }
+    completedHandoff?.resolve(true); }
 })();

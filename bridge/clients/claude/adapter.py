@@ -314,11 +314,11 @@ class Claude:
             if self.desktop is None and ((self.directory/'connection.json').exists()
                                          or sys.platform == 'darwin' and not foreground):
                 self.prepare()
-            if sys.platform == 'win32' and not restart and not existing_only:
+            if sys.platform == 'win32' and not foreground and not restart and not existing_only:
                 self.setup_mode = 'background'
                 self.setup_thread = threading.Thread(target=self._connect_background,
                     args=(self.setup_cancel, self.discovery['executable'], self.discovery.get('dataHome')),
-                    kwargs={'foreground': True, 'cancel_path': cancel_path}, daemon=True)
+                    kwargs={'foreground': False, 'cancel_path': cancel_path}, daemon=True)
             else:
                 self.setup_mode = 'native'
                 self.setup_thread = threading.Thread(target=self._connect_native, args=(restart, cancel_path, self.setup_cancel),

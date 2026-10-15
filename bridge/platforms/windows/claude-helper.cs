@@ -970,22 +970,31 @@ class ClaudeKeyboard {
             string observed=readDocument();
             if(observed==text)break;
             if(expired())throw new Exception("Console 脚本尚未完整写入，未执行；请通过手动初始化重试");
-            if(!refreshed&&refreshReadback!=null&&observed.Length>0&&(refreshDue==null||refreshDue())) {
+            if(!refreshed&&refreshReadback!=null&&!String.IsNullOrEmpty(observed)&&(refreshDue==null||refreshDue())) {
                 refreshed=true;check();refreshReadback();
             }
             pause();
         }
         check();submit();
     }
-    static void RefreshConsoleReadback(AutomationElement prompt,TextPattern document,string text) {
+    static string WaitConsolePrefix(string text,Func<string> readDocument,Action check,Action pause,Func<bool> expired) {
+        while(true) {
+            check();
+            if(expired())throw new Exception("无法核对 Console 脚本前半段，未执行");
+            string visible=readDocument();
+            if(visible==text||!String.IsNullOrEmpty(visible)&&text.StartsWith(visible,StringComparison.Ordinal))return visible;
+            pause();
+        }
+    }
+    static void RefreshConsoleReadback(AutomationElement prompt,TextPattern document,string text,Func<bool> expired) {
         CheckPrompt(prompt);
         Send(new[]{Key(17,false),Key(36,false),Key(36,true),Key(17,true)});
-        CheckPrompt(prompt);
-        var range=document.DocumentRange;
-        string visible=range.GetText(-1).TrimEnd('\r','\n');
+        TextPatternRange range=null;
+        string visible=WaitConsolePrefix(text,delegate {
+            range=document.DocumentRange;
+            return range.GetText(-1).TrimEnd('\r','\n');
+        },()=>CheckPrompt(prompt),()=>Thread.Sleep(50),expired);
         if(visible==text)return;
-        if(String.IsNullOrEmpty(visible)||!text.StartsWith(visible,StringComparison.Ordinal))
-            throw new Exception("无法核对 Console 脚本前半段，未执行");
         var caret=range.Clone();
         caret.MoveEndpointByRange(TextPatternRangeEndpoint.End,caret,TextPatternRangeEndpoint.Start);
         int middle=Math.Min(text.Length/2,visible.Length-1);
@@ -1011,7 +1020,8 @@ class ClaudeKeyboard {
             ()=>Thread.Sleep(50),()=>timer.Elapsed.TotalSeconds>=6,delegate {
                 Stage("脚本已完整写入并核对，正在提交");
                 Send(new[]{Key(13,false),Key(13,true)});
-            },false,()=>RefreshConsoleReadback(prompt,document,text),()=>timer.ElapsedMilliseconds>=250);
+            },false,()=>RefreshConsoleReadback(prompt,document,text,()=>timer.Elapsed.TotalSeconds>=6),
+            ()=>timer.ElapsedMilliseconds>=250);
     }
     static void CheckWindowSelection() {
         var owned=new AppWindow {Handle=new IntPtr(11),Owner=new IntPtr(99),Pid=7,Visible=true,Title="Claude"};
@@ -1122,6 +1132,39 @@ class ClaudeKeyboard {
             ()=>{},()=>{},()=>true,()=>submits++,false,()=>refreshes++,()=>true);}
         catch(Exception){refused=true;}
         if(!refused||writes!=0||submits!=0||refreshes!=0)throw new Exception("Console 前台已有草稿保护自检失败");
+        writes=0;submits=0;refreshes=0;int prefixReads=0;
+        SubmitVerifiedConsole(text,()=>"",value=>writes++,()=>refreshes==0?"old suffix":text,
+            ()=>{},()=>{},()=>false,()=>submits++,false,delegate {
+                refreshes++;
+                string prefix=WaitConsolePrefix(text,()=>++prefixReads<3?"old suffix":text.Substring(0,text.Length/2),
+                    ()=>{},()=>{},()=>prefixReads>=4);
+                if(prefix!=text.Substring(0,text.Length/2))throw new Exception("Console 延迟前缀自检失败");
+            },()=>true);
+        if(writes!=1||submits!=1||refreshes!=1||prefixReads!=3)throw new Exception("Console 延迟可访问区刷新自检失败");
+        writes=0;submits=0;refreshes=0;refused=false;
+        try {SubmitVerifiedConsole(text,()=>"",value=>writes++,()=>"old suffix",
+            ()=>{},()=>{},()=>false,()=>submits++,false,delegate {
+                refreshes++;throw new Exception("refresh failed");
+            },()=>true);}
+        catch(Exception){refused=true;}
+        if(!refused||writes!=1||submits!=0||refreshes!=1)throw new Exception("Console 刷新异常拒绝执行自检失败");
+        writes=0;submits=0;refreshes=0;checks=0;refused=false;
+        try {SubmitVerifiedConsole(text,()=>"",value=>writes++,()=>"old suffix",
+            ()=>{},()=>{},()=>false,()=>submits++,false,delegate {
+                refreshes++;
+                WaitConsolePrefix(text,()=>"old suffix",()=>{if(++checks==3)throw new OperationCanceledException();},
+                    ()=>{},()=>false);
+            },()=>true);}
+        catch(OperationCanceledException){refused=true;}
+        if(!refused||writes!=1||submits!=0||refreshes!=1)throw new Exception("Console 刷新期间取消自检失败");
+        writes=0;submits=0;refreshes=0;pauses=0;refused=false;
+        try {SubmitVerifiedConsole(text,()=>"",value=>writes++,()=>"old suffix",
+            ()=>{},()=>{},()=>false,()=>submits++,false,delegate {
+                refreshes++;
+                WaitConsolePrefix(text,()=>"old suffix",()=>{},()=>pauses++,()=>pauses>=2);
+            },()=>true);}
+        catch(Exception){refused=true;}
+        if(!refused||writes!=1||submits!=0||refreshes!=1||pauses!=2)throw new Exception("Console 刷新总超时自检失败");
     }
     static void CheckDetachedReuse() {
         var tools=new AppWindow {Handle=new IntPtr(21),Pid=7,Visible=true,Title="DevTools - app://localhost"};

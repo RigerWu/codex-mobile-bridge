@@ -638,9 +638,9 @@ class Claude:
             if await asyncio.to_thread(self.remote_cli.contains, sid):
                 return await asyncio.to_thread(self.remote_cli.call, action, sid, body)
             return await asyncio.to_thread(self.cli.call, action, sid, body)
-        if sid and await asyncio.to_thread(self.remote_cli.contains, sid):
+        if sid and sid not in self.index and await asyncio.to_thread(self.remote_cli.contains, sid):
             return await asyncio.to_thread(self.remote_cli.call, action, sid, body)
-        if sid and await asyncio.to_thread(self.cli.contains, sid):
+        if sid and sid not in self.index and await asyncio.to_thread(self.cli.contains, sid):
             return await asyncio.to_thread(self.cli.call, action, sid, body)
         if action == 'projects' or (action == 'create' and not str(body.get('projectKey', '')).startswith(('code:', 'cowork:'))):
             cli_projects = await asyncio.to_thread(self.cli_projects, action == 'projects')

@@ -1,3 +1,4 @@
+import asyncio
 import json
 import os
 import queue
@@ -9,7 +10,7 @@ import unittest
 import uuid
 from pathlib import Path
 from types import SimpleNamespace
-from unittest.mock import Mock, patch
+from unittest.mock import AsyncMock, Mock, patch
 
 from bridge.clients.claude import model
 from bridge.clients.claude.adapter import Claude
@@ -174,6 +175,22 @@ class ClaudeCliContract(unittest.TestCase):
             rows = manager.clients(refresh=True)['clients']
         adapter.desktop_listing.assert_called_once_with()
         self.assertTrue(next(row for row in rows if row['id'] == 'claude')['configured'])
+
+    def test_known_desktop_catalog_does_not_probe_cli_history(self):
+        adapter = Claude(self.root/'adapter', auto_connect=False)
+        self.addCleanup(adapter.close)
+        session = {'sessionId': 'desktop-session', 'cwd': str(self.cwd), 'isRunning': False}
+        saved = model.session('code', session)
+        adapter.index[saved['id']] = saved
+        catalog = {'models': [{'id': 'desktop-model'}]}
+        adapter.desktop = Mock(capabilities={'code': []})
+        adapter.desktop.call = AsyncMock(side_effect=[session, catalog])
+        with patch.object(adapter, 'status', return_value={'connected': True}), \
+             patch.object(adapter.remote_cli, 'contains', side_effect=AssertionError('SSH CLI history probe')), \
+             patch.object(adapter.cli, 'contains', side_effect=AssertionError('local CLI history probe')):
+            result = asyncio.run(adapter.dispatch('catalog', saved['id'], {}))
+        self.assertEqual(result['models'], catalog['models'])
+        self.assertEqual(adapter.desktop.call.await_args_list[0].args, ('code', 'getSession', 'desktop-session'))
 
     def test_tool_only_first_user_record_keeps_listing_readable(self):
         events = self.path.read_text().splitlines()

@@ -97,6 +97,7 @@ class Claude:
             self.thread.start()
         if self.desktop is None or reset:
             if self.desktop:
+                self._assert_reconnect_idle()
                 self.desktop.close()
             async def initialize():
                 self.desktop = FileDesktop(self.directory, token)
@@ -273,7 +274,7 @@ class Claude:
         old_monitor = None
         background_monitor = False
         with self.setup_lock:
-            if existing_only or sys.platform == 'darwin' and (self.desktop or self.pending_calls):
+            if existing_only or self.desktop or self.pending_calls:
                 self._assert_reconnect_idle()
             if self.setup_cancel.is_set() and self.setup_thread:
                 old_monitor = self.setup_thread
@@ -450,7 +451,7 @@ class Claude:
                     return
                 with self.setup_lock:
                     if cancel.is_set(): return
-                    if existing_only or sys.platform == 'darwin':
+                    if self.desktop or existing_only:
                         self._assert_reconnect_idle()
                         self.reconnecting = True
                         if existing_only and self.desktop and self.desktop.stopped:

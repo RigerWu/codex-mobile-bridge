@@ -1,6 +1,7 @@
 """Same-origin HTTP/SSE gateway. Desktop RPC is never exposed directly."""
 import base64
 import gzip
+import hashlib
 import hmac
 import json
 import logging
@@ -319,6 +320,7 @@ class Handler(BaseHTTPRequestHandler):
                 return self.output(200, {"uiLanguage": self.server.ui_language(), "authenticated": bool(session), "trustedDevice": bool(session and session.get("trustedDevice")), "csrf": session["csrf"] if session else None,
                                          "loginStatus": self.server.auth.login_status(self.client()["ip"]),
                                          "instanceId": self.server.instance_id, "cookieName": self.server.auth.cookie_name,
+                                         **({'listCacheIdentity': hashlib.sha256((self.server.instance_id + '\0' + session['csrf']).encode()).hexdigest()} if session else {}),
                                          **({"computer": {"name": socket.gethostname(), "platform": platform.system()}} if session else {}),
                                          **({'connection': discovery.descriptor(self.token())} if session and discovery else {}),
                                          "notifications": self.server.notifications is not None,
@@ -593,6 +595,23 @@ class Handler(BaseHTTPRequestHandler):
                 if source not in ('all', 'desktop', 'cli'):
                     raise ValueError('不支持的会话来源')
                 feed = self.server.notifications.mobile.checkpoint() if self.server.notifications else None
+                if query.get('scope', [None])[0] == 'host':
+                    host = query.get('host', ['local'])[0]
+                    host_infos = self.server.bridge.hosts.hosts()
+                    if host != 'local' and host not in host_infos:
+                        raise ValueError('未知 SSH 主机')
+                    offset = max(0, int(query.get('offset', [0])[0]))
+                    target = self.server.bridge.for_host(host)
+                    host_info = host_infos.get(host, {})
+                    rows, available = target.list(query=query.get('q', [''])[0][:200], limit=offset + 101,
+                                                  archived=query.get('archived', ['false'])[0] == 'true',
+                                                  source=source, include_sources=True, local_only=True,
+                                                  host_label=host_info.get('displayName') or host_info.get('alias'))
+                    return self.output(200, {'sessions': rows, 'availableSources': available,
+                                             'unavailableHosts': target.host_errors,
+                                             'remoteHosts': list(host_infos) if host == 'local' else [],
+                                             'complete': not target.host_errors,
+                                             'notificationRead': {key: feed[key] for key in ('streamId', 'cursor')} if feed else None})
                 rows, available = self.server.bridge.list(query=query.get("q", [""])[0][:200], offset=max(0, int(query.get("offset", [0])[0])), archived=query.get("archived", ["false"])[0] == "true", source=source, include_sources=True)
                 return self.output(200, {"sessions": rows, "availableSources": available, "unavailableHosts": self.server.bridge.host_errors,
                                         'notificationRead': {key: feed[key] for key in ('streamId', 'cursor')} if feed else None})

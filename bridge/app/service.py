@@ -962,9 +962,9 @@ class Bridge:
         return {'schemaVersion': 1, 'generatedAt': int(time.time()),
                 'remoteHostCount': len(sources) - 1, 'hosts': reports}
 
-    def list(self, query="", limit=100, offset=0, archived=False, source='all', include_sources=False):
-        sources = [(self, "此电脑")]
-        if self.host == 'local':
+    def list(self, query="", limit=100, offset=0, archived=False, source='all', include_sources=False, local_only=False, host_label=None):
+        sources = [(self, host_label or "此电脑")]
+        if self.host == 'local' and not local_only:
             sources.extend((self.for_host(host), info.get('displayName') or info['alias']) for host, info in self.hosts.hosts().items())
         def read(host_source):
             bridge, label = host_source

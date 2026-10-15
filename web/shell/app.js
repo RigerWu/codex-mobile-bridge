@@ -11,6 +11,8 @@ const $ = id => document.getElementById(id),t=BridgeI18n.t;
 let csrf='', currentId=null, state=null, listOffset=0, listQuery='', approvalStamp='', sending=false;
 let claudeCliAccessPanel=null;
 let currentHost='local', listRows=[], listGeneration=0, listHasMore=false, listArchived=false, listSource='all', availableSources=[], listRenderStamp='';
+let listComplete=false, listReadFinished=false, listIdentity='', listFilterKey='';
+let listHostIds=[];
 let sourceFilterStamp='';
 let chatTimeline=null,reconnectFailure=null;
 const dismissedHostFaults=new Map();
@@ -57,7 +59,11 @@ function renderHostErrors(hosts){
   }
   root.hidden=!root.childElementCount;
 }
-function authLost(){if(!$('app').hidden)document.dispatchEvent(new Event('bridge-auth-lost'));showLogin();}
+function clearListSnapshot(){
+  for(let i=sessionStorage.length-1;i>=0;i--){const key=sessionStorage.key(i);if(key?.startsWith('codex-list-v1:'))sessionStorage.removeItem(key);}
+  listIdentity='';listFilterKey='';listHostIds=[];listRows=[];listOffset=0;listHasMore=false;listComplete=false;listReadFinished=false;availableSources=[];listRenderStamp='';listGeneration++;
+}
+function authLost(){clearListSnapshot();if(!$('app').hidden)document.dispatchEvent(new Event('bridge-auth-lost'));showLogin();}
 async function api(path,body,signal){const options={signal,credentials:'same-origin',cache:'no-store',headers:{}};if(body!==undefined){options.method='POST';options.headers={'Content-Type':'application/json','X-CSRF-Token':csrf};options.body=JSON.stringify(body);}const response=await fetch(hostUrl(path),options);const data=await response.json();if(!response.ok){if(response.status===401)authLost();throw Object.assign(Error(data.error||t('请求失败')),{loginStatus:data.loginStatus,status:response.status});}return data;}
 const workbench=window.BridgeWorkbench=new Workbench({chat:$('chat'),request:api,csrf:()=>csrf,notify:toast,onUnauthorized:authLost,openChat});
 const desktopSessions=new DesktopSessionsView({root:$('app'),select:$('desktop-backend'),request:api,notify:toast,csrf:()=>csrf,onUnauthorized:authLost,onSelect:provider=>{
@@ -102,12 +108,12 @@ async function start(pairingToken=null){
   if(pairingToken!==null){
     try{window.BridgeBootstrap?.pairingSubmitted();const result=await api('/api/pair',{token:pairingToken});csrf=result.csrf;await enter();return;}
     catch(error){
-      if(auth.authenticated){csrf=auth.csrf;await enter();toast(error.message);}
+      if(auth.authenticated){csrf=auth.csrf;await enter(auth);toast(error.message);}
       else{showLogin(auth.passwordless,auth.loginStatus);$('login-error').textContent=t(error.message);}
       return;
     }finally{pairingToken=null;}
   }
-  if(!auth.authenticated){showLogin(auth.passwordless,auth.loginStatus);return;}csrf=auth.csrf;await enter();
+  if(!auth.authenticated){clearListSnapshot();showLogin(auth.passwordless,auth.loginStatus);return;}csrf=auth.csrf;await enter(auth);
 }
 async function refreshComputer(){
   $('connected-computer').dataset.deviceName=location.host;
@@ -124,10 +130,37 @@ async function openHarness(){
   catch(error){toast(error.message);}
 }
 $('harness-open').onclick=openHarness;
-async function enter(){desktopSessions.onListEnter();const chatLink=location.hash;$('desktop-backend').hidden=false;if(/(?:^|[?&])open=harness(?:&|$)/.test(location.search||'')){history.replaceState(null,'','/');await openHarness();}refreshComputer();$('login').hidden=true;$('app').hidden=false;$('bootstrap-status').hidden=true;window.BridgeBootstrap?.ready();document.dispatchEvent(new Event('bridge-authenticated'));await clientNavigation.refresh();accountsPanel?.refresh();const list=clientNavigation.provider==='codex'?loadList(true).catch(e=>toast(e.message)):Promise.resolve();await clientNavigation.openChatLink(chatLink,openChat);await list;}
+async function enter(authInfo){
+  desktopSessions.onListEnter();const chatLink=location.hash;$('desktop-backend').hidden=false;
+  if(/(?:^|[?&])open=harness(?:&|$)/.test(location.search||'')){history.replaceState(null,'','/');await openHarness();}
+  const verified=authInfo?.authenticated?authInfo:await api('/api/auth');
+  if(!verified.authenticated)throw Error(t('登录状态暂不可用'));
+  listIdentity=await listAuthIdentity(verified);
+  restoreListSnapshot();
+  refreshComputer();$('login').hidden=true;$('app').hidden=false;$('bootstrap-status').hidden=true;window.BridgeBootstrap?.ready();document.dispatchEvent(new Event('bridge-authenticated'));
+  const clientsReady=clientNavigation.refresh();accountsPanel?.refresh();
+  if(clientNavigation.provider==='codex')loadList(true).catch(e=>toast(e.message));
+  await clientsReady;
+  await clientNavigation.openChatLink(chatLink,openChat);
+}
 $('login-form').addEventListener('submit',async event=>{event.preventDefault();if(loginStatus.blocked)return;$('login-button').disabled=true;$('login-error').textContent='';try{const result=await api('/api/login',{username:$('username').value,password:$('password').value,remember:$('remember-login').checked});renderLoginStatus({attemptsRemaining:5,attemptLimit:5,blocked:false});csrf=result.csrf;$('password').value='';await enter();}catch(error){$('login-error').textContent=t(error.message);renderLoginStatus(error.loginStatus);}finally{$('login-button').disabled=loginStatus.blocked;}});
-$('logout').onclick=async()=>{await api('/api/logout',{});document.dispatchEvent(new Event('bridge-logged-out'));csrf='';state=null;currentId=null;$('messages').replaceChildren();$('approvals').replaceChildren();$('queued').replaceChildren();$('sessions').replaceChildren();$('message').value='';sessionStorage.clear();attachments.reset();sessionActivity.clear();recentInteractions.clear();showLogin();};
+$('logout').onclick=async()=>{await api('/api/logout',{});document.dispatchEvent(new Event('bridge-logged-out'));csrf='';state=null;currentId=null;$('messages').replaceChildren();$('approvals').replaceChildren();$('queued').replaceChildren();$('sessions').replaceChildren();$('message').value='';clearListSnapshot();sessionStorage.clear();attachments.reset();sessionActivity.clear();recentInteractions.clear();showLogin();};
 function dateText(value){if(!value)return '';return new Date(value*1000).toLocaleDateString(BridgeI18n.locale(),{month:'numeric',day:'numeric'});}
+function listAuthIdentity(auth){return auth?.authenticated&&/^[0-9a-f]{64}$/.test(auth.listCacheIdentity||'')?auth.listCacheIdentity:'';}
+function listSnapshotKey(filter){return listIdentity?'codex-list-v1:'+listIdentity+':'+filter:'';}
+function currentListFilter(){return JSON.stringify([$('search').value,$('archived').checked,listSource]);}
+function restoreListSnapshot(filter=currentListFilter()){
+  const key=listSnapshotKey(filter);if(!key)return false;
+  let saved;try{saved=JSON.parse(sessionStorage.getItem(key)||'null');}catch{return false;}
+  if(!saved||!Array.isArray(saved.rows)||!Array.isArray(saved.sources)||!Array.isArray(saved.hosts))return false;
+  listFilterKey=filter;listRows=saved.rows;availableSources=saved.sources;listHostIds=saved.hosts;
+  listOffset=saved.offset;listHasMore=saved.hasMore===true;listComplete=false;listReadFinished=false;
+  listQuery=$('search').value;listArchived=$('archived').checked;renderSourceFilter();renderList();return true;
+}
+function saveListSnapshot(filter){
+  const key=listSnapshotKey(filter);if(!key)return;
+  try{sessionStorage.setItem(key,JSON.stringify({rows:listRows,sources:availableSources,hosts:listHostIds,offset:listOffset,hasMore:listHasMore}));}catch{}
+}
 $('list-mode').value=localStorage.getItem('list-mode')||'recent';
 $('list-mode').onchange=()=>{localStorage.setItem('list-mode',$('list-mode').value);renderList();};
 listSource=localStorage.getItem('codex-source-filter')||'all';
@@ -158,7 +191,7 @@ function sessionAccess(access){
 function currentAccess(){return sessionAccess(state?.access||listRows.find(row=>row.id===currentId&&row.host===currentHost)?.access);}
 function sourceLabel(access){return access?.source==='cli'?'CLI':access?.source==='ide'?'IDE':access?.source==='unknown'?t('其他来源'):'';}
 function renderList(){
-  const stamp=JSON.stringify([$('list-mode').value,currentId,currentHost,BridgeI18n.locale(),availableSources,listRows.map(row=>[row.id,row.host,row.title,row.projectKey,row.projectName,row.hostLabel,row.recency,row.access])]);
+  const stamp=JSON.stringify([$('list-mode').value,currentId,currentHost,BridgeI18n.locale(),availableSources,listRows.length?null:[listComplete,listReadFinished],listRows.map(row=>[row.id,row.host,row.title,row.projectKey,row.projectName,row.hostLabel,row.recency,row.access])]);
   if(stamp===listRenderStamp&&$('sessions').children.length){renderActivity();return;}
   listRenderStamp=stamp;
   const scrollTop=$('sessions').scrollTop;
@@ -186,25 +219,61 @@ function renderList(){
     const meta=el('small');meta.append(el('span','',chat.projectName+' · '+(chat.host==='local'?t('此电脑'):chat.hostLabel)),el('time','',dateText(chat.recency/1000)));
     button.append(meta);button.onclick=()=>openChat(chat.id,chat.host).catch(e=>toast(e.message));parent.append(button);
   }
-  if(!listRows.length)$('sessions').append(el('p','muted',t('没有找到聊天。')));renderActivity();$('sessions').scrollTop=scrollTop;
+  if(!listRows.length)$('sessions').append(el('p','muted',t(listComplete?'没有找到聊天。':listReadFinished?'暂不可用':'正在读取…')));renderActivity();$('sessions').scrollTop=scrollTop;
 }
 async function loadList(reset=false){
   if(!reset&&(listLoading||!listHasMore))return;
   const generation=++listGeneration,offset=reset?0:listOffset;
   const query=$('search').value,archived=$('archived').checked,source=listSource;
-  let result;listLoading++;
-  try{result=await api('/api/sessions?q='+encodeURIComponent(query)+'&offset='+offset+'&archived='+archived+'&source='+source);}
-  finally{listLoading--;}
-  if(generation!==listGeneration)return;
-  availableSources=result.availableSources||[];
-  if(!renderSourceFilter()){loadList(true).catch(e=>toast(e.message));return;}
-  if(reset&&(query!==listQuery||archived!==listArchived))$('sessions').scrollTop=0;
-  listQuery=query;listArchived=archived;
-  const rows=new Map((reset?[]:listRows).map(row=>[chatKey(row.id,row.host),row]));
-  for(const row of result.sessions){const key=chatKey(row.id,row.host);row.recency=Math.max(row.recency,recentInteractions.get(key)||0);rows.set(key,row);}
-  listRows=[...rows.values()];listRows.sort((a,b)=>b.recency-a.recency);
-  listOffset=offset+result.sessions.length;listHasMore=result.sessions.length===100;
-  renderHostErrors(result.unavailableHosts||[]);renderList();refreshActivity();clientNavigation.acknowledgeList('codex',result);listSync.acknowledgeSuccess();
+  const filter=JSON.stringify([query,archived,source]);
+  if(reset&&filter!==listFilterKey){
+    if(!restoreListSnapshot(filter)){listRows=[];availableSources=[];listOffset=0;listHasMore=false;listHostIds=[];listFilterKey=filter;}
+    $('sessions').scrollTop=0;
+  }
+  const targetCount=reset?Math.max(100,listRows.length):offset+100;
+  listComplete=false;listReadFinished=false;renderList();listLoading++;
+  const groups=new Map();for(const row of listRows)(groups.get(row.host)||groups.set(row.host,[]).get(row.host)).push(row);
+  const sources=new Set(availableSources),freshSources=new Map(),errors=[];
+  const publish=()=>{
+    if(generation!==listGeneration)return [];
+    const merged=[...groups.values()].flat().sort((a,b)=>(b.recency-a.recency)||b.id.localeCompare(a.id)||b.host.localeCompare(a.host));
+    listRows=merged.slice(0,targetCount);availableSources=[...sources].sort();renderList();
+    return merged;
+  };
+  const read=async host=>{
+    const url='/api/sessions?scope=host&host='+encodeURIComponent(host)+'&q='+encodeURIComponent(query)+'&offset='+(targetCount-100)+'&archived='+archived+'&source='+source;
+    try{
+      const result=await api(url);if(generation!==listGeneration)return null;
+      if(host==='local'){
+        listHostIds=result.remoteHosts||[];
+        for(const known of groups.keys())if(known!=='local'&&!listHostIds.includes(known))groups.delete(known);
+      }
+      if(result.complete===false||result.unavailableHosts?.length)errors.push(...(result.unavailableHosts||[{host,label:host,error:t('暂不可用')}]));
+      else{
+        for(const row of result.sessions){const key=chatKey(row.id,row.host);row.recency=Math.max(row.recency,recentInteractions.get(key)||0);}
+        groups.set(host,result.sessions);freshSources.set(host,result.availableSources||[]);
+        for(const item of result.availableSources||[])sources.add(item);
+      }
+      publish();return result;
+    }catch(error){if(generation===listGeneration){errors.push({host,label:host,error:error.message});publish();}return null;}
+  };
+  try{
+    const local=await read('local');
+    if(generation!==listGeneration)return;
+    await Promise.all(listHostIds.map(read));
+    if(generation!==listGeneration)return;
+    const merged=publish();listReadFinished=true;listComplete=errors.length===0;
+    if(listComplete){
+      availableSources=[...new Set([...freshSources.values()].flat())].sort();
+      listRows=merged.slice(0,targetCount);
+      listOffset=listRows.length;listHasMore=merged.length>=targetCount;
+      listQuery=query;listArchived=archived;listFilterKey=filter;
+      if(!renderSourceFilter()){loadList(true).catch(e=>toast(e.message));return;}
+      saveListSnapshot(filter);clientNavigation.acknowledgeList('codex',{...local,unavailableHosts:[],complete:true});listSync.acknowledgeSuccess();
+    }
+    renderHostErrors(errors);renderList();refreshActivity();
+    if(errors.length)throw Error(errors[0].error);
+  }finally{listLoading--;}
 }
 function loadMoreSessions(){
   const root=$('sessions');

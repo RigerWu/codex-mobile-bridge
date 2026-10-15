@@ -4,8 +4,8 @@ const fs=require('node:fs'),path=require('node:path'),vm=require('node:vm');
 const root=path.resolve(__dirname,'..'),html=fs.readFileSync(path.join(root,'web/index.html'),'utf8');
 const workbenchBack=vm.runInNewContext(fs.readFileSync(path.join(root,'web/features/workspace/workbench.js'),'utf8')+'\nWorkbench.prototype.back');
 
-async function fixture({missing='',auth='anonymous',hash='',language='zh',pairPending=false}={}){
-  const nodes=new Map(),timers=new Map(),listeners=new Map(),requests=[],writes=[];let clock=0,reloads=0,error=null;
+async function fixture({missing='',auth='anonymous',hash='',language='zh',pairPending=false,navigationPending=false}={}){
+  const nodes=new Map(),timers=new Map(),listeners=new Map(),requests=[],writes=[],navigation=[];let clock=0,reloads=0,error=null,releaseNavigation;
   const node=(tag='div')=>({tagName:tag.toUpperCase(),value:'',checked:false,disabled:false,hidden:false,open:false,textContent:'',dataset:{},options:[],children:[],parentElement:{},style:{setProperty(){}},scrollTop:0,
     classList:(()=>{const classes=new Set();return {add(...names){names.forEach(name=>classes.add(name));},remove(...names){names.forEach(name=>classes.delete(name));},toggle(name,force){const enabled=force??!classes.has(name);if(enabled)classes.add(name);else classes.delete(name);return enabled;},contains(name){return classes.has(name);}};})(),click(){this.onclick?.();},getBoundingClientRect(){return {width:0};},addEventListener(){},setAttribute(k,v){this[k]=v;},closest(){return nodes.get('accounts-dialog');},
     replaceChildren(...values){this.children=values;},append(...values){this.children.push(...values);},after(){},querySelectorAll(){return [];},querySelector(){return null;},showModal(){this.open=true;},close(){this.open=false;}});
@@ -21,7 +21,7 @@ async function fixture({missing='',auth='anonymous',hash='',language='zh',pairPe
   const context=vm.createContext({window,location,history:{replaceState(_a,_b,url){current=new URL(url,current);}},localStorage:storage,sessionStorage:storage,navigator:{userAgent:'fixture'},
     document:{documentElement:{},getElementById:id=>nodes.get(id),addEventListener(){},dispatchEvent(){},querySelectorAll(){return [];},querySelector(){return {classList:{toggle(){}}};},createElement:node},
     Event:class{},CustomEvent:class{},Option:function(text,value){return {...node('option'),textContent:text,value};},
-    Workbench:class{constructor(){this.current=null;this.panel={querySelector(){return null;}};this.backCalls=0;}get splitMode(){return false;}get isFileVisible(){return !!this.current&&this.current.active!=='chat';}back(){this.backCalls++;return workbenchBack.call(this);}directory(session,_tab,dir){session.directory=dir;}select(id){this.current.active=id;}rememberScroll(){}stopThumbnails(){}reset(){}relabel(){}},DesktopSessionsView:class{clear(){}},ClientNavigation:class{constructor(){this.provider='codex';}async refresh(){}async openChatLink(){}},
+    Workbench:class{constructor(){this.current=null;this.panel={querySelector(){return null;}};this.backCalls=0;}get splitMode(){return false;}get isFileVisible(){return !!this.current&&this.current.active!=='chat';}back(){this.backCalls++;return workbenchBack.call(this);}directory(session,_tab,dir){session.directory=dir;}select(id){this.current.active=id;}rememberScroll(){}stopThumbnails(){}reset(){}relabel(){}},DesktopSessionsView:class{clear(){}},ClientNavigation:class{constructor(){this.provider='codex';}refresh(){navigation.push('refresh');if(navigationPending)return new Promise(resolve=>{releaseNavigation=resolve;});}async openChatLink(){navigation.push('open');}acknowledgeList(){}},
     setTimeout(fn,delay){timers.set(++clock,{fn,delay});return clock;},clearTimeout(id){timers.delete(id);},setInterval(){},clearInterval(){},
     fetch:async(url,options={})=>{
       requests.push(url);if(options.method==='POST')writes.push({url,body:options.body});
@@ -41,7 +41,7 @@ async function fixture({missing='',auth='anonymous',hash='',language='zh',pairPe
   for(const file of dependencies){if(file.endsWith('/'+missing+'.js'))continue;run(file);}
   try{run('web/shell/app.js');}catch(e){error=e;dispatch('error',{target:window,message:e.message});}
   await new Promise(setImmediate);
-  return {nodes,requests,writes,location,error,timers,listeners,dispatch,window,
+  return {nodes,requests,writes,location,error,timers,listeners,dispatch,window,navigation,releaseNavigation(){releaseNavigation?.();},
     get reloads(){return reloads;},timeout(){for(const [id,timer] of timers)if(timer.delay===12000){timers.delete(id);timer.fn();break;}}};
 }
 
@@ -84,6 +84,14 @@ test('normal login and authenticated workspace hide startup status and cancel it
     assert.equal(ui.listeners.get('error').size,0);ui.dispatch('error',{target:{tagName:'SCRIPT'},message:'late error'});
     assert.equal(ui.nodes.get('bootstrap-status').hidden,true);
   }
+});
+
+test('authenticated list starts before client discovery while a deep link waits for discovery',async()=>{
+  const ui=await fixture({auth:'signed-in',hash:'#11111111-1111-4111-8111-111111111111',navigationPending:true});
+  assert.deepEqual(ui.navigation,['refresh']);
+  assert.ok(ui.requests.some(url=>url.startsWith('/api/sessions?scope=host')));
+  ui.releaseNavigation();await new Promise(setImmediate);
+  assert.deepEqual(ui.navigation,['refresh','open']);
 });
 
 test('manual retry preserves an unsubmitted pairing fragment after app.js has already removed it',async()=>{

@@ -206,7 +206,7 @@ class ClientNavigation {
     const ready=this.view.choose(id||'codex');this.paint();await ready;
   }
   acknowledgeList(provider,value){
-    if(this.listReadDone||provider!==this.provider||document.hidden||document.getElementById('app').hidden||value.connected===false||value.unavailableHosts?.length)return;
+    if(this.listReadDone||provider!==this.provider||document.hidden||document.getElementById('app').hidden||value.connected===false||value.complete===false||value.unavailableHosts?.length)return;
     const list=provider==='codex'?this.sidebar:this.view.list;if(list?.getBoundingClientRect().width===0)return;
     const visit=this.listVisit;const read=value.notificationRead;if(!read||!Number.isSafeInteger(read.cursor))return;
     this.listReadDone=true;

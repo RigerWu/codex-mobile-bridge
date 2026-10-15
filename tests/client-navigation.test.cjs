@@ -323,6 +323,7 @@ test('list entry acknowledges only the displayed provider snapshot, once per vis
  const {nav,document}=fixture(),calls=[];nav.request=async(path,body)=>calls.push({path,body});
  const value={notificationRead:{streamId:'stream',cursor:12}};
  nav.acknowledgeList('codex',value);nav.acknowledgeList('claude',{...value,connected:false});assert.equal(calls.length,0);
+ nav.acknowledgeList('claude',{...value,complete:false});assert.equal(calls.length,0);
  document.hidden=true;nav.acknowledgeList('claude',value);assert.equal(calls.length,0);document.hidden=false;
  nav.acknowledgeList('claude',value);nav.acknowledgeList('claude',{notificationRead:{streamId:'stream',cursor:13}});
  assert.equal(calls.length,1);assert.equal(calls[0].body.provider,'claude');assert.equal(calls[0].body.through,12);

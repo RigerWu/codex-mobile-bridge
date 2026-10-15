@@ -186,6 +186,15 @@ class IntegrationTests(unittest.TestCase):
         self.assertEqual(rows[0]['host'], 'remote:test')
         self.assertEqual(self.bridge.host_errors, [{'host': 'local', 'label': '此电脑', 'error': 'Database temporarily unavailable'}])
 
+    def test_host_scoped_list_never_reads_another_host(self):
+        self.bridge.hosts.hosts = lambda: {'remote:slow': {'alias': 'slow'}}
+        def unexpected(host):
+            raise AssertionError('Passive local list reached remote host')
+        self.bridge.for_host = unexpected
+        rows, sources = self.bridge.list(include_sources=True, local_only=True)
+        self.assertEqual([row['id'] for row in rows], [THREAD])
+        self.assertEqual(sources, ['desktop'])
+
     def test_progressive_read_preserves_metadata_and_pending_requests(self):
         self.fixture.state['turns'] = [{'turnId': 'turn', 'items': [
             {'id': str(i), 'type': 'agentMessage', 'text': 'row '+str(i)} for i in range(150)]}]
@@ -747,6 +756,7 @@ class HttpTests(unittest.TestCase):
     def setUp(self):
         class EmptyBridge:
             host_errors = []
+            hosts = type('Hosts', (), {'hosts': lambda self: {}})()
             def for_host(self, host):
                 if host != "local":
                     raise KeyError(host)
@@ -798,6 +808,21 @@ class HttpTests(unittest.TestCase):
         self.assertEqual(self.server.bridge.last_list['query'], 'needle')
         status, _, _ = self.request('GET', '/api/sessions?source=unknown', headers=headers)
         self.assertEqual(status, 400)
+
+    def test_host_scoped_list_contract_is_authenticated_and_incomplete_on_failure(self):
+        self.assertEqual(self.request('GET', '/api/sessions?scope=host&host=local')[0], 401)
+        headers = self.login()
+        status, _, body = self.request('GET', '/api/sessions?scope=host&host=local&offset=100', headers=headers)
+        self.assertEqual(status, 200)
+        self.assertEqual(body['remoteHosts'], [])
+        self.assertTrue(body['complete'])
+        self.assertEqual(self.server.bridge.last_list['limit'], 201)
+        self.assertTrue(self.server.bridge.last_list['local_only'])
+        self.server.bridge.host_errors = [{'host': 'local', 'label': '此电脑', 'error': 'Offline'}]
+        status, _, body = self.request('GET', '/api/sessions?scope=host&host=local', headers=headers)
+        self.assertEqual(status, 200)
+        self.assertFalse(body['complete'])
+        self.assertEqual(self.request('GET', '/api/sessions?scope=host&host=unknown', headers=headers)[0], 400)
 
     def test_gateway_language_updates_without_restart_and_before_login(self):
         with tempfile.TemporaryDirectory(dir=ROOT / '.tmp') as folder:
@@ -1267,6 +1292,19 @@ class HttpTests(unittest.TestCase):
         self.assertEqual(self.request('GET', '/api/sessions', headers={**auth, 'Host': 'evil.example'})[0], 403)
         self.assertEqual(self.request('POST', '/api/logout', {}, auth)[0], 200)
         self.assertEqual(self.request('GET', '/api/sessions', headers=auth)[0], 401)
+
+    def test_list_cache_identity_is_opaque_and_bound_to_authenticated_session(self):
+        self.assertNotIn('listCacheIdentity', self.request('GET', '/api/auth')[2])
+        first = self.login()
+        one = self.request('GET', '/api/auth', headers=first)[2]
+        self.assertEqual(len(one['listCacheIdentity']), 64)
+        self.assertNotIn(one['csrf'], one['listCacheIdentity'])
+        self.assertEqual(self.request('GET', '/api/auth', headers=first)[2]['listCacheIdentity'], one['listCacheIdentity'])
+        second = self.login()
+        two = self.request('GET', '/api/auth', headers=second)[2]
+        self.assertNotEqual(two['listCacheIdentity'], one['listCacheIdentity'])
+        self.assertEqual(self.request('POST', '/api/logout', {}, first)[0], 200)
+        self.assertNotIn('listCacheIdentity', self.request('GET', '/api/auth', headers=first)[2])
 
     def test_wrong_password_and_explicit_passwordless(self):
         self.assertEqual(self.request('POST', '/api/login', {'username': 'admin', 'password': 'wrong'})[0], 403)

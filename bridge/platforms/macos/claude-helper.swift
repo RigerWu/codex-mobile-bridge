@@ -179,6 +179,18 @@ final class Connector {
         try fail("needs-attention", "焦点已离开 Claude，自动连接已停止，请重试")
     }
     func key(_ code: CGKeyCode, flags: CGEventFlags = [], prompt: AXUIElement? = nil) throws {
+        if let prompt = prompt {
+            guard let down = CGEvent(keyboardEventSource: nil, virtualKey: code, keyDown: true),
+                  let up = CGEvent(keyboardEventSource: nil, virtualKey: code, keyDown: false) else {
+                try fail("needs-attention", "无法创建键盘事件")
+            }
+            down.flags = flags; up.flags = flags
+            try check(prompt)
+            down.post(tap: .cghidEventTap)
+            up.post(tap: .cghidEventTap)
+            try check(prompt)
+            return
+        }
         for down in [true, false] {
             try check(prompt)
             guard let event = CGEvent(keyboardEventSource: nil, virtualKey: code, keyDown: down) else { try fail("needs-attention", "无法创建键盘事件") }

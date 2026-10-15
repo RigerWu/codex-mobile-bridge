@@ -83,6 +83,14 @@ print("15 desktop-state fixtures passed without GUI APIs")
 
 @unittest.skipUnless(sys.platform == 'darwin' and shutil.which('swiftc'), 'macOS Swift compiler required')
 class NativeConsoleSelectors(unittest.TestCase):
+    def test_product_console_keyboard_dispatch_pairs_hid_events(self):
+        harness = ROOT/'tests/fixtures/claude_key_dispatch_harness.py'
+        result = subprocess.run([sys.executable, str(harness)], capture_output=True, text=True, timeout=90)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn('prompt: hid-down,hid-up', result.stdout)
+        self.assertIn('app-shortcut: pid-down,pid-up', result.stdout)
+        self.assertIn('focus-lost-after-down: hid-down,hid-up', result.stdout)
+
     def test_product_console_ax_tree_and_refocused_devtools(self):
         harness = ROOT/'tests/fixtures/claude_console_ax_harness.py'
         result = subprocess.run([sys.executable, str(harness)], capture_output=True, text=True, timeout=90)

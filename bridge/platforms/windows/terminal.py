@@ -4,6 +4,7 @@ import collections
 import ctypes as C
 from ctypes import wintypes as W
 import hashlib
+import ntpath
 import os
 from pathlib import Path
 
@@ -97,6 +98,19 @@ def child_main(shell):
         raise SystemExit(subprocess.call([shell], stdin=source, stdout=sink, stderr=sink))
 
 
+def cmd_working_directory(root):
+    # CMD treats an extended local path as UNC and falls back to C:\Windows.
+    # Use its drive spelling only when both names resolve to the same directory.
+    if (len(root) >= 7 and root.startswith('\\\\?\\')
+            and root[4] in 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz' and root[5:7] == ':\\'):
+        ordinary = root[4:]
+        try:
+            if os.path.samefile(root, ordinary): return ordinary
+        except OSError:
+            pass
+    return root
+
+
 class WindowsTerminalSession(TerminalSession):
     def __init__(self, root, cols=80, rows=24):
         dimensions(cols, rows)
@@ -132,7 +146,8 @@ class WindowsTerminalSession(TerminalSession):
             if not getattr(sys, 'frozen', False): launcher.append(str(project_root() / 'desktop.py'))
             launcher.extend(['--terminal-child', self.shell])
             command = C.create_unicode_buffer(subprocess.list2cmdline(launcher))
-            checked(k.CreateProcessW(sys.executable, command, None, None, False, 0x00080004, None, self.root, C.byref(startup), C.byref(process)))
+            directory = cmd_working_directory(self.root) if ntpath.basename(self.shell).casefold() == 'cmd.exe' else self.root
+            checked(k.CreateProcessW(sys.executable, command, None, None, False, 0x00080004, None, directory, C.byref(startup), C.byref(process)))
             self.process_handle = process.hProcess
             checked(k.AssignProcessToJobObject(self.job, self.process_handle))
             checked(k.ResumeThread(process.hThread) != 0xffffffff)

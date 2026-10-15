@@ -12,6 +12,22 @@ from unittest.mock import patch
 
 
 class TerminalStartupTests(unittest.TestCase):
+    def test_cmd_cwd_only_shortens_equivalent_extended_local_drive_paths(self):
+        from bridge.platforms.windows import terminal
+        local = '\\\\?\\C:\\project 中文 space'
+        with patch.object(terminal.os.path, 'samefile', return_value=True) as same:
+            self.assertEqual(terminal.cmd_working_directory(local), 'C:\\project 中文 space')
+            same.assert_called_once_with(local, 'C:\\project 中文 space')
+        with patch.object(terminal.os.path, 'samefile', return_value=False):
+            self.assertEqual(terminal.cmd_working_directory('\\\\?\\C:\\trailing. '), '\\\\?\\C:\\trailing. ')
+        with patch.object(terminal.os.path, 'samefile', side_effect=OSError):
+            self.assertEqual(terminal.cmd_working_directory(local), local)
+        with patch.object(terminal.os.path, 'samefile') as same:
+            for root in ('\\\\server\\share\\project', '\\\\?\\UNC\\server\\share\\project',
+                         '\\\\.\\C:\\device', 'C:\\project'):
+                self.assertEqual(terminal.cmd_working_directory(root), root)
+            same.assert_not_called()
+
     def kernel(self, failure=None):
         calls, next_pipe = [], [20]
         def job(*args):
@@ -217,6 +233,31 @@ class ConPtyTests(unittest.TestCase):
             finally:
                 session.stop();self.assertTrue(session.done.wait(10))
                 self.assertIsNone(session.process_handle)
+
+    def test_extended_local_drive_start_cwd_and_cd_state(self):
+        from bridge.platforms.windows.terminal import WindowsTerminalSession
+        parent = Path(__file__).resolve().parents[1] / '.tmp'; parent.mkdir(exist_ok=True)
+        with tempfile.TemporaryDirectory(prefix='cmb cwd 中文 space ', dir=parent) as folder:
+            root = Path(folder); (root / 'nested').mkdir()
+            runtime = os.environ.get('CMB_TEST_RUNTIME')
+            with patch.object(sys, 'executable', runtime or sys.executable), patch.object(sys, 'frozen', bool(runtime), create=True):
+                session = WindowsTerminalSession('\\\\?\\' + str(root), 80, 24)
+            try:
+                self.wait_for_output(session, lambda output: '>' in output)
+                marker = root / 'startup-cwd.txt'
+                session.write(str(uuid.uuid4()), 'cd > "' + str(marker) + '"\r')
+                deadline = time.monotonic() + 10
+                while not marker.exists() and time.monotonic() < deadline: time.sleep(.05)
+                self.assertTrue(marker.exists(), repr(session.read()))
+                self.assertIn(root.name.rsplit(' ', 1)[-1], marker.read_bytes().decode('ascii', 'ignore'))
+                session.write(str(uuid.uuid4()), 'cd nested\r')
+                session.write(str(uuid.uuid4()), 'echo retained> same-drive.txt\r')
+                same = root / 'nested' / 'same-drive.txt'
+                deadline = time.monotonic() + 10
+                while not same.exists() and time.monotonic() < deadline: time.sleep(.05)
+                self.assertEqual(same.read_text().strip(), 'retained')
+            finally:
+                session.stop(); self.assertTrue(session.done.wait(10))
 
     def test_ping_output_ctrl_c_and_shell_survives(self):
         from bridge.platforms.windows.terminal import WindowsTerminalSession

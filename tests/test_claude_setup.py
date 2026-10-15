@@ -3,6 +3,7 @@ import os
 import plistlib
 import struct
 import subprocess
+import sys
 import tempfile
 import threading
 import unittest
@@ -185,8 +186,25 @@ assert.equal(start.cwd,cwd);assert.equal(start.message,'');})();
                   'request': 'request.json', 'response': 'response.json'}
         self.assertEqual(Path(prepared['scriptPath']).read_text(encoding='utf-8'),
                          source.replace('__BRIDGE_CONFIG__', json.dumps(config)))
-        self.assertEqual(Path(prepared['consolePath']).read_text(encoding='utf-8'),
-                         console_source(source, config))
+        self.assertTrue(Path(prepared['consolePath']).read_text(encoding='utf-8') ==
+                        console_source(source, config, multiline=sys.platform == 'win32'))
+
+    @patch('bridge.clients.claude.adapter.sys.platform', 'win32')
+    def test_windows_prepare_writes_bounded_lf_console_source(self):
+        adapter = Claude(self.root/'Windows Test', auto_connect=False)
+        self.addCleanup(adapter.close)
+        prepared = adapter.prepare()
+        raw = Path(prepared['consolePath']).read_bytes()
+        source = raw.decode('utf-8')
+        self.assertGreater(source.count('\n'), 0)
+        self.assertNotIn(b'\r', raw)
+        self.assertTrue(all(len(line) <= 3500 for line in source.split('\n')))
+        config = {'transport': 'file', 'cwd': str(adapter.directory), 'token': adapter.desktop.token,
+                  'generation': adapter.desktop.generation, 'reconnect': True,
+                  'inspectionMarker': prepared['inspectionMarker'], 'connectorRevision': CONNECTOR_REVISION,
+                  'request': 'request.json', 'response': 'response.json'}
+        template = (ROOT/'bridge/clients/claude/connector.js').read_text(encoding='utf-8')
+        self.assertTrue(source.replace('\n', ' ') == console_source(template, config))
 
 
 class ClaudeProfileEvidence(unittest.TestCase):
@@ -796,7 +814,7 @@ class ClaudeNativeConnection(unittest.TestCase):
         (self.adapter.directory/'response.json').write_text(old_response)
         self.assertFalse(self.adapter.status()['connected'])
         source = Path(prepared['consolePath']).read_text(encoding='utf-8')
-        self.assertNotIn('\n', source)
+        self.assertEqual('\n' in source, sys.platform == 'win32')
         self.assertIn(self.adapter.desktop.generation, source)
 
     def test_each_console_injection_has_a_fresh_error_inspection_marker(self):
@@ -810,16 +828,33 @@ class ClaudeNativeConnection(unittest.TestCase):
         source = (ROOT/'bridge/clients/claude/connector.js').read_text(encoding='utf-8')
         config = {'cwd': 'D:/fixture', 'request': 'request.json', 'response': 'response.json',
                   'token': 'test', 'generation': 'run', 'reconnect': True, 'connectorRevision': 5}
-        target = self.root/'connector.js'
-        target.write_text(console_source(source, config), encoding='utf-8')
-        completed = subprocess.run(['node', 'tests/claude-connector.test.cjs'], cwd=ROOT,
-                                   env={**os.environ, 'CONNECTOR_TEMPLATE': str(target)},
-                                   capture_output=True, text=True, encoding='utf-8', timeout=15)
-        self.assertEqual(completed.returncode, 0, completed.stdout + completed.stderr)
+        for multiline in (False, True):
+            with self.subTest(multiline=multiline):
+                target = self.root/f'connector-{multiline}.js'
+                target.write_bytes(console_source(source, config, multiline=multiline).encode('utf-8'))
+                syntax = subprocess.run(['node', '--check', str(target)], cwd=ROOT,
+                                        capture_output=True, text=True, encoding='utf-8', timeout=15)
+                self.assertEqual(syntax.returncode, 0, syntax.stdout + syntax.stderr)
+                completed = subprocess.run(['node', 'tests/claude-connector.test.cjs'], cwd=ROOT,
+                                           env={**os.environ, 'CONNECTOR_TEMPLATE': str(target)},
+                                           capture_output=True, text=True, encoding='utf-8', timeout=15)
+                self.assertEqual(completed.returncode, 0, completed.stdout + completed.stderr)
 
     def test_console_transform_preserves_configuration_string_whitespace(self):
         config = {'cwd': 'C:/two  spaces/中文', 'token': 'private'}
         self.assertIn(json.dumps(config, ensure_ascii=True), console_source('const config=__BRIDGE_CONFIG__;', config))
+
+    def test_bounded_console_lines_preserve_single_line_source_and_config(self):
+        source = (ROOT/'bridge/clients/claude/connector.js').read_text(encoding='utf-8')
+        config = {'cwd': 'C:/two  spaces/中文`', 'token': 'quote"\\line\n😀'}
+        single = console_source(source, config)
+        multiline = console_source(source, config, multiline=True)
+        self.assertNotIn('\n', single)
+        self.assertIn(json.dumps(config, ensure_ascii=True), multiline)
+        self.assertEqual(multiline.replace('\n', ' '), single)
+        self.assertTrue(2 <= len(multiline.split('\n')) <= 16)
+        self.assertTrue(all(len(line) <= 3500 for line in multiline.split('\n')))
+        self.assertTrue(all(line.endswith((';', '{')) for line in multiline.split('\n')[:-1]))
 
 
 class NativeHelperProcess(unittest.TestCase):

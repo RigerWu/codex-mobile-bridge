@@ -112,7 +112,10 @@ class Claude:
         target = self.directory/'connect-desktop.js'
         target.write_text(script, encoding='utf-8'); target.chmod(0o600)
         console = self.directory/'console-connect.js'
-        console.write_text(console_source(source, config), encoding='utf-8')
+        if sys.platform == 'win32':
+            console.write_bytes(console_source(source, config, multiline=True).encode('utf-8'))
+        else:
+            console.write_text(console_source(source, config), encoding='utf-8')
         console.chmod(0o600)
         return {'workspace': str(self.directory), 'scriptPath': str(target), 'script': script,
                 'consolePath': str(console), 'inspectionMarker': config['inspectionMarker']}

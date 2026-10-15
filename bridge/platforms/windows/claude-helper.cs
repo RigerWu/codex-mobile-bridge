@@ -263,7 +263,7 @@ class ClaudeKeyboard {
         for(int i=0;i<10;i++){Thread.Sleep(100);CheckForeground();try{CheckPrompt(prompt);return;}catch{}}
         CheckPrompt(prompt);
     }
-    static INPUT Key(ushort vk,bool up) { var i=new INPUT(); i.type=1;i.data.key.vk=vk;i.data.key.flags=up?2u:0u;return i; }
+    static INPUT Key(ushort vk,bool up) { var i=new INPUT(); i.type=1;i.data.key.vk=vk;i.data.key.flags=(up?2u:0u)|((vk>=33&&vk<=40)?1u:0u);return i; }
     static void Send(INPUT[] keys) {
         CheckForeground();
         if(SendInput((uint)keys.Length,keys,Marshal.SizeOf(typeof(INPUT)))!=keys.Length) throw new Exception("Windows 拒绝键盘输入，请检查 Claude 与助手的权限是否一致");
@@ -1182,12 +1182,15 @@ class ClaudeKeyboard {
             throw new Exception("Console 全文核对后文末提交顺序自检失败");
         var endKeys=keyBatches[0];var enterKeys=keyBatches[1];
         if(endKeys.Length!=4||endKeys[0].data.key.vk!=17||endKeys[0].data.key.flags!=0||
-            endKeys[1].data.key.vk!=35||endKeys[1].data.key.flags!=0||
-            endKeys[2].data.key.vk!=35||endKeys[2].data.key.flags!=2||
+            endKeys[1].data.key.vk!=35||endKeys[1].data.key.flags!=1||
+            endKeys[2].data.key.vk!=35||endKeys[2].data.key.flags!=3||
             endKeys[3].data.key.vk!=17||endKeys[3].data.key.flags!=2||
             enterKeys.Length!=2||enterKeys[0].data.key.vk!=13||enterKeys[0].data.key.flags!=0||
             enterKeys[1].data.key.vk!=13||enterKeys[1].data.key.flags!=2)
             throw new Exception("Console 文末与 Enter 按键释放配对自检失败");
+        foreach(ushort vk in new ushort[]{33,34,35,36,37,38,39,40})
+            if(Key(vk,false).data.key.flags!=1||Key(vk,true).data.key.flags!=3)
+                throw new Exception("Console 导航键扩展标志自检失败");
         keyBatches.Clear();checks=0;refused=false;
         try {SubmitVerifiedConsole(text,()=>"",value=>{},()=>text,()=>{},()=>{},()=>false,
             ()=>SubmitConsoleAtEnd(()=>{if(++checks==2)throw new Exception("focus changed");},

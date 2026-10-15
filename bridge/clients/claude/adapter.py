@@ -350,6 +350,7 @@ class Claude:
 
     def _connect_native(self, restart, cancel_path, cancel=None, *, existing_only=False, foreground=True):
         cancel = cancel if cancel is not None else self.setup_cancel
+        restart_requested = restart
         asked_permission = False
         developer_prompt_pid = None
         force_console = self.connection_probe_failed
@@ -454,6 +455,9 @@ class Claude:
                     return
                 with self.setup_lock:
                     if cancel.is_set(): return
+                    first_owner_without_token = (sys.platform == 'win32' and foreground and
+                                                 not restart_requested and not existing_only and
+                                                 self.desktop is None and not (self.directory/'connection.json').exists())
                     if self.desktop or existing_only:
                         self._assert_reconnect_idle()
                         self.reconnecting = True
@@ -465,9 +469,11 @@ class Claude:
                             self.desktop.stopped = False
                     prepared = self.prepare(reset=self.desktop is not None and not existing_only,
                                             foreground=foreground)
-                # Signed reconnect may finish while the app was being located.
-                for _ in range(5):
-                    if self.desktop.connected or cancel.wait(.2): break
+                # A first owner with a new token has no earlier renderer to
+                # follow this generation before native Console setup.
+                if not first_owner_without_token:
+                    for _ in range(5):
+                        if self.desktop.connected or cancel.wait(.2): break
                 if cancel.is_set(): return
                 if self.desktop.connected and not force_console: continue
                 if force_console:

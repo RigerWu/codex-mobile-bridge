@@ -758,6 +758,33 @@ class ClaudeNativeConnection(unittest.TestCase):
             self.adapter.connect()
         prepare.assert_called_once_with()
 
+    def test_windows_first_owner_skips_only_wait_for_nonexistent_renderer(self):
+        for persisted_token in (False, True):
+            with self.subTest(persisted_token=persisted_token):
+                adapter = Claude(self.root/('persisted' if persisted_token else 'first-owner'))
+                self.addCleanup(adapter.close)
+                adapter.cli = Mock()
+                adapter.cli.status.return_value = {'cliAvailable': False}
+                adapter.discovery = {'installed': True, 'executable': '/fixture/Claude.exe',
+                                     'dataHome': str(self.root/'profile'), 'dataHomeExplicit': True}
+                if persisted_token:
+                    adapter.directory.mkdir()
+                    (adapter.directory/'connection.json').write_text('{"token":"fixture"}')
+                actions = []
+                def native(name, **kwargs):
+                    actions.append(name)
+                    return {'setupState': 'ready' if name == 'check' else 'needs-retry'}
+                with patch('bridge.clients.claude.adapter.sys.platform', 'win32'), \
+                     patch('bridge.clients.claude.adapter.native_action', side_effect=native), \
+                     patch('bridge.clients.claude.adapter.running_app', return_value=42), \
+                     patch('bridge.clients.claude.adapter.developer_mode_enabled', return_value=True), \
+                     patch.object(adapter.setup_cancel, 'wait', return_value=False) as wait:
+                    adapter._connect_native(False, adapter.directory/'cancel')
+                self.assertEqual(actions, ['check', 'connect'])
+                self.assertTrue((adapter.directory/'connection.json').exists())
+                self.assertEqual([call.args for call in wait.call_args_list],
+                                 [(.2,)] * (5 if persisted_token else 0))
+
     def test_connected_cleanup_notice_survives_status_rendering(self):
         self.adapter.desktop = self.idle_desktop(connected=True)
         reason = 'Claude 已连接；开发者工具未自动关闭，请手动关闭'

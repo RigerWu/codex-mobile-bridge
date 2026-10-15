@@ -22,11 +22,16 @@
     throw new Error(message);
   }
   const existing = window.__claudeMobileBridge;
-  let sameOwner = false, canHandoff = false;
+  let sameOwner = false, canHandoff = false, safeLegacyStatus = false;
   if (existing) {
     let state;
     try {
       state = existing.status();
+      // Early file connectors cleared busy at their reply deadline while the
+      // Desktop operation could still be running. Their status cannot fence it.
+      safeLegacyStatus = state?.transport === 'file' ?
+        typeof state.suspended === 'boolean' && typeof state.writing === 'boolean' :
+        state?.transport === 'cdp' && typeof state.busy === 'boolean';
       canHandoff = state?.transport === 'file' &&
         state.connectorRevision === config.connectorRevision && typeof existing.handoff === 'function';
       if (typeof existing.owns === 'function') sameOwner = existing.owns(config.cwd) === true;
@@ -40,10 +45,11 @@
       }
     } catch { /* Unknown ownership is occupied, never permission to replace. */ }
     if (!state || state.busy && !state.handoffPending || state.writing ||
+        sameOwner && !safeLegacyStatus ||
         !sameOwner && state.suspended !== true && !canHandoff) {
-      const message = state?.busy && !state.handoffPending || state?.writing || sameOwner ?
+      const message = state?.busy && !state.handoffPending || state?.writing ?
         'Claude 桥接仍有请求进行中，请稍后重试连接' :
-        '旧版 Claude 桥接尚不能安全交接；请先在旧网关关闭 Claude 接入，或升级旧网关后重试';
+        '旧版 Claude 桥接无法核验在途请求；请确认当前任务结束后重新加载或退出重开 Claude Desktop，再初始化新网关（只需迁移一次）';
       ownerError(state?.busy && !state.handoffPending || state?.writing ? 'BUSY' : 'LEGACY', message);
     }
   }

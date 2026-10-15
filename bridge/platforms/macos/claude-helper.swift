@@ -381,7 +381,7 @@ final class Connector {
             let issue = bridgeOwnerIssue(value, marker: marker)
             let reason = issue == "busy" ? "Claude 桥接仍有请求进行中，请稍后重试连接" :
                 issue == "unconfirmed" ? "旧网关仍有未确认请求或未完成接替，请在旧网关检查结果后重试" :
-                "旧版 Claude 桥接尚不能安全交接；请先在旧网关关闭 Claude 接入，或升级旧网关后重试"
+                "旧版 Claude 桥接无法核验在途请求；请确认当前任务结束后重新加载或退出重开 Claude Desktop，再初始化新网关（只需迁移一次）"
             output("owner-conflict", reason)
             return
         }

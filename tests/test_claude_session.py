@@ -35,8 +35,8 @@ class ClaudeSessionTests(unittest.TestCase):
     def test_windows_owner_conflict_receipt_has_actionable_state(self):
         for code, expected in (('OWNER_BUSY', '请求进行中'),
                                ('OWNER_UNCONFIRMED', '未确认请求'),
-                               ('OWNER_LEGACY', '升级旧网关'),
-                               ('OWNER_CONFLICT', '升级旧网关')):
+                               ('OWNER_LEGACY', '重新加载或退出重开 Claude Desktop'),
+                               ('OWNER_CONFLICT', '重新加载或退出重开 Claude Desktop')):
             with self.subTest(code=code):
                 process = Mock(returncode=0)
                 process.communicate.return_value = (code, '')

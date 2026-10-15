@@ -202,6 +202,8 @@ final class Connector {
     }
     func console() throws -> AXUIElement {
         try activate()
+        // Electron may leave Chromium's AX tree dormant until an assistive client asks for it.
+        _ = AXUIElementSetAttributeValue(root, "AXManualAccessibility" as CFString, kCFBooleanTrue)
         guard let initial = child(root, kAXFocusedWindowAttribute) else { try fail("needs-attention", "无法确认 Claude Console 输入焦点") }
         if let prompt = find(initial, matching: isPrompt) { return prompt }
         // macOS Chromium exposes the tab name as AXDescription, with no title.

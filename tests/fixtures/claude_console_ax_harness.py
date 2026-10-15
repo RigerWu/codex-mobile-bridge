@@ -59,11 +59,23 @@ func AXUIElementPerformAction(_ element: AXUIElement, _ action: CFString) -> AXR
     scenario.tabPresses += 1
     return scenario.name == "tab_press_rejected" ? .failure : .success
 }
+func AXUIElementSetAttributeValue(_ element: AXUIElement, _ name: CFString, _ value: CFTypeRef) -> AXResult {
+    precondition(element === scenario.root && scenario.activated)
+    precondition(CFEqual(name, "AXManualAccessibility" as CFString))
+    precondition(CFEqual(value, kCFBooleanTrue))
+    scenario.manualCalls += 1
+    if scenario.name == "cold_ax_unsupported" { return .failure }
+    scenario.manualEnabled = true
+    return .success
+}
 final class Scenario {
     let name: String
     var tick = 0
     var hotkeys = 0
     var tabPresses = 0
+    var manualCalls = 0
+    var manualEnabled = false
+    var activated = false
     var root = AXUIElement("root")
     var main = AXUIElement("main", "AXWindow", "Claude")
     var dev = AXUIElement("dev", "AXWindow", "Developer Tools - app://localhost/epitaxy?coldLaunch=1")
@@ -77,10 +89,10 @@ final class Scenario {
     }
     var focused: AXUIElement {
         switch name {
-        case "existing_open_focused": return dev
+        case "existing_open_focused", "cold_ax_unsupported": return dev
         case "existing_open_refocus", "other_app_refocus", "ordinary_refocus", "ambiguous_refocus": return tick >= 1 ? dev : main
         case "late_window": return tick >= 3 ? dev : main
-        case "late_subtree", "focus_loss", "lost_prompt", "no_prompt", "tab_press_rejected": return tick >= 1 ? dev : main
+        case "late_subtree", "focus_loss", "lost_prompt", "no_prompt", "tab_press_rejected", "cold_ax_off": return tick >= 1 ? dev : main
         case "focused_stale": return main
         default: return main
         }
@@ -95,7 +107,8 @@ final class Scenario {
         switch name {
         case "late_window": return tick >= 3
         case "late_subtree": return tick >= 4
-        case "existing_open_focused", "existing_open_refocus", "other_app_refocus", "ordinary_refocus", "ambiguous_refocus", "focused_stale": return true
+        case "existing_open_focused", "existing_open_refocus", "other_app_refocus", "ordinary_refocus", "ambiguous_refocus", "focused_stale", "cold_ax_unsupported": return true
+        case "cold_ax_off": return manualEnabled && tick >= 1
         case "lost_prompt": return tick == 1
         default: return false
         }
@@ -108,6 +121,7 @@ func attribute(_ element: AXUIElement, _ name: String) -> Any? {
         if name == kAXWindowsAttribute { return scenario.windows }
     }
     if name == kAXChildrenAttribute {
+        if scenario.name == "cold_ax_off" && !scenario.manualEnabled { return [AXUIElement]() }
         if element === scenario.dev { return scenario.promptVisible ? [scenario.prompt, scenario.tab] : [scenario.tab] }
         return [AXUIElement]()
     }
@@ -130,7 +144,7 @@ struct FakeApp { let processIdentifier: pid_t = 42 }
 final class Connector {
     let app = FakeApp()
     var root: AXUIElement { scenario.root }
-    func activate() throws { }
+    func activate() throws { scenario.activated = true }
     func check() throws {
         if scenario.name == "focus_loss" && scenario.tick >= 2 {
             try fail("needs-attention", "焦点已离开 Claude，自动连接已停止，请重试")
@@ -148,9 +162,9 @@ do {
     let found = try Connector().console()
     let foundAt = scenario.tick
     scenario.tick += 1
-    print("result=success prompt=\(found.id) tick=\(foundAt) hotkeys=\(scenario.hotkeys) tabPresses=\(scenario.tabPresses) promptNextTick=\(scenario.promptVisible)")
+    print("result=success prompt=\(found.id) tick=\(foundAt) hotkeys=\(scenario.hotkeys) tabPresses=\(scenario.tabPresses) manualCalls=\(scenario.manualCalls) promptNextTick=\(scenario.promptVisible)")
 } catch let error as SetupError {
-    print("result=\(error.state) reason=\(error.reason) tick=\(scenario.tick) hotkeys=\(scenario.hotkeys) tabPresses=\(scenario.tabPresses)")
+    print("result=\(error.state) reason=\(error.reason) tick=\(scenario.tick) hotkeys=\(scenario.hotkeys) tabPresses=\(scenario.tabPresses) manualCalls=\(scenario.manualCalls)")
 } catch { print("result=unexpected \(error)"); exit(2) }
 '''
 
@@ -172,7 +186,10 @@ def main():
         "no_prompt": "result=failed reason=未找到 Claude Console",
         "tab_press_rejected": "result=failed reason=未找到 Claude Console",
         "lost_prompt": "result=success prompt=prompt tick=1",
+        "cold_ax_off": "result=success prompt=prompt tick=1",
+        "cold_ax_unsupported": "result=success prompt=prompt tick=0",
     }
+    (ROOT / ".tmp").mkdir(exist_ok=True)
     with tempfile.TemporaryDirectory(dir=ROOT / ".tmp") as folder:
         folder = pathlib.Path(folder)
         out, binary = folder / "console-ax.swift", folder / "console-ax"
@@ -183,12 +200,15 @@ def main():
             "late_window", "late_subtree", "focus_loss", "existing_open_focused",
             "existing_open_refocus", "other_app_refocus", "ordinary_refocus", "ambiguous_refocus",
             "focused_stale", "no_prompt", "tab_press_rejected", "lost_prompt",
+            "cold_ax_off", "cold_ax_unsupported",
         ]:
             result = subprocess.run([str(binary), name], capture_output=True, text=True, check=True)
             output = result.stdout.strip()
             assert expected[name] in output, (name, output)
             if name == "lost_prompt":
                 assert "promptNextTick=false" in output, output
+            if name in ("cold_ax_off", "cold_ax_unsupported"):
+                assert "manualCalls=1" in output, output
             print(name + ": " + output)
 
 

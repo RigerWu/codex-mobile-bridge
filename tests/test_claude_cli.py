@@ -4,6 +4,7 @@ import queue
 import sys
 import tempfile
 import threading
+import time
 import unittest
 import uuid
 from pathlib import Path
@@ -92,6 +93,87 @@ class ClaudeCliContract(unittest.TestCase):
         with patch('bridge.clients.claude.cli_session._auth_ready',
                    side_effect=AssertionError('closed adapter started auth')):
             self.assertEqual(self.cli.status(), {'cliAvailable': False, 'cliAuthReady': False})
+
+    def test_display_status_does_not_wait_for_cli_auth(self):
+        entered, release = threading.Event(), threading.Event()
+        def slow_auth(profile):
+            entered.set()
+            release.wait(2)
+            return True
+        with patch('bridge.clients.claude.cli_session._auth_ready', side_effect=slow_auth) as auth:
+            start = time.monotonic()
+            try:
+                self.assertEqual(self.cli.status(), {'cliAvailable': True, 'cliAuthReady': False})
+                self.assertLess(time.monotonic()-start, .2)
+                self.assertTrue(entered.wait(1))
+                self.assertEqual(self.cli.status(), {'cliAvailable': True, 'cliAuthReady': False})
+                auth.assert_called_once()
+            finally:
+                release.set()
+            for _ in range(100):
+                if self.cli.status()['cliAuthReady']:
+                    break
+                time.sleep(.01)
+            self.assertTrue(self.cli.status()['cliAuthReady'])
+            auth.assert_called_once()
+
+    def test_display_status_does_not_reuse_expired_or_other_profile_auth(self):
+        entered, release = threading.Event(), threading.Event()
+        def slow_auth(profile):
+            entered.set()
+            release.wait(2)
+            return False
+        with patch('bridge.clients.claude.cli_session._auth_ready', side_effect=slow_auth):
+            self.cli.auth_cache = (self.profile['origin'], time.time()-1, True)
+            try:
+                self.assertEqual(self.cli.status(), {'cliAvailable': True, 'cliAuthReady': False})
+                self.assertTrue(entered.wait(1))
+            finally:
+                release.set()
+            for _ in range(100):
+                with self.cli.lock:
+                    if not self.cli.auth_refreshing:
+                        break
+                time.sleep(.01)
+            self.assertEqual(self.cli.status(), {'cliAvailable': True, 'cliAuthReady': False})
+
+            other = {**self.profile, 'origin': 'other:account'}
+            self.cli.profile_resolver = lambda: other
+            self.cli.auth_cache = (self.profile['origin'], time.time()+15, True)
+            self.assertEqual(self.cli.status(), {'cliAvailable': True, 'cliAuthReady': False})
+            for _ in range(100):
+                with self.cli.lock:
+                    if not self.cli.auth_refreshing:
+                        break
+                time.sleep(.01)
+            self.assertEqual(self.cli.status(), {'cliAvailable': True, 'cliAuthReady': False})
+
+    def test_fresh_auth_ignores_display_cache(self):
+        self.cli.auth_cache = (self.profile['origin'], time.time()+15, True)
+        with patch('bridge.clients.claude.cli_session._auth_ready', return_value=False) as auth:
+            self.assertFalse(self.cli._ready(self.profile, fresh=True))
+        auth.assert_called_once_with(self.profile)
+
+    def test_desktop_readiness_does_not_scan_cli_history(self):
+        manager = DesktopSessions(self.root/'gateway')
+        self.addCleanup(manager.close)
+        adapter = Mock()
+        adapter.status.return_value = {'connected': True, 'installed': True}
+        adapter.discovery = {'installed': True}
+        adapter.directory = self.root/'adapter'
+        adapter.desktop_listing.return_value = {'sessions': [{'id': 'desktop-session'}]}
+        manager.adapters['claude'] = adapter
+        manager.adapters['deepseek'] = Mock()
+        manager.adapters['deepseek'].call.return_value = {'connected': False}
+        manager.config['discovered'] = {'claude': {'installed': True, 'executable': '/fixture/claude'},
+                                        'deepseek': {'installed': False}}
+        with patch.object(manager, '_read', side_effect=lambda provider, action, *args:
+                          {'models': ['fixture-model']} if action == 'catalog' else
+                          self.fail('Desktop readiness scanned merged CLI history')), \
+             patch('bridge.clients.lifecycle.inspect_clients', return_value={}):
+            rows = manager.clients(refresh=True)['clients']
+        adapter.desktop_listing.assert_called_once_with()
+        self.assertTrue(next(row for row in rows if row['id'] == 'claude')['configured'])
 
     def test_tool_only_first_user_record_keeps_listing_readable(self):
         events = self.path.read_text().splitlines()

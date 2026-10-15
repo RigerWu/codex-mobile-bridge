@@ -341,6 +341,7 @@ class ClaudeCli:
         self.owned = {}
         self.index = {}
         self.auth_cache = None
+        self.auth_refreshing = False
         self.closed = False
 
     def _ready(self, profile, *, fresh=False):
@@ -360,7 +361,23 @@ class ClaudeCli:
         if self.closed:
             return {'cliAvailable': False, 'cliAuthReady': False}
         profile = self.profile_resolver()
-        return {'cliAvailable': bool(profile), 'cliAuthReady': self._ready(profile)}
+        if not profile:
+            return {'cliAvailable': False, 'cliAuthReady': False}
+        with self.lock:
+            cached = self.auth_cache
+            ready = bool(cached and cached[0] == profile['origin'] and cached[1] > time.time() and cached[2])
+            if (not cached or cached[0] != profile['origin'] or cached[1] <= time.time()) and not self.auth_refreshing:
+                self.auth_refreshing = True
+                threading.Thread(target=self._refresh_auth_status, args=(profile,), daemon=True,
+                                 name='claude-cli-auth-status').start()
+        return {'cliAvailable': True, 'cliAuthReady': ready}
+
+    def _refresh_auth_status(self, profile):
+        try:
+            self._ready(profile)
+        finally:
+            with self.lock:
+                self.auth_refreshing = False
 
     def busy(self):
         with self.lock:

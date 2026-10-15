@@ -822,7 +822,7 @@ class DesktopSessions:
                             invalid = status.get('configured') is False
                             reason = (('已恢复此前的 Harness 接入' if setup.get('setupStatus') == 'recovered' else '接入配置已就绪') if ready else '请在桌面配置账号或 API')
                         else:
-                            sessions = self._read(provider, 'list').get('sessions', [])
+                            sessions = adapter.desktop_listing().get('sessions', [])
                             if sessions:
                                 catalog = self._read(provider, 'catalog', sessions[0]['id'], {'section': 'models'})
                                 ready = bool(catalog.get('models'))

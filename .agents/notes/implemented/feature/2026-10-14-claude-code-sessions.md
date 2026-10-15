@@ -14,9 +14,13 @@ An explicit resume validates the saved cwd and known prior permission mode, refr
 
 Writes use the existing UUID receipt ledger. Known pre-spawn rejections return blocked and allow a later explicit request; unknown outcomes are never automatically replayed. Approval IDs are claimed before sending, cancellation removes pending requests, and native terminal results feed completion evidence. A second message cannot be sent during a running turn or pending approval. Claude CLI readiness is independent of Desktop connectivity.
 
+Display status resolves CLI availability immediately and refreshes its cached authentication result in the background. Desktop initialization and its ready check use only Desktop connection and session evidence, so CLI authentication and saved-history scans cannot delay them. Explicit CLI creation and resume still perform fresh authentication checks; the display cache never authorizes a write.
+
 ## Alternatives considered
 
 The native print-mode CLI accepts concurrent writers for one UUID, so relying on an upstream lock is insufficient. Opening an existing live terminal chat in another process is rejected. Registry evidence can verify a currently running writer, but cannot create an atomic lock against an independently started terminal.
+
+Using the combined Desktop and CLI list to verify Desktop readiness exposes every saved CLI history file on the Desktop setup path. Keeping that list for user browsing while reading Desktop sessions directly for readiness preserves both views.
 
 Routing the user's credentials through a new SDK service adds a second configuration owner. Spawning the installed CLI with the original profile/cwd keeps native configuration and authentication behavior. SSH Claude Code is excluded until equivalent source/profile and process checks exist.
 

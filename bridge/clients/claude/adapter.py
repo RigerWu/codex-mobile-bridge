@@ -573,6 +573,18 @@ class Claude:
         self.index = {row['id']: row for row in rows}
         return {'connected': True, 'sessions': rows, 'coverage': coverage, 'complete': all(coverage.values())}
 
+    def desktop_listing(self):
+        """Read Desktop sessions without scanning Claude Code CLI history."""
+        if self.loop is None or self.desktop is None or not self.desktop.connected or self.setup_cancel.is_set():
+            raise BridgeUnavailable('Claude Desktop 未连接')
+        future = self._submit_call(lambda: self.listing())
+        try:
+            return future.result(timeout=100)
+        finally:
+            if future.done():
+                with self.setup_lock:
+                    self.pending_calls.discard(future)
+
     def session_capabilities(self, kind):
         methods = self.desktop.capabilities.get(kind, [])
         return {'models': 'setModel' in methods, 'effort': 'setEffort' in methods,

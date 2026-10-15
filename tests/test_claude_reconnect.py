@@ -252,16 +252,29 @@ class ClaudeConnectionProbe(unittest.TestCase):
         self.assertEqual((self.adapter.directory/'request.json').read_bytes(), request)
         native.assert_not_called()
 
-    def test_macos_explicit_initialization_cannot_bypass_unconfirmed_mutation_gate(self):
+    def test_explicit_initialization_cannot_bypass_unconfirmed_mutation_gate(self):
         self.desktop.unconfirmed_mutations.add(1)
         request = (self.adapter.directory/'request.json').read_bytes()
-        with patch('bridge.clients.claude.adapter.sys.platform', 'darwin'), \
-             patch('bridge.clients.claude.adapter.native_action') as native, \
-             patch.object(self.adapter, 'prepare') as prepare:
-            with self.assertRaisesRegex(ValueError, '未确认的请求'):
-                self.adapter.connect()
+        for platform in ('darwin', 'win32'):
+            with self.subTest(platform=platform), \
+                 patch('bridge.clients.claude.adapter.sys.platform', platform), \
+                 patch('bridge.clients.claude.adapter.native_action') as native, \
+                 patch.object(self.adapter, 'prepare') as prepare:
+                with self.assertRaisesRegex(ValueError, '未确认的请求'):
+                    self.adapter.connect()
+                self.assertEqual((self.adapter.directory/'request.json').read_bytes(), request)
+                native.assert_not_called(); prepare.assert_not_called()
+
+    def test_mailbox_reset_preserves_unconfirmed_request_and_generation(self):
+        self.desktop.unconfirmed_mutations.add(1)
+        request = (self.adapter.directory/'request.json').read_bytes()
+        generation = self.desktop.generation
+        with self.assertRaisesRegex(ValueError, '未确认的请求'):
+            self.adapter.prepare(reset=True)
+        self.assertIs(self.adapter.desktop, self.desktop)
+        self.assertEqual(self.desktop.generation, generation)
+        self.assertFalse(self.desktop.stopped)
         self.assertEqual((self.adapter.directory/'request.json').read_bytes(), request)
-        native.assert_not_called(); prepare.assert_not_called()
 
     def test_recovery_read_probe_does_not_bypass_normal_calls_or_accept_cancelled_owner(self):
         self.adapter.reconnecting = True

@@ -700,6 +700,47 @@ class ClientLifecycleTests(unittest.TestCase):
         self.claude.connect.assert_not_called()
         self.claude.reconnect.assert_called_once_with()
 
+    def test_claude_desktop_launch_capability_requires_confirmed_stopped_supported_app(self):
+        self.running = False
+        self.claude.status.return_value = {'connected': False, 'installed': True,
+                                           'automaticConnection': 'native-console', 'cliAvailable': True}
+        row = next(row for row in self.manager.clients(refresh=True)['clients'] if row['id'] == 'claude')
+        self.assertTrue(row['canStartDesktop'])
+        self.assertFalse(row['canInitializeDesktop'])
+        self.manager.config['enabled']['claude'] = False
+        row = next(row for row in self.manager.clients(refresh=True)['clients'] if row['id'] == 'claude')
+        self.assertTrue(row['canStartDesktop'])
+        self.manager.config['enabled']['claude'] = True
+        self.manager.gateway_running = False
+        row = next(row for row in self.manager.clients(refresh=True)['clients'] if row['id'] == 'claude')
+        self.assertFalse(row['canStartDesktop'])
+        self.manager.gateway_running = True
+        self.running = True
+        row = next(row for row in self.manager.clients(refresh=True)['clients'] if row['id'] == 'claude')
+        self.assertFalse(row['canStartDesktop'])
+        self.assertTrue(row['canInitializeDesktop'])
+        self.running = False
+        self.inspect.side_effect = lambda _: {'running': False, 'mainPids': [], 'runtimePids': [], 'unknown': True}
+        row = next(row for row in self.manager.clients(refresh=True)['clients'] if row['id'] == 'claude')
+        self.assertFalse(row['canStartDesktop'])
+        self.assertFalse(row['canInitializeDesktop'])
+        self.inspect.side_effect = lambda _: {'running': False, 'mainPids': [], 'runtimePids': [], 'unknown': False}
+        self.claude.status.return_value['automaticConnection'] = 'unavailable'
+        row = next(row for row in self.manager.clients(refresh=True)['clients'] if row['id'] == 'claude')
+        self.assertFalse(row['canStartDesktop'])
+        self.manager.config['discovered']['claude']['installed'] = False
+        row = next(row for row in self.manager.clients(refresh=True)['clients'] if row['id'] == 'claude')
+        self.assertFalse(row['canStartDesktop'])
+
+    def test_missing_native_claude_state_hides_desktop_actions(self):
+        self.claude.status.return_value = {'connected': False, 'installed': True,
+                                           'automaticConnection': 'native-console', 'cliAvailable': True}
+        self.inspect_batch.side_effect = lambda _: {}
+        row = next(row for row in self.manager.clients(refresh=True)['clients'] if row['id'] == 'claude')
+        self.assertFalse(row['canStartDesktop'])
+        self.assertFalse(row['canInitializeDesktop'])
+        self.assertFalse(row['canReconnect'])
+
     def test_macos_account_recovery_only_restores_existing_connection(self):
         self.manager._launch_account_client('claude', self.manager._descriptor('claude'))
         self.launch.assert_called_once()

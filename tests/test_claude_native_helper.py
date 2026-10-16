@@ -15,7 +15,7 @@ ROOT = Path(__file__).resolve().parents[1]
 
 class WindowsOwnerErrorSource(unittest.TestCase):
     def test_native_helper_preserves_attempt_marker_and_emits_distinct_codes(self):
-        source = (ROOT/'bridge/platforms/windows/claude-helper.cs').read_text()
+        source = (ROOT/'bridge/platforms/windows/claude-helper.cs').read_text(encoding='utf-8')
         mapping = source[source.index('    static string OwnerIssue('):source.index('    static string DesktopName(')]
         self.assertIn('value.Contains("["+marker+"]")', mapping)
         for code in ('OWNER_BUSY', 'OWNER_UNCONFIRMED', 'OWNER_LEGACY'):

@@ -2,6 +2,8 @@
 
 Status: implemented
 
+The foreground collection strategy below is superseded by [direct submission](2026-10-16-claude-direct-console-submit.md). Historical measurements and rejected alternatives remain relevant.
+
 ## Problem
 
 The macOS helper enters roughly 25 KiB of connector source into Claude DevTools Console and requires one complete accessibility readback before Enter. A long CodeMirror line may expose only a virtualized slice. The helper waits for forty 25 ms reads before attempting its bounded caret navigation. In a real Test workspace probe, both the fourth and fortieth reads exposed the same 10,077 of 25,020 UTF-16 units, so that wait did not reveal more text in that case.

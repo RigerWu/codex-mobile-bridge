@@ -571,7 +571,7 @@ class ClaudeNativeConnection(unittest.TestCase):
 
     def test_submitted_script_without_heartbeat_never_reports_connected(self):
         actions, states = self.run_injection(False)
-        self.assertIn('connect', actions)
+        self.assertEqual(actions.count('connect'), 1)
         self.assertNotIn('close-devtools', actions)
         self.assertNotIn('connected', states)
         self.assertEqual(self.adapter.status()['setupState'], 'failed')

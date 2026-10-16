@@ -970,8 +970,7 @@ class ClaudeKeyboard {
         return true;
     }
     static void SubmitVerifiedConsole(string text,Func<string> readDraft,Action<string> replace,
-        Func<string> readDocument,Action check,Action pause,Func<bool> expired,Action submit,bool allowConnectorDraft=true,
-        Action refreshReadback=null,Func<bool> refreshDue=null) {
+        Func<string> readDocument,Action check,Action pause,Func<bool> expired,Action submit,bool allowConnectorDraft=true) {
         check();
         string pending=readDraft().Trim('\r','\n',' ','\t','\u200b','\ufeff');
         if(!String.IsNullOrWhiteSpace(pending)&&(!allowConnectorDraft||!pending.StartsWith("/* codex bridge connector */")))
@@ -979,53 +978,17 @@ class ClaudeKeyboard {
         check();replace(text);
         // Chromium applies accessibility edits asynchronously. ValuePattern may
         // echo the new value before CodeMirror's actual document has changed.
-        bool refreshed=false;
         while(true) {
             check();
             string observed=readDocument();
             if(observed==text)break;
             if(expired())throw new Exception("Console 脚本尚未完整写入，未执行；请通过手动初始化重试");
-            if(!refreshed&&refreshReadback!=null&&!String.IsNullOrEmpty(observed)&&(refreshDue==null||refreshDue())) {
-                refreshed=true;check();refreshReadback();
-            }
             pause();
         }
         check();submit();
     }
-    static string WaitConsolePrefix(string text,Func<string> readDocument,Action check,Action pause,Func<bool> expired) {
-        while(true) {
-            check();
-            if(expired())throw new Exception("无法核对 Console 脚本前半段，未执行");
-            string visible=readDocument();
-            if(visible==text||!String.IsNullOrEmpty(visible)&&text.StartsWith(visible,StringComparison.Ordinal))return visible;
-            pause();
-        }
-    }
-    static void RefreshConsoleReadback(AutomationElement prompt,TextPattern document,string text,Func<bool> expired) {
-        CheckPrompt(prompt);
-        Send(new[]{Key(17,false),Key(36,false),Key(36,true),Key(17,true)});
-        TextPatternRange range=null;
-        string visible=WaitConsolePrefix(text,delegate {
-            range=document.DocumentRange;
-            return range.GetText(-1).TrimEnd('\r','\n');
-        },()=>CheckPrompt(prompt),()=>Thread.Sleep(50),expired);
-        if(visible==text)return;
-        var caret=range.Clone();
-        caret.MoveEndpointByRange(TextPatternRangeEndpoint.End,caret,TextPatternRangeEndpoint.Start);
-        int middle=Math.Min(text.Length/2,visible.Length-1);
-        if(caret.MoveEndpointByUnit(TextPatternRangeEndpoint.End,TextUnit.Character,middle)!=middle)
-            throw new Exception("无法定位 Console 脚本中段，未执行");
-        caret.MoveEndpointByRange(TextPatternRangeEndpoint.Start,caret,TextPatternRangeEndpoint.End);
-        CheckPrompt(prompt);
-        caret.Select();
-        CheckPrompt(prompt);
-        Send(new[]{Key(39,false),Key(39,true)});
-    }
-    static void SubmitConsoleAtEnd(Action check,Action<INPUT[]> send) {
-        check();
-        send(new[]{Key(17,false),Key(35,false),Key(35,true),Key(17,true)});
-        check();
-        send(new[]{Key(13,false),Key(13,true)});
+    static void SubmitConsoleDirect(Action check,Action<INPUT[]> send) {
+        check();send(new[]{Key(13,false),Key(13,true)});
     }
     static int UniqueSegmentStart(string expected,string observed) {
         if(String.IsNullOrEmpty(observed)||observed.Length<32)return -1;
@@ -1040,39 +1003,27 @@ class ClaudeKeyboard {
         }
         return false;
     }
-    static string CollectConsoleSource(string expected,Func<string> read,Action home,Action down,
-        Action check,Action<int> pause,Func<bool> expired) {
-        bool[] covered=new bool[expected.Length];int count=0,frontier=0;
-        check();home();
-        var settle=Stopwatch.StartNew();
-        int steps=Math.Min(expected.Split('\n').Length+2,18);
-        for(int step=0;step<steps;step++) {
-            check();if(expired())throw new Exception("Console 全文核对超时，未执行");
-            if(step>0){down();settle.Restart();check();}
-            pause(Math.Max(0,50-(int)settle.ElapsedMilliseconds));
-            check();if(expired())throw new Exception("Console 全文核对超时，未执行");
-            string observed=read();
-            if(observed==expected)return expected;
-            // Only a complete match can return early. A partial viewport must
-            // have the full settle period after the last navigation key.
-            pause(Math.Max(0,200-(int)settle.ElapsedMilliseconds));
-            check();if(expired())throw new Exception("Console 全文核对超时，未执行");
-            observed=read();
-            if(observed==null)throw new Exception("Console 片段无法读取，未执行");
-            if(observed==expected)return expected;
-            int start=UniqueSegmentStart(expected,observed);
-            if(start<0) {
-                if(VirtualizedConsoleGap(expected,observed))continue;
-                throw new Exception("Console 片段与连接脚本不符，未执行");
-            }
-            int end=start+observed.Length;
-            if(step==0&&start!=0||start>frontier)
-                throw new Exception("Console 片段未连续覆盖连接脚本，未执行");
-            for(int i=start;i<end;i++)if(!covered[i]){covered[i]=true;count++;}
-            if(count==expected.Length)return expected;
-            if(end>frontier)frontier=end;
+    static bool CompatibleConsoleView(string expected,string observed) {
+        return UniqueSegmentStart(expected,observed)>=0||
+            !String.IsNullOrEmpty(observed)&&VirtualizedConsoleGap(expected,observed);
+    }
+    static void SubmitForegroundConsole(string text,Func<string> readDraft,Action<string> replace,
+        Func<string> readVisible,Action check,Action pause,Func<bool> settled,Func<bool> expired,Action<INPUT[]> submit) {
+        check();
+        string pending=readDraft().Trim('\r','\n',' ','\t','\u200b','\ufeff');
+        if(!String.IsNullOrWhiteSpace(pending))
+            throw new Exception("Console 中已有未提交内容，已保留，请处理后重试连接");
+        check();replace(text);
+        // A visible UIA slice is a compatibility check, not proof that the
+        // complete script executed. Only the signed bridge receipt proves that.
+        while(true) {
+            check();
+            string visible=readVisible();
+            if(visible==text||CompatibleConsoleView(text,visible)&&settled())break;
+            if(expired())throw new Exception("Console 未显示本次脚本，未提交；请在电脑端检查后重试");
+            pause();
         }
-        throw new Exception("Console 脚本尚未完整写入，未执行；请通过手动初始化重试");
+        SubmitConsoleDirect(check,submit);
     }
     static void WriteConsoleOnce(AutomationElement prompt,string text) {
         CheckPrompt(prompt);
@@ -1082,21 +1033,13 @@ class ClaudeKeyboard {
             !prompt.TryGetCurrentPattern(TextPattern.Pattern,out textObject))
             throw new Exception("当前 Claude Console 不支持一次写入，请在电脑端手动初始化连接");
         var value=(ValuePattern)valueObject;var document=(TextPattern)textObject;
-        var timer=Stopwatch.StartNew();string verified=null;
-        SubmitVerifiedConsole(text,()=>Contents(prompt),value.SetValue,
-            ()=>verified??document.DocumentRange.GetText(-1).TrimEnd('\r','\n'),()=>CheckPrompt(prompt),
-            ()=>Thread.Sleep(50),()=>timer.Elapsed.TotalSeconds>=6,delegate {
-                Stage("脚本已完整写入并核对，正在提交");
-                SubmitConsoleAtEnd(()=>CheckPrompt(prompt),Send);
-            },false,()=>{
-                if(text.Contains("\n"))verified=CollectConsoleSource(text,
-                    ()=>document.DocumentRange.GetText(-1).TrimEnd('\r','\n'),
-                    ()=>Send(new[]{Key(17,false),Key(36,false),Key(36,true),Key(17,true)}),
-                    ()=>Send(new[]{Key(17,false),Key(40,false),Key(40,true),Key(17,true)}),
-                    ()=>CheckPrompt(prompt),ms=>Thread.Sleep(ms),()=>timer.Elapsed.TotalSeconds>=6);
-                else RefreshConsoleReadback(prompt,document,text,()=>timer.Elapsed.TotalSeconds>=6);
-            },
-            ()=>timer.ElapsedMilliseconds>=250);
+        var timer=new Stopwatch();
+        SubmitForegroundConsole(text,()=>Contents(prompt),valueText=>{value.SetValue(valueText);timer.Restart();},
+            ()=>document.DocumentRange.GetText(-1).TrimEnd('\r','\n'),()=>CheckPrompt(prompt),
+            ()=>Thread.Sleep(50),()=>timer.ElapsedMilliseconds>=250,()=>timer.ElapsedMilliseconds>=1200,keys=>{
+                Stage("脚本已写入 Console，正在提交并等待连接回执");
+                Send(keys);
+            });
     }
     static void CheckWindowSelection() {
         var owned=new AppWindow {Handle=new IntPtr(11),Owner=new IntPtr(99),Pid=7,Visible=true,Title="Claude"};
@@ -1164,157 +1107,66 @@ class ClaudeKeyboard {
         if(!rejected)throw new Exception("Claude 启动入口允许列表自检失败");
     }
     static void CheckDirectSubmission() {
-        const string text="/* codex bridge connector */void 0;";
-        int writes=0,submits=0,pauses=0;
-        SubmitVerifiedConsole(text,()=>"/* codex bridge connector */partial",
-            value=>{if(value!=text)throw new Exception("wrong write");writes++;},
-            ()=>pauses==0?"old document":text,()=>{},()=>pauses++,()=>pauses>=3,()=>submits++);
-        if(writes!=1||submits!=1||pauses!=1)throw new Exception("Console 异步整段写入自检失败");
-        writes=0;submits=0;pauses=0;bool refused=false;
-        try {SubmitVerifiedConsole(text,()=>"",value=>writes++,()=>"partial",()=>{},()=>pauses++,()=>pauses>=2,()=>submits++);}
-        catch(Exception){refused=true;}
-        if(!refused||writes!=1||submits!=0)throw new Exception("Console 不完整脚本拒绝执行自检失败");
-        writes=0;submits=0;refused=false;
-        try {SubmitVerifiedConsole(text,()=>"userCommand()",value=>writes++,()=>text,()=>{},()=>{},()=>true,()=>submits++);}
-        catch(Exception){refused=true;}
-        if(!refused||writes!=0||submits!=0)throw new Exception("Console 用户草稿保护自检失败");
-        writes=0;submits=0;int checks=0;refused=false;
-        try {SubmitVerifiedConsole(text,()=>"",value=>writes++,()=>text,
-            ()=>{if(++checks==4)throw new Exception("focus changed before Enter");},()=>{},()=>false,()=>submits++);}
-        catch(Exception){refused=true;}
-        if(!refused||writes!=1||submits!=0)throw new Exception("Console 提交前焦点保护自检失败");
-        writes=0;submits=0;checks=0;refused=false;
-        try {SubmitVerifiedConsole(text,()=>"",value=>writes++,()=>"partial",
-            ()=>{if(++checks==4)throw new OperationCanceledException();},()=>{},()=>false,()=>submits++);}
-        catch(OperationCanceledException){refused=true;}
-        if(!refused||writes!=1||submits!=0)throw new Exception("Console 异步等待取消自检失败");
-        writes=0;submits=0;refused=false;
-        try {SubmitVerifiedConsole(text,()=>"",value=>writes++,()=>text,
-            ()=>{throw new OperationCanceledException();},()=>{},()=>false,()=>submits++);}
-        catch(OperationCanceledException){refused=true;}
-        if(!refused||writes!=0||submits!=0)throw new Exception("Console 写入前取消自检失败");
-        writes=0;submits=0;pauses=0;int refreshes=0;
-        SubmitVerifiedConsole(text,()=>"",value=>writes++,()=>refreshes==0?"visible suffix":text,
-            ()=>{},()=>pauses++,()=>pauses>=2,()=>submits++,false,()=>refreshes++,()=>true);
-        if(writes!=1||submits!=1||refreshes!=1)throw new Exception("Console 前台可访问区刷新自检失败");
-        writes=0;submits=0;pauses=0;refreshes=0;refused=false;
-        try {SubmitVerifiedConsole(text,()=>"",value=>writes++,()=>"visible suffix",
-            ()=>{},()=>pauses++,()=>pauses>=2,()=>submits++,false,()=>refreshes++,()=>true);}
-        catch(Exception){refused=true;}
-        if(!refused||writes!=1||submits!=0||refreshes!=1)throw new Exception("Console 刷新后不完整脚本拒绝执行自检失败");
-        writes=0;submits=0;refreshes=0;refused=false;
-        try {SubmitVerifiedConsole(text,()=>"/* codex bridge connector */old",value=>writes++,()=>text,
-            ()=>{},()=>{},()=>true,()=>submits++,false,()=>refreshes++,()=>true);}
-        catch(Exception){refused=true;}
-        if(!refused||writes!=0||submits!=0||refreshes!=0)throw new Exception("Console 前台已有草稿保护自检失败");
-        writes=0;submits=0;refreshes=0;int prefixReads=0;
-        SubmitVerifiedConsole(text,()=>"",value=>writes++,()=>refreshes==0?"old suffix":text,
-            ()=>{},()=>{},()=>false,()=>submits++,false,delegate {
-                refreshes++;
-                string prefix=WaitConsolePrefix(text,()=>++prefixReads<3?"old suffix":text.Substring(0,text.Length/2),
-                    ()=>{},()=>{},()=>prefixReads>=4);
-                if(prefix!=text.Substring(0,text.Length/2))throw new Exception("Console 延迟前缀自检失败");
-            },()=>true);
-        if(writes!=1||submits!=1||refreshes!=1||prefixReads!=3)throw new Exception("Console 延迟可访问区刷新自检失败");
-        writes=0;submits=0;refreshes=0;refused=false;
-        try {SubmitVerifiedConsole(text,()=>"",value=>writes++,()=>"old suffix",
-            ()=>{},()=>{},()=>false,()=>submits++,false,delegate {
-                refreshes++;throw new Exception("refresh failed");
-            },()=>true);}
-        catch(Exception){refused=true;}
-        if(!refused||writes!=1||submits!=0||refreshes!=1)throw new Exception("Console 刷新异常拒绝执行自检失败");
-        writes=0;submits=0;refreshes=0;checks=0;refused=false;
-        try {SubmitVerifiedConsole(text,()=>"",value=>writes++,()=>"old suffix",
-            ()=>{},()=>{},()=>false,()=>submits++,false,delegate {
-                refreshes++;
-                WaitConsolePrefix(text,()=>"old suffix",()=>{if(++checks==3)throw new OperationCanceledException();},
-                    ()=>{},()=>false);
-            },()=>true);}
-        catch(OperationCanceledException){refused=true;}
-        if(!refused||writes!=1||submits!=0||refreshes!=1)throw new Exception("Console 刷新期间取消自检失败");
-        writes=0;submits=0;refreshes=0;pauses=0;refused=false;
-        try {SubmitVerifiedConsole(text,()=>"",value=>writes++,()=>"old suffix",
-            ()=>{},()=>{},()=>false,()=>submits++,false,delegate {
-                refreshes++;
-                WaitConsolePrefix(text,()=>"old suffix",()=>{},()=>pauses++,()=>pauses>=2);
-            },()=>true);}
-        catch(Exception){refused=true;}
-        if(!refused||writes!=1||submits!=0||refreshes!=1||pauses!=2)throw new Exception("Console 刷新总超时自检失败");
-        var sequence=new List<string>();var keyBatches=new List<INPUT[]>();
-        SubmitVerifiedConsole(text,()=>"",value=>sequence.Add("write"),
-            ()=>{sequence.Add("read");return text;},()=>{},()=>{},()=>false,delegate {
-                SubmitConsoleAtEnd(()=>sequence.Add("check"),keys=>{
-                    keyBatches.Add(keys);sequence.Add(keyBatches.Count==1?"end":"enter");
-                });
-            },false);
-        if(String.Join(",",sequence.ToArray())!="write,read,check,end,check,enter"||keyBatches.Count!=2)
-            throw new Exception("Console 全文核对后文末提交顺序自检失败");
-        var endKeys=keyBatches[0];var enterKeys=keyBatches[1];
-        if(endKeys.Length!=4||endKeys[0].data.key.vk!=17||endKeys[0].data.key.flags!=0||
-            endKeys[1].data.key.vk!=35||endKeys[1].data.key.flags!=1||
-            endKeys[2].data.key.vk!=35||endKeys[2].data.key.flags!=3||
-            endKeys[3].data.key.vk!=17||endKeys[3].data.key.flags!=2||
-            enterKeys.Length!=2||enterKeys[0].data.key.vk!=13||enterKeys[0].data.key.flags!=0||
-            enterKeys[1].data.key.vk!=13||enterKeys[1].data.key.flags!=2)
-            throw new Exception("Console 文末与 Enter 按键释放配对自检失败");
-        foreach(ushort vk in new ushort[]{33,34,35,36,37,38,39,40})
-            if(Key(vk,false).data.key.flags!=1||Key(vk,true).data.key.flags!=3)
-                throw new Exception("Console 导航键扩展标志自检失败");
-        keyBatches.Clear();checks=0;refused=false;
-        try {SubmitVerifiedConsole(text,()=>"",value=>{},()=>text,()=>{},()=>{},()=>false,
-            ()=>SubmitConsoleAtEnd(()=>{if(++checks==2)throw new Exception("focus changed");},
-                keys=>keyBatches.Add(keys)),false);}
-        catch(Exception){refused=true;}
-        if(!refused||keyBatches.Count!=1||keyBatches[0][0].data.key.vk!=17)
-            throw new Exception("Console 文末导航后失焦不得提交自检失败");
-    }
-    static int CollectorSelfCheckEnters(string expected,string[] views,bool timeout=false,bool loseFocus=false) {
-        int cursor=0,writes=0,enters=0;string verified=null;
-        Action check=()=>{if(loseFocus&&cursor>=1)throw new Exception("focus changed");};
-        try {
-            SubmitVerifiedConsole(expected,()=>"",value=>{if(value!=expected)throw new Exception("wrong source");writes++;},
-                ()=>verified??"partial",check,()=>{},()=>false,()=>enters++,false,
-                ()=>{verified=CollectConsoleSource(expected,
-                    ()=>views[Math.Min(cursor,views.Length-1)],()=>cursor=0,()=>cursor++,
-                    check,ms=>{},()=>timeout);},()=>true);
-        } catch {return enters;}
-        if(writes!=1)throw new Exception("Console 分段写入次数自检失败");
-        return enters;
-    }
-    static void CheckConsoleCollection() {
         const string marker="/* codex bridge connector */";
-        string shaped=marker+"(async()=>{\nvoid 0;\n})();";
-        if(!ConsoleSourceShape(shaped,false)||ConsoleSourceShape(shaped,true)||
-           ConsoleSourceShape(shaped.Replace("\n","\r\n"),false)||
+        string text=marker+"(async()=>{\nvoid 0;\n})();";
+        if(!ConsoleSourceShape(text,false)||ConsoleSourceShape(text,true)||
+           ConsoleSourceShape(text.Replace("\n","\r\n"),false)||
            ConsoleSourceShape(marker+"void 0\n();",false)||
            ConsoleSourceShape(marker+new String('x',3500)+";\nvoid 0;",false)||
            !ConsoleSourceShape(marker+"void 0;",true))
             throw new Exception("Console 有限行格式自检失败");
-        var builder=new StringBuilder();
-        for(int i=0;i<1024;i++){if(i>0&&i%128==0)builder.Append('\n');builder.Append(i.ToString("x4"));}
-        string expected=builder.ToString();
-        string first=expected.Substring(0,1500),middle=expected.Substring(1000,1600),last=expected.Substring(2200);
-        string virtualGap=expected.Substring(0,80)+"\n"+expected.Substring(2000);
-        int reads=0,pauses=0,cursor=0;
-        string[] growing={expected.Substring(0,32),first,middle,middle,last,last};
-        string settled=CollectConsoleSource(expected,()=>growing[Math.Min(reads++,growing.Length-1)],
-            ()=>cursor=0,()=>cursor++,()=>{},ms=>pauses++,()=>false);
-        if(settled!=expected||cursor!=2||reads!=6||pauses!=6)
-            throw new Exception("Console 片段未延后核验自检失败");
-        reads=0;pauses=0;
-        settled=CollectConsoleSource(expected,()=>{reads++;return expected;},
-            ()=>{},()=>{},()=>{},ms=>pauses++,()=>false);
-        if(settled!=expected||reads!=1||pauses!=1)
-            throw new Exception("Console 全文提前核验自检失败");
-        if(CollectorSelfCheckEnters(expected,new[]{first,virtualGap,middle,middle,middle,last})!=1||
-           CollectorSelfCheckEnters(expected,new[]{first,expected.Substring(1499)})!=1||
-           CollectorSelfCheckEnters(expected,new[]{first,expected.Substring(1800)})!=0||
-           CollectorSelfCheckEnters(expected,new[]{first,"foreign Console draft"})!=0||
-           CollectorSelfCheckEnters(expected,new[]{last})!=0||
-           CollectorSelfCheckEnters(expected,new[]{first})!=0||
-           CollectorSelfCheckEnters(expected,new[]{first,middle,last},timeout:true)!=0||
-           CollectorSelfCheckEnters(expected,new[]{first,middle,last},loseFocus:true)!=0)
-            throw new Exception("Console 分段全文覆盖与零误提交自检失败");
+        int writes=0,enters=0,pauses=0,checks=0;INPUT[] keys=null;
+        SubmitForegroundConsole(text,()=>"",value=>{if(value!=text)throw new Exception("wrong source");writes++;},
+            ()=>pauses==0?"":pauses==1?text.Substring(10,1):pauses==2?text.Substring(10,31):text.Substring(10,32),
+            ()=>checks++,()=>pauses++,()=>pauses>=4,()=>pauses>=6,
+            sent=>{enters++;keys=sent;});
+        if(writes!=1||enters!=1||pauses!=4||keys.Length!=2||
+           keys[0].data.key.vk!=13||keys[0].data.key.flags!=0||
+           keys[1].data.key.vk!=13||keys[1].data.key.flags!=2)
+            throw new Exception("Console 片段可见与单次直接 Enter 自检失败");
+        writes=0;enters=0;pauses=0;
+        SubmitForegroundConsole(text,()=>"",value=>writes++,()=>pauses<2?"":text,
+            ()=>{},()=>pauses++,()=>false,()=>pauses>=5,sent=>enters++);
+        if(writes!=1||enters!=1||pauses!=2)throw new Exception("Console 异步空白后全文立即提交自检失败");
+        writes=0;enters=0;pauses=0;bool refused=false;
+        try {SubmitForegroundConsole(text,()=>"",value=>writes++,()=>text.Substring(10,1),
+            ()=>{},()=>pauses++,()=>true,()=>pauses>=2,sent=>enters++);}
+        catch(Exception){refused=true;}
+        if(!refused||writes!=1||enters!=0)throw new Exception("Console 单字符片段不得提交自检失败");
+        writes=0;enters=0;pauses=0;refused=false;
+        try {SubmitForegroundConsole(text,()=>"",value=>writes++,()=>"foreign Console draft",
+            ()=>{},()=>pauses++,()=>true,()=>pauses>=2,sent=>enters++);}
+        catch(Exception){refused=true;}
+        if(!refused||writes!=1||enters!=0)throw new Exception("Console 无关内容拒绝提交自检失败");
+        writes=0;enters=0;refused=false;
+        try {SubmitForegroundConsole(text,()=>"userCommand()",value=>writes++,()=>text,
+            ()=>{},()=>{},()=>true,()=>false,sent=>enters++);}
+        catch(Exception){refused=true;}
+        if(!refused||writes!=0||enters!=0)throw new Exception("Console 用户草稿保护自检失败");
+        writes=0;enters=0;
+        SubmitForegroundConsole(text,()=>"\u200b\ufeff",value=>writes++,()=>text,
+            ()=>{},()=>{},()=>false,()=>false,sent=>enters++);
+        if(writes!=1||enters!=1)throw new Exception("Console 不可见空草稿自检失败");
+        writes=0;enters=0;checks=0;refused=false;
+        try {SubmitForegroundConsole(text,()=>"",value=>writes++,()=>text,
+            ()=>{if(++checks==3)throw new Exception("focus changed");},()=>{},()=>true,()=>false,sent=>enters++);}
+        catch(Exception){refused=true;}
+        if(!refused||writes!=1||enters!=0)throw new Exception("Console 提交前失焦保护自检失败");
+        writes=0;enters=0;checks=0;refused=false;
+        try {SubmitForegroundConsole(text,()=>"",value=>writes++,()=>"",
+            ()=>{if(++checks==4)throw new OperationCanceledException();},()=>{},()=>false,()=>false,sent=>enters++);}
+        catch(OperationCanceledException){refused=true;}
+        if(!refused||writes!=1||enters!=0)throw new Exception("Console 等待取消自检失败");
+        writes=0;enters=0;refused=false;
+        try {SubmitForegroundConsole(text,()=>"",value=>{writes++;throw new Exception("write failed");},()=>text,
+            ()=>{},()=>{},()=>true,()=>false,sent=>enters++);}
+        catch(Exception){refused=true;}
+        if(!refused||writes!=1||enters!=0)throw new Exception("Console 写入失败不得提交自检失败");
+        writes=0;enters=0;refused=false;
+        try {SubmitForegroundConsole(text,()=>"",value=>writes++,()=>text,
+            ()=>{},()=>{},()=>true,()=>false,sent=>{enters++;throw new Exception("submit uncertain");});}
+        catch(Exception){refused=true;}
+        if(!refused||writes!=1||enters!=1)throw new Exception("Console 提交不确定时不得重放自检失败");
     }
     static void CheckDetachedReuse() {
         var tools=new AppWindow {Handle=new IntPtr(21),Pid=7,Visible=true,Title="DevTools - app://localhost"};
@@ -1524,7 +1376,6 @@ class ClaudeKeyboard {
                 CheckMenuNavigation();
                 CheckNativeLaunch();
                 CheckDirectSubmission();
-                CheckConsoleCollection();
                 CheckDetachedReuse();
                 CheckNativeQuit();
                 CheckBackgroundConnection();
@@ -1593,7 +1444,7 @@ class ClaudeKeyboard {
             Stage("已定位 Console 输入框");
             // This foreground bootstrap is used only for explicit manual
             // initialization. Reconnects never launch this keyboard helper.
-            FocusPrompt(prompt);WriteConsoleOnce(prompt,text);Thread.Sleep(700);
+            FocusPrompt(prompt);WriteConsoleOnce(prompt,text);
             Console.WriteLine("脚本已输入，等待连接回执");return 0;
         } catch(Exception e) {
             string message=FailureMessage(e,quitAction);

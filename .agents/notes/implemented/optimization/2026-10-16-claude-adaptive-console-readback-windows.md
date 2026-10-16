@@ -2,6 +2,8 @@
 
 Status: implemented
 
+The foreground collection strategy below is superseded by [direct submission](2026-10-16-claude-direct-console-submit.md). Historical measurements and rejected alternatives remain relevant.
+
 ## Problem
 
 The Windows helper verifies a roughly 25 KiB multiline Claude Console script through UI Automation before pressing Enter. Its collector waits a fixed 200 ms after each viewport move and its focus check, even though the renderer begins settling when the navigation key is sent. In a harmless Test workspace diagnostic, source slices at 50, 100, 150 and 200 ms were identical at each of seven navigation steps. Prompt checks took 24–43 ms and text reads took 2–9 ms in that run.

@@ -245,59 +245,20 @@ final class Connector {
         try fail("failed", "未找到 Claude Console，请确认开发者工具窗口可用后重试")
     }
     func verify(_ prompt: AXUIElement, _ expected: String) throws {
-        func read() throws -> String? {
-            Thread.sleep(forTimeInterval: 0.025); try check(prompt)
-            return (attribute(prompt, kAXValueAttribute) as? String)?.trimmingCharacters(in: .newlines)
-        }
-        func reveal(_ attempts: Int) throws -> Bool {
-            // A long Console line can expose only a rendered slice through AX.
-            // Move the caret to reveal more; only a single full-value match
-            // establishes that the editor contains the expected source.
-            var settable = DarwinBoolean(false)
+        var previous: String?
+        for _ in 0..<40 {
+            Thread.sleep(forTimeInterval: 0.025)
             try check(prompt)
-            guard AXUIElementIsAttributeSettable(prompt, kAXSelectedTextRangeAttribute as CFString, &settable) == .success && settable.boolValue else { return false }
-            for _ in 0..<attempts {
-                let live = try read()
-                if live == expected {
-                    try key(125, flags: .maskCommand, prompt: prompt)
-                    return true
-                }
-                guard let live = live, !live.isEmpty else { break }
-                let position = min(expected.utf16.count / 2, live.utf16.count - 1)
-                var range = CFRange(location: position, length: 0)
-                guard let selected = AXValueCreate(.cfRange, &range) else { break }
-                try check(prompt)
-                guard AXUIElementSetAttributeValue(prompt, kAXSelectedTextRangeAttribute as CFString, selected) == .success else { break }
-                // A selection alone need not scroll CodeMirror; Right updates its viewport.
-                try key(124, prompt: prompt)
-                for _ in 0..<4 {
-                    if try read() == expected {
-                        try key(125, flags: .maskCommand, prompt: prompt)
-                        return true
-                    }
-                }
-            }
-            return false
-        }
-        var observed: String?, previous: String?, stable = 0, earlyAttempted = false
-        for attempt in 0..<40 {
-            observed = try read()
-            if observed == expected {
-                if earlyAttempted { try key(125, flags: .maskCommand, prompt: prompt) }
-                return
-            }
-            stable = observed?.isEmpty == false && observed == previous ? stable + 1 : 1
+            let observed = (attribute(prompt, kAXValueAttribute) as? String)?.trimmingCharacters(in: .newlines)
+            if observed == expected { return }
+            // Chromium may expose only a viewport slice of a long Console line.
+            // This establishes input readiness, not full-source verification;
+            // the signed connector receipt establishes successful execution.
+            if !expected.isEmpty, let observed = observed, observed.utf16.count >= 32,
+               expected.contains(observed), observed == previous { return }
             previous = observed
-            if attempt == 3, stable == 4, expected.utf16.count > 3500,
-               let observed = observed, expected.contains(observed) {
-                earlyAttempted = true
-                if try reveal(1) { return }
-            }
         }
-        if !expected.isEmpty && observed?.isEmpty == false {
-            if try reveal(3) { return }
-        }
-        try fail("needs-attention", "Console 无法核验完整内容，未执行连接脚本，请重试")
+        try fail("needs-attention", "Console 无法确认输入内容，未执行连接脚本，请重试")
     }
     func submit(_ prompt: AXUIElement) throws {
         try check(prompt)
@@ -314,15 +275,8 @@ final class Connector {
         down.post(tap: .cghidEventTap)
         Thread.sleep(forTimeInterval: 0.03)
         up.post(tap: .cghidEventTap)
-        try check(prompt)
-        let deadline = Date().addingTimeInterval(3)
-        while Date() < deadline {
-            try check(prompt)
-            // An unreadable AXValue is not an empty editor or proof of submit.
-            if submissionAccepted(attribute(prompt, kAXValueAttribute) as? String) { return }
-            Thread.sleep(forTimeInterval: 0.05)
-        }
-        try fail("failed", "未确认 Console 已提交，已停止自动操作；请检查 Console 和连接状态后重试")
+        // The owner waits for the signed connector receipt; AX focus/value can
+        // change as soon as this Enter is accepted and cannot gate dispatch.
     }
     func inject(_ path: String) throws {
         let source = try String(contentsOfFile: path, encoding: .utf8)
@@ -358,8 +312,8 @@ final class Connector {
                     event.postToPid(app.processIdentifier)
                 }
                 Thread.sleep(forTimeInterval: 0.01)
-                if end % 128 == 0 || end == units.count { try verify(prompt, String(decoding: units[0..<end], as: UTF16.self)) }
             }
+            try verify(prompt, source)
         }
         try submit(prompt)
         output("submitted", "连接脚本已输入，正在等待 Claude 确认")

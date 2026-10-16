@@ -4,7 +4,7 @@ const fs=require('node:fs'),path=require('node:path'),vm=require('node:vm');
 const root=path.resolve(__dirname,'..'),html=fs.readFileSync(path.join(root,'web/index.html'),'utf8');
 const workbenchBack=vm.runInNewContext(fs.readFileSync(path.join(root,'web/features/workspace/workbench.js'),'utf8')+'\nWorkbench.prototype.back');
 
-async function fixture({missing='',auth='anonymous',hash='',language='zh',pairPending=false,navigationPending=false}={}){
+async function fixture({missing='',auth='anonymous',hash='',language='zh',pairPending=false,navigationPending=false,allDisabled=false}={}){
   const nodes=new Map(),timers=new Map(),listeners=new Map(),requests=[],writes=[],navigation=[];let clock=0,reloads=0,error=null,releaseNavigation;
   const node=(tag='div')=>({tagName:tag.toUpperCase(),value:'',checked:false,disabled:false,hidden:false,open:false,textContent:'',dataset:{},options:[],children:[],parentElement:{},style:{setProperty(){}},scrollTop:0,
     classList:(()=>{const classes=new Set();return {add(...names){names.forEach(name=>classes.add(name));},remove(...names){names.forEach(name=>classes.delete(name));},toggle(name,force){const enabled=force??!classes.has(name);if(enabled)classes.add(name);else classes.delete(name);return enabled;},contains(name){return classes.has(name);}};})(),click(){this.onclick?.();},getBoundingClientRect(){return {width:0};},addEventListener(){},setAttribute(k,v){this[k]=v;},closest(){return nodes.get('accounts-dialog');},
@@ -21,7 +21,7 @@ async function fixture({missing='',auth='anonymous',hash='',language='zh',pairPe
   const context=vm.createContext({window,location,history:{replaceState(_a,_b,url){current=new URL(url,current);}},localStorage:storage,sessionStorage:storage,navigator:{userAgent:'fixture'},
     document:{documentElement:{},getElementById:id=>nodes.get(id),addEventListener(){},dispatchEvent(){},querySelectorAll(){return [];},querySelector(){return {classList:{toggle(){}}};},createElement:node},
     Event:class{},CustomEvent:class{},Option:function(text,value){return {...node('option'),textContent:text,value};},
-    Workbench:class{constructor(){this.current=null;this.panel={querySelector(){return null;}};this.backCalls=0;}get splitMode(){return false;}get isFileVisible(){return !!this.current&&this.current.active!=='chat';}back(){this.backCalls++;return workbenchBack.call(this);}directory(session,_tab,dir){session.directory=dir;}select(id){this.current.active=id;}rememberScroll(){}stopThumbnails(){}reset(){}relabel(){}},DesktopSessionsView:class{clear(){}},ClientNavigation:class{constructor(){this.provider='codex';}refresh(){navigation.push('refresh');if(navigationPending)return new Promise(resolve=>{releaseNavigation=resolve;});}async openChatLink(){navigation.push('open');}acknowledgeList(){}},
+    Workbench:class{constructor(){this.current=null;this.panel={querySelector(){return null;}};this.backCalls=0;}get splitMode(){return false;}get isFileVisible(){return !!this.current&&this.current.active!=='chat';}back(){this.backCalls++;return workbenchBack.call(this);}directory(session,_tab,dir){session.directory=dir;}select(id){this.current.active=id;}rememberScroll(){}stopThumbnails(){}reset(){}relabel(){}},DesktopSessionsView:class{clear(){}},ClientNavigation:class{constructor(){this.provider='codex';}refresh(){navigation.push('refresh');if(navigationPending)return new Promise(resolve=>{releaseNavigation=()=>{if(allDisabled)this.provider=null;resolve();};});if(allDisabled)this.provider=null;}async openChatLink(){navigation.push('open');}acknowledgeList(){}},
     setTimeout(fn,delay){timers.set(++clock,{fn,delay});return clock;},clearTimeout(id){timers.delete(id);},setInterval(){},clearInterval(){},
     fetch:async(url,options={})=>{
       requests.push(url);if(options.method==='POST')writes.push({url,body:options.body});
@@ -32,7 +32,7 @@ async function fixture({missing='',auth='anonymous',hash='',language='zh',pairPe
       }
       if(url==='/api/pair')return pairPending?new Promise(()=>{}):response({csrf:'paired'});
       if(url==='/api/accounts')return response({accounts:[],current:{kind:'api'}});
-      if(url.startsWith('/api/sessions?'))return response({sessions:[]});
+      if(url.startsWith('/api/sessions?'))return allDisabled?{ok:false,status:400,json:async()=>({error:'此应用已关闭，请在应用管理中开启'})}:response({sessions:[]});
       throw Error('Unexpected fixture request');
     }});
   const run=file=>vm.runInContext(fs.readFileSync(path.join(root,file),'utf8'),context,{filename:file});
@@ -92,6 +92,13 @@ test('authenticated list starts before client discovery while a deep link waits 
   assert.ok(ui.requests.some(url=>url.startsWith('/api/sessions?scope=host')));
   ui.releaseNavigation();await new Promise(setImmediate);
   assert.deepEqual(ui.navigation,['refresh','open']);
+});
+
+test('all-disabled gateway login keeps the management shell without a Codex list error',async()=>{
+  const ui=await fixture({auth:'signed-in',navigationPending:true,allDisabled:true});
+  assert.equal(ui.nodes.get('app').hidden,false);
+  ui.releaseNavigation();await new Promise(setImmediate);
+  assert.equal(ui.nodes.get('toast').hidden,true);
 });
 
 test('manual retry preserves an unsubmitted pairing fragment after app.js has already removed it',async()=>{

@@ -799,7 +799,7 @@ class DesktopSessions:
                     pass
             rows.append({'id': 'codex', 'name': 'Codex', 'installed': discovered.get('codex', {}).get('installed', ready), 'configured': ready, 'connected': False,
                          'setupStatus': 'ready' if ready else 'unconfigured',
-                         'enabled': self.config.get('enabled', {}).get('codex', ready), 'reason': reason})
+                         'enabled': self.enabled('codex'), 'reason': reason})
             for provider, name in [('claude', 'Claude'), ('deepseek', 'DSH')]:
                 connected = ready = False
                 invalid = False

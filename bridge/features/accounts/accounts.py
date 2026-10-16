@@ -212,7 +212,8 @@ class Accounts:
                                   'details': copy.deepcopy(self.info.entries.get(row['id'], {}))}
                                  for row in self.index['accounts']],
                     'activeId': current.get('id'), 'activeVerified': verified, 'current': current, 'blockers': self.blockers(),
-                    'externalChange': bool(self.index.get('activeId')) and not verified, 'switch': dict(self.state),
+                    'externalChange': bool(self.index.get('activeId')) and not verified,
+                    'sharedWithLocalCli': True, 'switch': dict(self.state),
                     'reminders':dict(self.monitor.preferences), 'reminderError':self.monitor.last_error,
                     'desktopUpdate':self.updates.status()}
 
@@ -629,11 +630,16 @@ class Accounts:
             raise ValueError('切换请求标识无效')
         with self.gate, self.lock:
             row = dict(self.row(value.get('id')))
+            sync_cli = value.get('syncLocalCli') is True
             ledger = read_json(self.root/'requests.json', {})
             if request_id in ledger:
                 if ledger[request_id] != row['id']:
                     raise ValueError('同一请求不能切换到不同账号')
                 return self.public()
+            # Desktop and local CLI use the same auth/config files even when
+            # the optional CLI effectiveness check is not selected.
+            from bridge.features.accounts.cli_sync import LocalCliSync
+            LocalCliSync(self.bridge).preflight('codex')
             self.assert_editable()
             if self.info.current().get('id') == row['id']:
                 return self.public()
@@ -645,7 +651,8 @@ class Accounts:
             app.validate(self.runtime)
             ledger[request_id] = row['id']
             private_json(self.root/'requests.json', ledger)
-            self.state = {'phase': 'preparing', 'requestId': request_id, 'targetId': row['id'], 'error': None}
+            self.state = {'phase': 'preparing', 'requestId': request_id, 'targetId': row['id'], 'error': None,
+                          'cliSync': {'status': 'pending' if sync_cli else 'shared-config-unverified'}}
             self.phase('preparing')
             self.thread = threading.Thread(target=self._switch, args=(row, app), daemon=True)
             self.thread.start()
@@ -803,6 +810,8 @@ class Accounts:
             self.wait_stopped()
             if changed:
                 folder = self.prepare(row, before)
+            from bridge.features.accounts.cli_sync import LocalCliSync
+            LocalCliSync(self.bridge)._codex_idle()
             self.phase('applying')
             private_bytes(self.home/'config.toml', (folder/'config.toml').read_bytes())
             if (folder/'auth.json').is_file():
@@ -815,6 +824,16 @@ class Accounts:
             self.wait_ready(app, row)
             with self.lock:
                 self.mark_active(row['id'])
+                if self.state.get('cliSync', {}).get('status') == 'pending':
+                    try:
+                        from bridge.features.accounts.cli_sync import LocalCliSync
+                        local_cli = LocalCliSync(self.bridge)
+                        local_cli._codex_idle()
+                        local_cli.verify('codex', row)
+                        self.state['cliSync'] = {'status': 'verified'}
+                    except Exception as error:
+                        self.state['cliSync'] = {'status': 'failed', 'error': str(error),
+                                                 'sharedConfigChanged': True}
                 self.phase('complete')
             (self.root/'rollback.json').unlink(missing_ok=True)
         except Exception:
@@ -828,13 +847,19 @@ class Accounts:
                     self.wait_ready(app)
                     with self.lock:
                         self.mark_active(backup['activeId'])
+                    if self.state.get('cliSync', {}).get('status') == 'pending':
+                        self.state['cliSync'] = {'status': 'not-applied', 'desktopStatus': 'restored'}
                     self.phase('restored', error='切换未完成，已恢复原接入；请检查桌面程序或重新登录')
                     (self.root/'rollback.json').unlink(missing_ok=True)
                 except Exception:
+                    if self.state.get('cliSync', {}).get('status') == 'pending':
+                        self.state['cliSync'] = {'status': 'unknown', 'desktopStatus': 'unknown'}
                     self.phase('interrupted', error='自动恢复未完成，请在桌面端恢复原接入')
             else:
                 message = ('桌面程序未正常退出，请检查系统权限或手动关闭后重试' if self.state.get('phase') == 'stopping'
                            else '切换未执行，请检查账号登录、配置限制和桌面程序路径')
+                if self.state.get('cliSync', {}).get('status') == 'pending':
+                    self.state['cliSync'] = {'status': 'not-applied', 'desktopStatus': 'failed'}
                 self.phase('failed', error=message)
         finally:
             shutil.rmtree(self.root/'prepared', ignore_errors=True)

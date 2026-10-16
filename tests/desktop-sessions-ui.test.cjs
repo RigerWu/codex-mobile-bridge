@@ -59,8 +59,9 @@ test('Claude session list exposes the confirmed initialization flow without runn
 test('prepared Claude lists offer separate reconnect and reinitialization actions',async()=>{
  const ui=fixture(),client={id:'claude',name:'Claude',enabled:true,installed:true,connected:false,setupStatus:'needs-initialization',reconnectSupported:true,canReconnect:true},reconnects=[],initializations=[];
  ui.view.setClientStates([client],undefined,id=>initializations.push(id),undefined,id=>reconnects.push(id));await ui.view.choose('claude');
- assert.equal(ui.view.connectionReconnect.hidden,false);assert.equal(ui.view.connectionInitialize.hidden,false);
+ assert.equal(ui.view.connectionReconnect.hidden,false);assert.equal(ui.view.connectionReconnect.textContent,'重新连接 Desktop');assert.equal(ui.view.connectionInitialize.hidden,false);
  assert.equal(ui.view.connectionInitialize.textContent,'重新初始化连接');
+ ui.run("BridgeI18n.setLanguage('en')");ui.view.renderConnectionStatus();assert.equal(ui.view.connectionReconnect.textContent,'Reconnect Desktop');ui.run("BridgeI18n.setLanguage('zh')");
  await ui.view.connectionReconnect.click();assert.deepEqual(reconnects,['claude']);assert.deepEqual(initializations,[]);
  await ui.view.connectionInitialize.click();assert.deepEqual(initializations,['claude']);
  ui.view.setClientStates([{...client,operationUncertain:true}],undefined,()=>{throw Error('unexpected initialize');},undefined,()=>{throw Error('unexpected reconnect');});
@@ -98,11 +99,100 @@ test('returning to list clears selection and prevents an old detail from reopeni
 test('composer and historical replies show their own model and effort without rewriting history',async()=>{
  const ui=fixture();await ui.view.choose('claude');ui.setHandler(async()=>({session:{id:'a',title:'Chat',model:'new-model',effort:'high',status:'idle',capabilities:{}},messages:[{id:'1',role:'assistant',model:'old-model',effort:'low',text:'answer'},{id:'2',role:'assistant',text:'no metadata'}]}));await ui.view.open('a');assert.match(ui.view.modelButton.textContent,/new-model/);assert.match(ui.view.modelButton.textContent,/high/);assert.match(ui.view.messages.children[0].textContent,/old-model.*low/);assert.doesNotMatch(ui.view.messages.children[1].textContent,/new-model|high/);assert.ok(ui.view.modelButton.classList.contains('tool-button'));assert.equal(ui.view.input.rows,1);ui.view.composerToggle.click();assert.equal(ui.view.composerBody.hidden,true);ui.view.composerToggle.click();assert.equal(ui.view.composerBody.hidden,false);
 });
-test('Claude lists distinguish Code and Cowork and retain archive/project filters',async()=>{
- const ui=fixture();await ui.view.choose('claude');ui.view.rows=[{id:'a',title:'Code chat',backend:'code',cwd:'/same',updatedAt:1},{id:'b',title:'Cowork chat',backend:'cowork',cwd:'/same',updatedAt:2},{id:'c',title:'Archive',backend:'code',cwd:'/same',archived:true}];ui.view.renderList();assert.match(ui.view.rowsRoot.textContent,/Code/);assert.match(ui.view.rowsRoot.textContent,/Cowork/);assert.doesNotMatch(ui.view.rowsRoot.textContent,/Archive/);ui.view.surface.value='cowork';ui.view.renderList();assert.match(ui.view.rowsRoot.textContent,/Cowork chat/);assert.doesNotMatch(ui.view.rowsRoot.textContent,/Code chat/);ui.view.surface.value='all';ui.view.archived.checked=true;ui.view.listMode.value='project';ui.view.renderList();assert.match(ui.view.rowsRoot.textContent,/Archive/);assert.ok(ui.view.rowsRoot.querySelector('details'));
+test('Claude recent list combines types chronologically and retains archive, search and project filters',async()=>{
+ const ui=fixture();await ui.view.choose('claude');ui.view.rows=[{id:'a',title:'Code chat',backend:'code',cwd:'/same',updatedAt:1},{id:'b',title:'Cowork chat',backend:'cowork',cwd:'/same',updatedAt:2},{id:'c',title:'Archive',backend:'code',cwd:'/same',archived:true}];ui.view.renderList();
+ assert.deepEqual(ui.view.rowsRoot.querySelectorAll('.session').map(n=>n.dataset.id),['b','a']);assert.equal(ui.view.rowsRoot.querySelector('details'),null);assert.equal(ui.view.surface.hidden,false);assert.deepEqual(ui.view.surface.children.map(n=>n.value),['all','code','cowork']);assert.doesNotMatch(ui.view.rowsRoot.textContent,/Archive/);
+ ui.view.search.value='Cowork';ui.view.renderList();assert.match(ui.view.rowsRoot.textContent,/Cowork chat/);assert.doesNotMatch(ui.view.rowsRoot.textContent,/Code chat/);
+ ui.view.search.value='';ui.view.archived.checked=true;ui.view.listMode.value='project';ui.view.renderList();assert.match(ui.view.rowsRoot.textContent,/Archive/);assert.equal(ui.view.rowsRoot.querySelectorAll('details').length,1);assert.equal(ui.view.rowsRoot.querySelector('summary').textContent,'/same');
+});
+test('Claude recent list compares Desktop milliseconds and CLI seconds as the same time scale',async()=>{
+ const ui=fixture();await ui.view.choose('claude');
+ const desktopOlder=Date.UTC(2026,9,14,12),cliNewest=Date.UTC(2026,9,16,12),desktopMiddle=Date.UTC(2026,9,15,12);
+ ui.view.rows=[{id:'code',title:'Desktop Code',backend:'code',cwd:'/same',updatedAt:desktopOlder},
+  {id:'cli',title:'CLI latest',backend:'cli',cwd:'/same',updatedAt:cliNewest/1000},
+  {id:'cowork',title:'Desktop Cowork',backend:'cowork',cwd:'/same',updatedAt:desktopMiddle}];
+ ui.view.renderList();
+ const ids=()=>ui.view.rowsRoot.querySelectorAll('.session').map(row=>row.dataset.id);
+ assert.deepEqual(ids(),['cli','cowork','code']);
+ assert.equal(ui.view.rowsRoot.querySelector('.session').querySelector('time').textContent,
+  new Date(cliNewest).toLocaleDateString('zh-CN',{month:'numeric',day:'numeric'}));
+ ui.view.surface.value='cli';ui.view.surface.onchange();assert.deepEqual(ids(),['cli']);
+ ui.view.surface.value='all';ui.view.surface.onchange();ui.view.search.value='Desktop';ui.view.renderList();assert.deepEqual(ids(),['cowork','code']);
+ ui.view.search.value='';ui.view.listMode.value='project';ui.view.renderList();assert.deepEqual(ids(),['cli','cowork','code']);
+});
+test('Claude type filter uses full inventory and returns to all when a type disappears',async()=>{
+ const ui=fixture();await ui.view.choose('claude');ui.view.rows=[{id:'code',title:'Code chat',backend:'code',updatedAt:2},{id:'cli',title:'CLI chat',backend:'cli',updatedAt:1}];ui.view.renderList();const selector=ui.view.surface;assert.equal(selector.hidden,false);assert.deepEqual(selector.children.map(n=>n.value),['all','code','cli']);assert.equal(selector.children[0].textContent,'全部会话');assert.deepEqual(ui.view.rowsRoot.querySelectorAll('.session').map(n=>n.dataset.id),['code','cli']);
+ selector.value='cli';selector.onchange();assert.deepEqual(ui.view.rowsRoot.querySelectorAll('.session').map(n=>n.dataset.id),['cli']);const options=[...selector.children];ui.view.rows=[{id:'code',title:'Code updated',backend:'code',updatedAt:3},{id:'cli',title:'CLI chat',backend:'cli',updatedAt:1}];ui.view.renderList();assert.strictEqual(selector.children[0],options[0]);assert.strictEqual(selector.children[2],options[2]);ui.view.search.value='Code';ui.view.renderList();assert.strictEqual(selector.children[2],options[2]);assert.equal(selector.hidden,false);assert.equal(selector.value,'cli');ui.run("BridgeI18n.setLanguage('en')");ui.view.relabel();assert.equal(selector.children[0].textContent,'All');assert.equal(selector.value,'cli');ui.view.search.value='';ui.view.rows=[{id:'code',title:'Code chat',backend:'code',updatedAt:2}];ui.view.renderList();assert.equal(selector.hidden,true);assert.equal(selector.value,'all');assert.equal(ui.view.rowsRoot.querySelector('.ds-session-type').textContent,'Code');assert.equal(ui.view.rowsRoot.querySelector('.session').classList.contains('ds-session-row'),true);
+});
+test('single-source Claude and DSH rows retain their type label above the date',()=>{
+ const ui=fixture();
+ for(const [provider,backend,label] of [['claude','code','Code'],['claude','cowork','Cowork'],['claude','cli','CLI'],['deepseek','chat','APP']]){
+  ui.view.provider=provider;ui.view.rows=[{id:'single',backend,title:'Only source',updatedAt:1}];ui.view.renderList();
+  const row=ui.view.rowsRoot.querySelector('.session');
+  assert.equal(ui.view.surface.hidden,true);assert.ok(row.classList.contains('ds-session-row'));
+  assert.equal(row.children[1].className,'ds-session-type');assert.equal(row.children[1].textContent,label);
+  assert.equal(row.children[2].tagName,'SMALL');assert.ok(row.children[2].querySelector('time'));
+ }
+});
+test('Claude type choice survives provider switches but not loss of that type',async()=>{
+ const ui=fixture();ui.setHandler(async url=>({sessions:url.includes('/claude/')?[{id:'code',title:'Code',backend:'code'},{id:'cowork',title:'Cowork',backend:'cowork'}]:[]}));await ui.view.choose('claude');ui.view.surface.value='cowork';ui.view.surface.onchange();await ui.view.choose('deepseek');assert.equal(ui.view.surface.hidden,true);await ui.view.choose('claude');assert.equal(ui.view.surface.value,'cowork');assert.deepEqual(ui.view.rowsRoot.querySelectorAll('.session').map(n=>n.dataset.id),['cowork']);
 });
 test('workspace tabs use the real Workbench provider routes and split behavior',async()=>{
  const ui=await opened();assert.equal(ui.view.workbench.current.provider,'claude');ui.view.workbench.files();await Promise.resolve();assert.ok(ui.calls.some(c=>c.url.includes('/api/desktop-sessions/claude/workspace?sessionId=a')));ui.view.workbench.split('files');assert.equal(ui.view.workbench.splitMode,true);assert.ok(ui.view.conversation.classList.contains('wb-split'));assert.equal(ui.view.workbench.current.splitTab,'files');
+});
+test('PDF reading position survives file-tab and chat-back navigation',async()=>{
+ const ui=await opened(),wb=ui.view.workbench,session=wb.current;
+ const files={id:'files',name:'Files',body:wb.node('div','wb-browser')};
+ const pdf={id:'file:report.pdf',name:'report.pdf',body:wb.node('div','wb-preview')};
+ const stage=wb.node('div','wb-pdf-stage');pdf.body.append(stage);session.files=[files,pdf];
+ wb.select(pdf.id);stage.scrollTop=720;stage.scrollLeft=42;
+ wb.select(files.id);stage.scrollTop=0;stage.scrollLeft=0;
+ wb.select(pdf.id);assert.equal(stage.scrollTop,720);assert.equal(stage.scrollLeft,42);
+ stage.scrollTop=915;stage.scrollLeft=19;
+ assert.equal(wb.back(),true);assert.equal(session.active,'chat');
+ stage.scrollTop=0;stage.scrollLeft=0;
+ wb.select(pdf.id);assert.equal(stage.scrollTop,915);assert.equal(stage.scrollLeft,19);
+});
+test('file back follows parent directories before returning to chat on the shared page button',async()=>{
+ const ui=await opened(),wb=ui.view.workbench,session=wb.current;
+ const settle=()=>new Promise(setImmediate);
+ const entries={'':[{'name':'src','path':'src','kind':'directory'}],src:[{'name':'lib','path':'src/lib','kind':'directory'}],'src/lib':[]};
+ ui.setHandler(async url=>{const at=new URL(url,'http://fixture').searchParams.get('path');return {project:'/project',total:entries[at]?.length||0,entries:entries[at]||[],nextOffset:null};});
+ wb.files();await settle();const tab=session.files.find(t=>t.id==='files');
+ tab.list.querySelector('.wb-file').click();await settle();tab.list.querySelector('.wb-file').click();await settle();assert.equal(session.directory,'src/lib');
+ await ui.view.back.click();assert.equal(session.directory,'src');assert.equal(session.active,'files');
+ await ui.view.back.click();assert.equal(session.directory,'');assert.equal(session.active,'files');
+ await ui.view.back.click();assert.equal(session.active,'chat');assert.equal(ui.view.isChatOpen,true);
+ await ui.view.back.click();assert.equal(ui.view.isChatOpen,false);
+});
+test('rapid file backs ignore stale responses and a failed parent read stays in the file browser',async()=>{
+ const ui=await opened(),wb=ui.view.workbench,session=wb.current,pending=[];
+ ui.setHandler((url,_body)=>{const path=new URL(url,'http://fixture').searchParams.get('path');if(path==='')return Promise.resolve({project:'/project',total:0,entries:[],nextOffset:null});return new Promise((resolve,reject)=>pending.push({path,resolve,reject}));});
+ wb.files();await Promise.resolve();const tab=session.files.find(t=>t.id==='files');
+ const deep=wb.directory(session,tab,'src/lib');assert.equal(wb.back(),true);assert.equal(session.directory,'src');
+ const parent=pending.at(-1);assert.equal(parent.path,'src');assert.equal(wb.back(),true);assert.equal(session.directory,'');
+ parent.reject(Error('late parent failure'));pending[0].resolve({project:'/old',total:1,entries:[{name:'old',path:'old',kind:'file'}],nextOffset:null});
+ await deep;await Promise.resolve();assert.equal(session.directory,'');assert.equal(tab.status.classList.contains('error'),false);assert.equal(tab.list.children.length,0);
+ const failed=wb.directory(session,tab,'src');pending.at(-1).reject(Error('directory unavailable'));await failed;
+ assert.equal(session.active,'files');assert.equal(session.directory,'src');assert.equal(tab.status.classList.contains('error'),true);
+ assert.equal(wb.back(),true);await Promise.resolve();assert.equal(session.directory,'');assert.equal(session.active,'files');
+});
+test('a directory response from an earlier chat cannot replace the selected chat file view',async()=>{
+ const ui=await opened(),wb=ui.view.workbench,first=wb.current;let finish;
+ ui.setHandler(url=>new Promise(resolve=>{const path=new URL(url,'http://fixture').searchParams.get('path');if(path==='src')finish=resolve;else resolve({project:'/second',total:0,entries:[],nextOffset:null});}));
+ wb.files();await Promise.resolve();const oldTab=first.files.find(t=>t.id==='files'),reading=wb.directory(first,oldTab,'src');
+ wb.open('b','local');wb.files();await Promise.resolve();const second=wb.current,secondTab=second.files.find(t=>t.id==='files');
+ finish({project:'/first',total:1,entries:[{name:'old',path:'src/old',kind:'file'}],nextOffset:null});await reading;
+ assert.equal(wb.current,second);assert.equal(second.directory,'');assert.equal(secondTab.list.children.length,0);assert.equal(wb.panel.firstElementChild,secondTab.body);
+});
+test('wide split file back consumes the visible file tab, then returns to unsplit chat',async()=>{
+ const ui=await opened(),wb=ui.view.workbench,session=wb.current;
+ ui.setHandler(async()=>({project:'/project',total:0,entries:[],nextOffset:null}));wb.files();await Promise.resolve();const tab=session.files.find(t=>t.id==='files');
+ wb.split('files');await wb.directory(session,tab,'src/lib');assert.equal(wb.isFileVisible,false);
+ assert.equal(wb.back(),true);assert.equal(session.directory,'src');assert.equal(wb.splitMode,true);
+ assert.equal(wb.back(),true);assert.equal(session.directory,'');assert.equal(wb.splitMode,true);
+ assert.equal(wb.back(),true);assert.equal(session.active,'chat');assert.equal(session.splitTab,null);assert.equal(wb.splitMode,false);
+ assert.equal(wb.back(),false);
 });
 
 for(const [closed,next] of [['files','terminal'],['terminal','file:preview'],['file:preview','terminal']])test(`closing active split ${closed} selects adjacent ${next} and preserves the main chat`,async()=>{
@@ -160,6 +250,9 @@ test('permissions render the native catalog choices using shared permissionOptio
 test('Claude creation sends the selected surface project and explicit first message only on submit',async()=>{
  const ui=fixture();await ui.view.choose('claude');ui.setHandler(async(url,body)=>body?{status:'ready',result:{id:'created'}}:url.includes('/projects')?{projects:[{key:'cowork:/p',name:'Project',cwd:'/p',surface:'cowork'}],createRequiresMessage:true}:url.includes('/detail')?{session:{id:'created',title:'Custom title',status:'idle'},messages:[]}:{sessions:[]});await ui.view.create();assert.equal(ui.calls.some(c=>c.body),false);const dialog=ui.document.querySelector('dialog');dialog.querySelector('input').value='Custom title';dialog.querySelector('textarea').value='First instruction';await dialog.querySelector('form').onsubmit({preventDefault(){}});const sent=ui.calls.find(c=>c.body);assert.equal(sent.body.projectKey,'cowork:/p');assert.equal(sent.body.firstMessage,'First instruction');assert.equal(sent.body.title,'Custom title');assert.equal(sent.body.sessionId,null);
 });
+test('Claude CLI creation uses its own project and native first message without a title',async()=>{
+ const ui=fixture();await ui.view.choose('claude');ui.setHandler(async(url,body)=>body?{status:'ready',result:{id:'cli-created'}}:url.includes('/projects')?{projects:[{key:'code:/p',name:'Desktop',cwd:'/p',surface:'code'},{key:'cli:opaque',name:'Local CLI',cwd:'/cli',surface:'cli'}],createRequiresMessage:true}:url.includes('/detail')?{session:{id:'cli-created',title:'Native title',status:'idle'},messages:[]}:{sessions:[]});await ui.view.create();const dialog=ui.document.querySelector('dialog'),selects=dialog.querySelectorAll('select');assert.deepEqual(selects[0].children.map(n=>n.value),['code','cli']);selects[0].value='cli';selects[0].onchange();assert.deepEqual(selects[1].children.map(n=>n.value),['cli:opaque']);assert.equal(dialog.querySelector('input').parentElement.hidden,true);dialog.querySelector('textarea').value='Native first request';await dialog.querySelector('form').onsubmit({preventDefault(){}});const sent=ui.calls.find(c=>c.body);assert.equal(sent.body.projectKey,'cli:opaque');assert.equal(sent.body.firstMessage,'Native first request');assert.equal(Object.hasOwn(sent.body,'title'),false);
+});
 
 test('shared attachments handle paste, block send until upload, and submit only upload ids',async()=>{
  const ui=fixture();await ui.view.choose('claude');ui.setHandler(async(url,body)=>body?{status:'accepted'}:url.includes('/detail')?{session:{id:'a',title:'Chat',status:'idle'},capabilities:{attachments:true},messages:[]}:{sessions:[]});await ui.view.open('a');let finish;ui.setUploadHandler(()=>new Promise(resolve=>finish=resolve));let prevented=false;ui.view.input.onpaste({clipboardData:{files:[{name:'image.png',type:'image/png',size:16}]},preventDefault(){prevented=true;}});assert.equal(prevented,true);assert.equal(ui.view.send.disabled,true);assert.equal(ui.view.attachments.rows[0].status,'uploading');await ui.view.submit();assert.equal(ui.calls.some(c=>c.body),false);
@@ -208,8 +301,8 @@ test('provider activity dots use explicit statuses and never turn ordinary idle 
  rows=[{id:'same',title:'Run',status:'idle',turnId:'native-turn',turnStatus:'completed',backend:'code'}];await ui.view.refresh();assert.ok(byId('same').querySelector('.session-indicator').classList.contains('completed'));await ui.view.choose('deepseek');assert.equal(byId('same').querySelector('.session-indicator'),null);await ui.view.choose('claude');assert.ok(byId('same').querySelector('.session-indicator').classList.contains('completed'));
  ui.setHandler(async()=>({session:{id:'same',title:'Run',status:'idle',turnId:'native-turn',turnStatus:'completed'},messages:[]}));await ui.view.open('same');assert.equal(byId('same').querySelector('.session-indicator'),null);
 });
-test('Claude Code and Cowork groups remember their collapsed state across refresh and provider switches',async()=>{
- const ui=fixture();ui.setHandler(async()=>({sessions:[{id:'a',title:'Code chat',backend:'code',cwd:'/code'},{id:'b',title:'Cowork chat',backend:'cowork',cwd:'/cowork'}]}));await ui.view.choose('claude');let group=ui.view.rowsRoot.querySelectorAll('details').find(n=>n.querySelector('summary')?.textContent==='Code');assert.ok(group);group.open=false;group.ontoggle();ui.view.listStamp='';ui.view.renderList();group=ui.view.rowsRoot.querySelectorAll('details').find(n=>n.querySelector('summary')?.textContent==='Code');assert.equal(group.open,false);await ui.view.choose('deepseek');await ui.view.choose('claude');group=ui.view.rowsRoot.querySelectorAll('details').find(n=>n.querySelector('summary')?.textContent==='Code');assert.equal(group.open,false);assert.equal(ui.view.rowsRoot.querySelectorAll('details').find(n=>n.querySelector('summary')?.textContent==='Cowork').open,true);
+test('Claude project groups remember their collapsed state across refresh and provider switches',async()=>{
+ const ui=fixture();ui.setHandler(async()=>({sessions:[{id:'a',title:'Code chat',backend:'code',cwd:'/code'},{id:'b',title:'Cowork chat',backend:'cowork',cwd:'/cowork'}]}));await ui.view.choose('claude');ui.view.listMode.value='project';ui.view.renderList();let group=ui.view.rowsRoot.querySelectorAll('details').find(n=>n.querySelector('summary')?.textContent==='/code');assert.ok(group);group.open=false;group.ontoggle();ui.view.listStamp='';ui.view.renderList();group=ui.view.rowsRoot.querySelectorAll('details').find(n=>n.querySelector('summary')?.textContent==='/code');assert.equal(group.open,false);await ui.view.choose('deepseek');await ui.view.choose('claude');group=ui.view.rowsRoot.querySelectorAll('details').find(n=>n.querySelector('summary')?.textContent==='/code');assert.equal(group.open,false);assert.equal(ui.view.rowsRoot.querySelectorAll('details').find(n=>n.querySelector('summary')?.textContent==='/cowork').open,true);
 });
 test('composer has no redundant file button while Workbench retains files and split tabs',async()=>{
  const ui=await opened();assert.equal(ui.view.tools.querySelectorAll('button').some(n=>n.textContent==='文件'),false);ui.view.workbench.files();await Promise.resolve();assert.ok(ui.view.workbench.current.files.some(n=>n.id==='files'));ui.view.workbench.split('files');assert.equal(ui.view.workbench.current.splitTab,'files');
@@ -377,9 +470,14 @@ test('context monitor remains discoverable and distinguishes unsupported from mi
   const ui=await opened();ui.run(`BridgeI18n.setLanguage('${language}')`);
   const apply=(usage,status)=>ui.view.applyDetail({session:{id:'a',title:'Chat',contextUsage:usage,contextUsageStatus:status},messages:[]});
   apply({usedTokens:40000,contextWindow:200000},'available');
-  assert.equal(ui.view.contextLabel.textContent,'20%');assert.equal(ui.view.contextButton.hidden,false);
+  assert.equal(ui.view.contextButton.textContent,'');assert.equal(ui.view.contextButton.children.length,1);assert.equal(ui.view.contextButton.hidden,false);
+  assert.equal(ui.view.contextRing.className,'context-usage-ring');assert.match(ui.view.contextButton.title,/20%/);
+  assert.equal(ui.view.contextRing.getAttribute('aria-hidden'),'true');
   ui.view.contextDetails();let dialog=ui.document.querySelector('dialog');assert.match(dialog.textContent,/40,000/);assert.match(dialog.textContent,/20\.0%/);dialog.close();
-  apply(null,'unsupported');assert.equal(ui.view.contextLabel.textContent,language==='en'?'Context':'上下文');assert.doesNotMatch(ui.view.contextButton.title,/0%|20%/);
+  apply({usedTokens:600,contextWindow:null,measurement:'lastPrompt',model:'fixture-model',compacted:true},'available');
+  assert.equal(ui.view.contextButton.textContent,'');assert.ok(ui.view.contextRing.classList.contains('unknown'));assert.doesNotMatch(ui.view.contextButton.title,/0%/);
+  ui.view.contextDetails();dialog=ui.document.querySelector('dialog');assert.match(dialog.textContent,/600/);assert.match(dialog.textContent,/fixture-model/);assert.doesNotMatch(dialog.textContent,/3\.0%/);dialog.close();
+  apply(null,'unsupported');assert.equal(ui.view.contextButton.textContent,'');assert.doesNotMatch(ui.view.contextButton.title,/0%|20%/);
   ui.view.contextDetails();dialog=ui.document.querySelector('dialog');assert.match(dialog.textContent,language==='en'?/does not expose context usage/:/未提供上下文用量接口/);dialog.close();
   apply(null,'unavailable');ui.view.contextDetails();dialog=ui.document.querySelector('dialog');assert.match(dialog.textContent,language==='en'?/update automatically when available/:/有可用数据时会自动更新/);assert.doesNotMatch(dialog.textContent,language==='en'?/does not expose/:/未提供上下文用量接口/);
  }
@@ -398,9 +496,9 @@ test('manual refresh failure and disconnected responses remain retryable without
  assert.ok(ui.calls.slice(before).every(c=>c.url.endsWith('/list')&&!c.body));
 });
 test('manual refresh retains current search, filters, selected chat, draft and list position',async()=>{
- const ui=await opened();ui.view.input.value='draft';ui.view.search.value='needle';ui.view.surface.value='code';ui.view.listMode.value='project';ui.view.archived.checked=true;ui.view.rowsRoot.scrollTop=80;
+ const ui=await opened();ui.view.input.value='draft';ui.view.search.value='needle';ui.view.listMode.value='project';ui.view.archived.checked=true;ui.view.rowsRoot.scrollTop=80;
  let finish;ui.setHandler(()=>new Promise(resolve=>finish=resolve));const pending=ui.view.listSync.update(true);ui.view.search.value='changed';finish({sessions:[{id:'a',title:'changed result',backend:'code',cwd:'/project',archived:true},{id:'b',title:'needle old filter',backend:'cowork'}]});await pending;
- assert.equal(ui.view.search.value,'changed');assert.equal(ui.view.surface.value,'code');assert.equal(ui.view.listMode.value,'project');assert.equal(ui.view.archived.checked,true);assert.equal(ui.view.sid,'a');assert.equal(ui.view.input.value,'draft');assert.equal(ui.view.rowsRoot.scrollTop,80);assert.match(ui.view.rowsRoot.textContent,/changed result/);assert.doesNotMatch(ui.view.rowsRoot.textContent,/old filter/);
+ assert.equal(ui.view.search.value,'changed');assert.equal(ui.view.listMode.value,'project');assert.equal(ui.view.archived.checked,true);assert.equal(ui.view.sid,'a');assert.equal(ui.view.input.value,'draft');assert.equal(ui.view.rowsRoot.scrollTop,80);assert.match(ui.view.rowsRoot.textContent,/changed result/);assert.doesNotMatch(ui.view.rowsRoot.textContent,/old filter/);
 });
 for(const failure of [false,true])test(`a previous provider refresh ${failure?'failure':'success'} cannot affect a new provider refresh`,async()=>{
  const ui=fixture();await ui.view.choose('claude');let resolveOld,rejectOld,resolveNew;ui.setHandler(url=>url.includes('/claude/')?new Promise((resolve,reject)=>{resolveOld=resolve;rejectOld=reject;}):new Promise(resolve=>resolveNew=resolve));
@@ -411,4 +509,64 @@ for(const failure of [false,true])test(`a previous provider refresh ${failure?'f
 test('account invalidation cancels manual feedback and rejects old list contents',async()=>{
  const ui=fixture();await ui.view.choose('claude');let finish;ui.setHandler(()=>new Promise(resolve=>finish=resolve));const old=ui.view.listSync.update(true);ui.view.invalidateReads('claude');assert.equal(ui.view.listHint.hidden,true);
  finish({sessions:[{id:'old',title:'Old account',backend:'code'}]});await old;assert.equal(ui.view.listHint.hidden,true);assert.doesNotMatch(ui.view.rowsRoot.textContent,/Old account/);
+});
+
+function cliDetail(connectionState='closed'){
+ const live=connectionState!=='closed';
+ return {connected:true,session:{id:'cli-a',title:'CLI chat',backend:'cli',connectionState,status:connectionState==='active'||connectionState==='awaiting'?'active':'idle',cwd:'/cli-project',model:'claude-model',permissionMode:'default',requests:[]},messages:[{id:'old',role:'assistant',model:'older-model',text:'Saved CLI reply'}],capabilities:{resume:!live,send:live,models:live,permissions:live,stop:live,attachments:false,queue:false,steer:false}};
+}
+const cliClient={id:'claude',enabled:true,installed:true,connected:false,cliAvailable:true,setupStatus:'needs-initialization'};
+
+test('Claude CLI history is readable without initializing Desktop and resumes only on explicit click',async()=>{
+ const ui=fixture();let detail=cliDetail();
+ ui.setHandler(async(url,body)=>{if(body){assert.match(url,/\/resume$/);assert.equal(body.sessionId,'cli-a');detail=cliDetail('ready');return {status:'ready'};}return url.includes('/detail')?detail:{connected:true,sessions:[detail.session]};});
+ ui.view.setClientStates([cliClient]);await ui.view.choose('claude');await ui.view.open('cli-a');
+ assert.match(ui.view.messages.textContent,/Saved CLI reply/);assert.equal(ui.calls.filter(c=>c.body).length,0);
+ assert.equal(ui.view.send.disabled,true);assert.equal(ui.view.status.textContent,'历史记录');assert.equal(ui.view.resumeButton.hidden,false);
+ // Unchanged lifecycle polling must retain the freshly read, closed CLI chat.
+ ui.view.setClientStates([cliClient]);assert.equal(ui.view.canResume(),true);assert.equal(ui.view.resumeButton.hidden,false);
+ await ui.view.resumeButton.click();await new Promise(setImmediate);
+ assert.equal(ui.calls.filter(c=>c.body).length,1);assert.equal(ui.view.send.disabled,false);assert.equal(ui.view.resumeButton.hidden,true);
+ assert.equal(ui.view.modelButton.disabled,false);assert.equal(ui.view.permissionsButton.disabled,false);
+});
+
+test('cached or disabled Claude CLI details never authorize resume or send',async()=>{
+ const ui=fixture();ui.view.provider='claude';ui.view.sid='cli-a';ui.view.setClientStates([cliClient]);
+ ui.view.applyDetail(cliDetail(),true);assert.equal(ui.view.canResume(),false);await ui.view.mutate('resume',{});
+ ui.view.applyDetail(cliDetail('ready'),true);assert.equal(ui.view.canMutate(),false);await ui.view.mutate('send',{text:'blocked'});
+ ui.view.setClientStates([{...cliClient,enabled:false}]);ui.view.applyDetail(cliDetail());await ui.view.mutate('resume',{});
+ assert.equal(ui.calls.filter(c=>c.body).length,0);assert.equal(ui.view.send.disabled,true);
+});
+
+test('Desktop disconnect does not disable a separately connected Claude CLI chat',async()=>{
+ const ui=fixture();let detail=cliDetail('ready');ui.setHandler(async url=>url.includes('/detail')?detail:{connected:true,sessions:[detail.session]});
+ ui.view.setClientStates([{...cliClient,connected:true}]);await ui.view.choose('claude');await ui.view.open('cli-a');
+ ui.view.setClientStates([cliClient]);assert.equal(ui.view.canMutate(),true);assert.equal(ui.view.send.disabled,false);
+ detail={...detail,session:{...detail.session,backend:'code'}};ui.view.applyDetail(detail);assert.equal(ui.view.canMutate(),false);assert.equal(ui.view.send.disabled,true);
+});
+
+test('Claude list identifies Code, Cowork and CLI beside each title with metadata below',async()=>{
+ const ui=fixture();ui.view.provider='claude';ui.view.rows=[{id:'a',backend:'code',title:'Desktop code',updatedAt:1},{id:'b',backend:'cowork',title:'Desktop cowork',updatedAt:3},{id:'c',backend:'cli',title:'Terminal session',updatedAt:2}];
+ ui.view.renderList();const rows=ui.view.rowsRoot.querySelectorAll('.session');assert.deepEqual(rows.map(n=>n.dataset.id),['b','c','a']);assert.deepEqual(rows.map(n=>n.querySelector('.ds-session-type').textContent),['Cowork','CLI','Code']);for(const row of rows){assert.equal(row.children[0].tagName,'STRONG');assert.equal(row.children[1].className,'ds-session-type');assert.equal(row.children[2].tagName,'SMALL');assert.ok(row.children[2].querySelector('time'));}
+ ui.run("BridgeI18n.setLanguage('en')");ui.view.sid='c';ui.view.applyDetail(cliDetail());assert.match(ui.view.notice.textContent,/Read the saved history/);assert.equal(ui.view.resumeButton.textContent,'Continue chat');
+});
+
+test('Claude CLI approval and stop use current native request and session despite Desktop being offline',async()=>{
+ const ui=fixture();const detail=cliDetail('awaiting');detail.session.requests=[{id:'native-request-1',tool:'Bash',input:{command:'synthetic command'}}];
+ ui.setHandler(async(url,body)=>body?{status:'accepted'}:url.includes('/detail')?detail:{connected:true,sessions:[detail.session]});
+ ui.view.setClientStates([cliClient]);await ui.view.choose('claude');await ui.view.open('cli-a');
+ assert.match(ui.view.requests.textContent,/synthetic command/);assert.equal(ui.view.stop.hidden,false);assert.equal(ui.view.stop.disabled,false);
+ await ui.view.mutate('respond',{requestId:'native-request-1',decision:'decline'});await new Promise(setImmediate);
+ await ui.view.stop.click();const writes=ui.calls.filter(c=>c.body);assert.equal(writes.length,2);assert.equal(writes[0].body.requestId,'native-request-1');assert.match(writes[1].url,/\/stop$/);assert.equal(writes[1].body.sessionId,'cli-a');
+});
+
+
+test('known preflight rejection permits a new explicit Claude CLI resume attempt',async()=>{
+ const ui=fixture();let attempts=0,detail=cliDetail();
+ ui.setHandler(async(url,body)=>{if(body){attempts++;if(attempts===1)return {status:'blocked',message:'Original terminal is open'};detail=cliDetail('ready');return {status:'ready'};}return url.includes('/detail')?detail:{connected:true,sessions:[detail.session]};});
+ ui.view.setClientStates([cliClient]);await ui.view.choose('claude');await ui.view.open('cli-a');
+ await ui.view.resumeButton.click();await new Promise(setImmediate);
+ assert.equal(attempts,1);assert.equal(ui.view.canResume(),true);assert.equal(ui.view.send.disabled,true);
+ await ui.view.resumeButton.click();await new Promise(setImmediate);
+ const writes=ui.calls.filter(c=>c.body);assert.equal(writes.length,2);assert.notEqual(writes[0].body.id,writes[1].body.id);assert.equal(ui.view.canMutate(),true);
 });

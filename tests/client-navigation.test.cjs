@@ -17,9 +17,9 @@ test('notification settings stay hidden on shared relay while remaining actions 
   ui.window.BridgeSharedRelay=false;ui.nav.paintSettingsActions();
   assert.equal(ui.nav.settingsNotifications.hidden,false);assert.equal(classes.size,0);
   ui.window.BridgeSharedRelay=true;ui.nav.paintSettingsActions();
-  assert.equal(ui.nav.settingsNotifications.hidden,true);assert.equal(classes.has('two-actions'),true);
+  assert.equal(ui.nav.settingsNotifications.hidden,true);assert.equal(classes.has('three-actions'),true);
   ui.nav.switchToggle.hidden=true;ui.nav.paintSettingsActions();
-  assert.equal(classes.has('two-actions'),false);assert.equal(classes.has('one-action'),true);
+  assert.equal(classes.has('three-actions'),false);assert.equal(classes.has('two-actions'),true);
 });
 test('changing provider paints the shell before its slow read resolves',async()=>{
   const {nav,painted}=fixture();let resolve;
@@ -30,6 +30,19 @@ test('changing provider paints the shell before its slow read resolves',async()=
 
 test('clicking the selected provider does not reset its view or issue another read',async()=>{
  const {nav}=fixture();let calls=0;nav.view.choose=async()=>{calls++;};await nav.choose('claude');assert.equal(calls,0);
+});
+
+test('turning the last client off and re-enabling Codex refreshes its list',async()=>{
+ const {nav}=fixture(),selected=[];nav.clients=[{id:'codex',enabled:true,configured:true}];nav.provider=nav.view.provider='codex';
+ nav.view.onSelect=id=>selected.push(id);
+ nav.view.choose=async function(id){if(id===this.provider)return;this.provider=id;this.onSelect(id);};
+ let complete;
+ nav.request=(_path,body)=>new Promise(resolve=>{complete=()=>resolve({clients:[{...nav.clients[0],enabled:body.enabled}]});});
+ nav.applyClients({clients:[{...nav.clients[0],enabled:false}]});await Promise.resolve();
+ assert.equal(nav.provider,null);assert.deepEqual(selected,[]);
+ const enabling=nav.toggle('codex',true);assert.deepEqual(selected,[]);
+ complete();await enabling;
+ assert.equal(nav.provider,'codex');assert.deepEqual(selected,['codex']);
 });
 
 test('phone initialization sends foreground intent only after an explicit confirmation',async()=>{
@@ -51,6 +64,25 @@ test('an unanswered initialization prompt blocks duplicate operations and stale 
  const ui=fixture(),nav=ui.nav;ui.setInitializeChoice('pending');Object.assign(nav.clients[1],{installed:true,setupStatus:'needs-initialization'});let finishRead,calls=0;nav.request=()=>{calls++;return new Promise(resolve=>finishRead=resolve);};
  const reading=nav.refresh(),confirming=nav.initialize('claude');await nav.initialize('claude');await nav.toggle('deepseek',false);await nav.refresh();assert.equal(ui.initializations.length,1);assert.equal(calls,1);
  finishRead({clients:[]});await reading;assert.equal(nav.clients.length,3);ui.decideInitialize(false);await confirming;assert.equal(calls,1);assert.equal(nav.choosing,null);
+});
+
+test('pending client status preserves selection and uncertain operation evidence',async()=>{
+ const {nav}=fixture(),notices=[];nav.notify=value=>notices.push(value);
+ nav.operationFailures=new Map([['claude',{action:'quit',uncertain:true,message:'结果未知'}]]);
+ nav.request=async()=>({pending:true,clients:[]});
+ await nav.refresh();
+ assert.equal(nav.provider,'claude');assert.equal(nav.clients.length,3);
+ assert.equal(nav.operationFailures.get('claude').uncertain,true);
+ assert.equal(nav.statusPending,true);assert.deepEqual(notices,[]);
+});
+
+test('pending client status uses existing fast poll and applies only complete results',async()=>{
+ const {nav}=fixture();let reads=0;const current=nav.clients;
+ nav.applyClients=data=>{nav.clients=data.clients;};
+ nav.request=async()=>++reads===1?{pending:true,clients:[]}:{pending:false,clients:[{...current[0],name:'新状态'}]};
+ await nav.refresh();assert.equal(nav.clients.length,3);
+ await nav.poll(true);assert.equal(reads,2);assert.equal(nav.clients.length,1);
+ assert.equal(nav.clients[0].name,'新状态');assert.equal(nav.statusPending,false);
 });
 
 test('unknown mobile quit requires a successful status read before retry and ignores late replies',async()=>{
@@ -211,6 +243,40 @@ test('app management offers force only through close choices and retains a disab
  }
 });
 
+test('app management explicitly starts supported Claude Desktop alongside CLI access',async()=>{
+ const ui=managerFixture(),nav=ui.nav,client={id:'claude',name:'Claude',enabled:false,installed:true,
+  selectable:true,connected:false,running:false,cliAvailable:true,canStartDesktop:true,setupStatus:'ready-to-connect'};
+ nav.clients=[client];nav.gatewayRunning=true;nav.renderManager();
+ let start=ui.controls().find(node=>node.textContent==='启动 Desktop');assert.ok(start);
+ client.enabled=true;client.retryable=true;nav.renderManager();
+ start=ui.controls().find(node=>node.textContent==='启动 Desktop');assert.ok(start);
+ assert.equal(ui.controls().some(node=>node.textContent==='重试连接'),false);
+ ui.setInitializeChoice(true);const calls=[];
+ nav.request=async(url,body)=>{calls.push({url,body});return {clients:[{...client,connectionState:'connecting'}]};};
+ await start.onclick();
+ assert.deepEqual(ui.initializations,['claude']);
+ assert.equal(calls.length,1);assert.equal(calls[0].url,'/api/clients');
+ assert.equal(calls[0].body.initializeDesktop,true);assert.equal(calls[0].body.enabled,true);
+ assert.equal(require('../web/shared/i18n.js').translateEnglish('启动 Desktop'),'Start Desktop');
+ for(const changed of [{running:true,canStartDesktop:false},{installed:false,canStartDesktop:false},
+   {canStartDesktop:false,setupStatus:'unsupported'}]){
+  nav.clients=[{...client,...changed}];nav.renderManager();
+  assert.equal(ui.controls().some(node=>node.textContent==='启动 Desktop'),false);
+ }
+});
+
+test('app management keeps Desktop initialization for a running unconnected Claude beside CLI',async()=>{
+ const ui=managerFixture(),nav=ui.nav,client={id:'claude',name:'Claude',enabled:true,installed:true,
+  selectable:true,connected:false,running:true,cliAvailable:true,canStartDesktop:false,canInitializeDesktop:true,setupStatus:'idle'};
+ nav.clients=[client];nav.gatewayRunning=true;nav.renderManager();
+ const initialize=ui.controls().find(node=>node.textContent==='初始化连接');assert.ok(initialize);
+ assert.equal(ui.controls().some(node=>node.textContent==='启动 Desktop'),false);
+ ui.setInitializeChoice(true);const calls=[];nav.request=async(url,body)=>{calls.push({url,body});return {clients:[client]};};
+ await initialize.onclick();
+ assert.deepEqual(ui.initializations,['claude']);
+ assert.equal(calls.length,1);assert.equal(calls[0].body.initializeDesktop,true);
+});
+
 function touchFixture(){
  const ui=fixture(),nav=ui.nav,list={};ui.document.querySelector=()=>null;
  // Provide browser-only globals for the production gesture handlers.
@@ -270,6 +336,7 @@ test('list entry acknowledges only the displayed provider snapshot, once per vis
  const {nav,document}=fixture(),calls=[];nav.request=async(path,body)=>calls.push({path,body});
  const value={notificationRead:{streamId:'stream',cursor:12}};
  nav.acknowledgeList('codex',value);nav.acknowledgeList('claude',{...value,connected:false});assert.equal(calls.length,0);
+ nav.acknowledgeList('claude',{...value,complete:false});assert.equal(calls.length,0);
  document.hidden=true;nav.acknowledgeList('claude',value);assert.equal(calls.length,0);document.hidden=false;
  nav.acknowledgeList('claude',value);nav.acknowledgeList('claude',{notificationRead:{streamId:'stream',cursor:13}});
  assert.equal(calls.length,1);assert.equal(calls[0].body.provider,'claude');assert.equal(calls[0].body.through,12);

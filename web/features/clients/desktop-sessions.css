@@ -1,2 +1,4 @@
 #desktop-backend{max-width:165px;padding:7px;border:1px solid var(--line);border-radius:8px;color:inherit;background:var(--raised)}
 .app.desktop-mode{display:block}.app.desktop-mode>#sidebar,.app.desktop-mode>main{display:none!important}
+.session.ds-session-row{display:grid;grid-template-columns:minmax(0,1fr) max-content;column-gap:10px;align-items:center}
+.ds-session-row>strong{min-width:0}.ds-session-row>.ds-session-type{font-size:10px;line-height:1.6;color:var(--muted);white-space:nowrap}.ds-session-row>small{grid-column:1/-1}

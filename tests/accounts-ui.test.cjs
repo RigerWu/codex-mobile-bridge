@@ -20,6 +20,13 @@ test('web exposes saved account selection without enrollment or credential input
  ui.confirm(true);await ui.panel.choose(ui.value().accounts[0]);assert.deepEqual(Object.keys(ui.requests[0]).sort(),['action','confirmed','id','requestId','tasksConfirmed']);
  assert.equal(ui.requests[0].tasksConfirmed,true);assert.match(ui.prompts[0],/未在网页显示/);
 });
+test('Codex switch sends local CLI choice only after checkbox selection',async()=>{
+ const ui=fixture();await ui.panel.refresh();const row=ui.value().accounts[0];
+ assert.match(ui.text(),/共用账号配置；切换后 CLI 也会使用新接入/);
+ const box=ui.all().find(n=>n.tag==='input'&&n.type==='checkbox'&&n.parent?.children.some(child=>child.textContent==='同时应用到本机 CLI'));
+ assert.ok(box);box.checked=true;box.onchange();await ui.panel.choose(row);
+ assert.equal(ui.requests[0].syncLocalCli,true);
+});
 test('passwordless web disables switching and explains the desktop alternative',async()=>{
  const ui=fixture();ui.setValue({...ui.value(),canSwitch:false});await ui.panel.refresh();
  assert.equal(ui.all().find(n=>n.textContent==='切换到此接入').disabled,true);assert.match(ui.text(),/免密访问不能切换/);
@@ -151,14 +158,14 @@ test('loading and failed refresh retain percentages, cards and the last successf
  if(status==='loading')assert.match(ui.text(),/查询中/);if(status==='error')assert.match(ui.text(),/保留上次结果/);}
  ui.panel.accept({...ui.value(),accounts:[{id:'other',kind:'chatgpt',name:'Different',details:{usage:{status:'loading'}}}]});assert.doesNotMatch(ui.text(),/剩余 75%|重置卡 · 2/);
 });
-test('current-account card has a direct reset entry and API cards have no subscription quota',()=>{
- const ui=fixture();let chosen;ui.panel.onReset=()=>{};ui.panel.openReset=row=>chosen=row.id;
+test('saved official card has a direct reset entry and API cards have no subscription quota',()=>{
+ const ui=fixture();let chosen;ui.panel.openReset=row=>chosen=row.id;
  ui.panel.accept({...ui.value(),activeId:'official',accounts:[{id:'official',kind:'chatgpt',name:'Official',details:{usage:{status:'ready',limits:[],resetCredits:{availableCount:2}}}}]});
  ui.all().find(n=>n.tag==='button'&&n.textContent==='使用重置卡'&&!n.hidden).onclick();assert.equal(chosen,'official');
 });
 
 test('active official account exposes reset entry before quota details load',()=>{
- const ui=fixture();let chosen;ui.panel.onReset=()=>{};ui.panel.openReset=row=>chosen=row.id;
+ const ui=fixture();let chosen;ui.panel.openReset=row=>chosen=row.id;
  ui.panel.accept({...ui.value(),activeId:'official',current:{kind:'chatgpt',status:'ready',id:'official'},accounts:[{id:'official',kind:'chatgpt',name:'Official'}]});
  const reset=ui.all().find(n=>n.tag==='button'&&n.textContent==='使用重置卡'&&!n.hidden);assert.ok(reset);reset.onclick();assert.equal(chosen,'official');
 });
@@ -179,7 +186,7 @@ test('both saved-account views treat stale subscription claims as unknown',()=>{
 });
 
 test('every saved official account opens its own reset dialog without switching',async()=>{
- const ui=fixture();ui.panel.onReset=()=>{};
+ const ui=fixture();
  const saved={...ui.value(),activeId:'api',current:{kind:'api',status:'ready'},accounts:[...ui.value().accounts,{id:'one',kind:'chatgpt',name:'One'},{id:'two',kind:'chatgpt',name:'Two'}]};
  ui.panel.accept(saved);
  assert.equal(ui.all().filter(n=>n.textContent==='使用重置卡').length,2);

@@ -178,13 +178,22 @@ class IntegrationTests(unittest.TestCase):
         def unavailable(**kwargs):
             raise StoreUnavailable('Database temporarily unavailable')
         self.bridge.store.list = unavailable
-        remote = SimpleNamespace(host='remote:test', lock=threading.RLock(), live={}, listed=set(),
+        remote = SimpleNamespace(host='remote:test', lock=threading.RLock(), live={}, listed=set(), origins={}, _access=self.bridge._access,
                                  store=SimpleNamespace(list=lambda **kw: [{'id': THREAD, 'title': 'Remote chat', 'cwd': '/remote', 'updated_at': 1}]))
         self.bridge.hosts.hosts = lambda: {'remote:test': {'alias': 'test'}}
         self.bridge.for_host = lambda host: remote
         rows = self.bridge.list()
         self.assertEqual(rows[0]['host'], 'remote:test')
         self.assertEqual(self.bridge.host_errors, [{'host': 'local', 'label': '此电脑', 'error': 'Database temporarily unavailable'}])
+
+    def test_host_scoped_list_never_reads_another_host(self):
+        self.bridge.hosts.hosts = lambda: {'remote:slow': {'alias': 'slow'}}
+        def unexpected(host):
+            raise AssertionError('Passive local list reached remote host')
+        self.bridge.for_host = unexpected
+        rows, sources = self.bridge.list(include_sources=True, local_only=True)
+        self.assertEqual([row['id'] for row in rows], [THREAD])
+        self.assertEqual(sources, ['desktop'])
 
     def test_progressive_read_preserves_metadata_and_pending_requests(self):
         self.fixture.state['turns'] = [{'turnId': 'turn', 'items': [
@@ -215,13 +224,26 @@ class IntegrationTests(unittest.TestCase):
                 db.execute('INSERT INTO threads VALUES(?,?,?,?,?,?,?,?)',
                            (tid, 'Saved chat', '/workspace', 2, 0, origin, source, 'unused'))
         store = SessionStore(self.root)
-        self.assertEqual({r['id'] for r in store.list()}, {THREAD, legacy, untagged, mobile})
+        self.assertEqual({r['id'] for r in store.list()}, {THREAD, legacy, untagged, cli, mobile})
         self.assertEqual(store.get(legacy)['id'], legacy)
         self.assertEqual(store.get(untagged)['id'], untagged)
         self.assertEqual(store.get(mobile)['id'], mobile)
-        for tid in (child, cli):
+        self.assertEqual(store.get(cli)['origin'], 'cli')
+        for tid in (child,):
             with self.assertRaises(KeyError):
                 store.get(tid)
+
+    def test_codex_list_filters_original_cli_source_before_merged_pagination(self):
+        cli = str(uuid.uuid4())
+        with closing(sqlite3.connect(str(self.root / 'state_5.sqlite'))) as db, db:
+            db.executemany('INSERT INTO threads VALUES(?,?,?,?,?,?,?,?)',
+                           [(str(uuid.uuid4()), 'App', '/workspace', 200 + i, 0, 'Codex Desktop', 'vscode', 'unused') for i in range(120)])
+            db.execute('INSERT INTO threads VALUES(?,?,?,?,?,?,?,?)',
+                       (cli, 'CLI', '/workspace', 2, 0, 'codex_cli_rs', 'cli', 'unused'))
+        rows, sources = self.bridge.list(source='cli', include_sources=True)
+        self.assertEqual([row['id'] for row in rows], [cli])
+        self.assertEqual(rows[0]['access']['source'], 'cli')
+        self.assertEqual(sources, ['cli', 'desktop'])
 
     def test_native_free_text_question_null_options_can_be_answered(self):
         self.fixture.state['turns'] = [{'turnId': 'last', 'status': 'completed', 'items': [
@@ -559,6 +581,8 @@ class IntegrationTests(unittest.TestCase):
         remote.host = 'remote'
         remote.lock = threading.RLock()
         remote.live = {}
+        remote.origins = {}
+        remote._access = self.bridge._access
         remote.store.list.return_value = [{'id': 'remote-thread', 'cwd': '/work', 'updated_at': 50}]
         self.bridge.hosts.hosts = lambda: {'remote': {'alias': 'server'}}
         self.bridge.for_host = lambda host: remote
@@ -732,13 +756,15 @@ class HttpTests(unittest.TestCase):
     def setUp(self):
         class EmptyBridge:
             host_errors = []
+            hosts = type('Hosts', (), {'hosts': lambda self: {}})()
             def for_host(self, host):
                 if host != "local":
                     raise KeyError(host)
                 return self
             closed = threading.Event()
             def list(self, **kwargs):
-                return []
+                self.last_list = kwargs
+                return ([], ['cli', 'desktop']) if kwargs.get('include_sources') else []
         config = {'auth': {'mode': 'password', 'username': 'admin', **self.record}, 'origins': []}
         self.server = GatewayServer(('127.0.0.1', 0), EmptyBridge(), config, ROOT / 'web')
         self.port = self.server.server_address[1]
@@ -766,6 +792,37 @@ class HttpTests(unittest.TestCase):
         self.assertEqual(status, 200)
         self.assertIn('HttpOnly', headers['Set-Cookie'])
         return {'Cookie': headers['Set-Cookie'].split(';')[0], 'X-CSRF-Token': body['csrf']}
+
+    def test_session_list_source_contract(self):
+        headers = self.login()
+        status, _, body = self.request('GET', '/api/sessions?offset=100', headers=headers)
+        self.assertEqual(status, 200)
+        self.assertEqual(body['availableSources'], ['cli', 'desktop'])
+        self.assertEqual(body['sessions'], [])
+        self.assertEqual(self.server.bridge.last_list['source'], 'all')
+        self.assertEqual(self.server.bridge.last_list['offset'], 100)
+        status, _, body = self.request('GET', '/api/sessions?offset=100&source=cli&q=needle', headers=headers)
+        self.assertEqual(status, 200)
+        self.assertEqual(body['availableSources'], ['cli', 'desktop'])
+        self.assertEqual(self.server.bridge.last_list['source'], 'cli')
+        self.assertEqual(self.server.bridge.last_list['query'], 'needle')
+        status, _, _ = self.request('GET', '/api/sessions?source=unknown', headers=headers)
+        self.assertEqual(status, 400)
+
+    def test_host_scoped_list_contract_is_authenticated_and_incomplete_on_failure(self):
+        self.assertEqual(self.request('GET', '/api/sessions?scope=host&host=local')[0], 401)
+        headers = self.login()
+        status, _, body = self.request('GET', '/api/sessions?scope=host&host=local&offset=100', headers=headers)
+        self.assertEqual(status, 200)
+        self.assertEqual(body['remoteHosts'], [])
+        self.assertTrue(body['complete'])
+        self.assertEqual(self.server.bridge.last_list['limit'], 201)
+        self.assertTrue(self.server.bridge.last_list['local_only'])
+        self.server.bridge.host_errors = [{'host': 'local', 'label': '此电脑', 'error': 'Offline'}]
+        status, _, body = self.request('GET', '/api/sessions?scope=host&host=local', headers=headers)
+        self.assertEqual(status, 200)
+        self.assertFalse(body['complete'])
+        self.assertEqual(self.request('GET', '/api/sessions?scope=host&host=unknown', headers=headers)[0], 400)
 
     def test_gateway_language_updates_without_restart_and_before_login(self):
         with tempfile.TemporaryDirectory(dir=ROOT / '.tmp') as folder:
@@ -950,6 +1007,29 @@ class HttpTests(unittest.TestCase):
         self.assertEqual(self.request('POST', path, body, auth)[2]['outcome'], 'reset')
         manager.account.assert_called_once_with(body)
 
+    def test_cli_access_route_requires_login_csrf_and_blocks_passwordless_writes(self):
+        from unittest.mock import Mock
+        manager = self.server.bridge.cli_access = Mock()
+        manager.public.return_value = {'codex': {'accounts': []}, 'claude': {'accounts': []}}
+        manager.change.return_value = {'savedId': 'fixture'}
+        path = '/api/cli-access'
+        value = {'provider': 'claude', 'action': 'saveApi'}
+        self.assertEqual(self.request('GET', path)[0], 401)
+        self.assertEqual(self.request('POST', path, value)[0], 401)
+        auth = self.login()
+        self.assertEqual(self.request('GET', path, headers=auth)[2], manager.public.return_value)
+        self.assertEqual(self.request('POST', path, value, {'Cookie': auth['Cookie']})[0], 403)
+        self.assertEqual(self.request('POST', path, value, {**auth, 'Origin': 'https://other.test'})[0], 403)
+        manager.change.assert_not_called()
+        self.assertEqual(self.request('POST', path, value, auth)[2]['savedId'], 'fixture')
+        manager.change.assert_called_once_with(value)
+        self.server.auth = Auth({'mode': 'none'})
+        status, headers, body = self.request('POST', '/api/login', {})
+        self.assertEqual(status, 200)
+        passwordless = {'Cookie': headers['Set-Cookie'].split(';')[0], 'X-CSRF-Token': body['csrf']}
+        self.assertEqual(self.request('POST', path, value, passwordless)[0], 403)
+        manager.change.assert_called_once_with(value)
+
     def test_account_routes_require_login_csrf_and_same_origin(self):
         from unittest.mock import Mock
         account = self.server.bridge.account = Mock()
@@ -1037,6 +1117,7 @@ class HttpTests(unittest.TestCase):
         from types import SimpleNamespace
         calls=[]
         self.server.bridge.hosts=SimpleNamespace(projects=lambda:[{'key':'local|p','name':'Test'}])
+        self.server.bridge.projects=lambda:[{'key':'local|p','name':'Test','type':'desktop'}]
         self.server.bridge.create_chat=lambda *args: calls.append(args) or {'id':THREAD,'host':'local'}
         body={'project':'local|p','title':'New chat','id':str(uuid.uuid4())}
         self.assertEqual(self.request('GET','/api/projects')[0],401)
@@ -1096,7 +1177,7 @@ class HttpTests(unittest.TestCase):
             self.assertEqual(response.status, 200)
             scripts = re.findall(r'<script src="([^"]+)"', response.read().decode())
             self.assertEqual([script.split('?', 1)[0] for script in scripts], ['/bootstrap.js', '/host.js', '/layout.js', '/vendor/markdown-it.min.js', '/vendor/katex/katex.min.js',
-                                       '/vendor/texmath.js', '/message-actions.js', '/markdown.js', '/i18n.js', '/downloads.js', '/image-viewer.js', '/timeline.js', '/account.js', '/modes.js', '/attachments.js', '/activity.js', '/fast-mode.js', '/accounts.js', '/client-accounts.js', '/floating-panel.js', '/git-panel.js', '/vendor/xterm/xterm.js', '/vendor/xterm/addon-fit.js', '/command-terminal-panel.js', '/terminal-panel.js', '/permissions.js', '/side-chat.js', '/agents-panel.js', '/file-actions.js', '/workbench.js', '/list-sync.js', '/client-lifecycle.js', '/desktop-sessions.js', '/client-navigation.js', '/app.js', '/presentation.js'])
+                                       '/vendor/texmath.js', '/message-actions.js', '/markdown.js', '/i18n.js', '/downloads.js', '/image-viewer.js', '/timeline.js', '/account.js', '/modes.js', '/attachments.js', '/activity.js', '/fast-mode.js', '/accounts.js', '/client-accounts.js', '/cli-access.js', '/floating-panel.js', '/git-panel.js', '/vendor/xterm/xterm.js', '/vendor/xterm/addon-fit.js', '/command-terminal-panel.js', '/terminal-panel.js', '/permissions.js', '/side-chat.js', '/agents-panel.js', '/file-actions.js', '/vendor/prism/source-view.min.js', '/source-view.js', '/pdf-preview.js', '/html-preview.js', '/workbench.js', '/list-sync.js', '/client-lifecycle.js', '/desktop-sessions.js', '/client-navigation.js', '/app.js', '/presentation.js'])
             for script in scripts:
                 conn.request('GET', script)
                 response = conn.getresponse()
@@ -1211,6 +1292,19 @@ class HttpTests(unittest.TestCase):
         self.assertEqual(self.request('GET', '/api/sessions', headers={**auth, 'Host': 'evil.example'})[0], 403)
         self.assertEqual(self.request('POST', '/api/logout', {}, auth)[0], 200)
         self.assertEqual(self.request('GET', '/api/sessions', headers=auth)[0], 401)
+
+    def test_list_cache_identity_is_opaque_and_bound_to_authenticated_session(self):
+        self.assertNotIn('listCacheIdentity', self.request('GET', '/api/auth')[2])
+        first = self.login()
+        one = self.request('GET', '/api/auth', headers=first)[2]
+        self.assertEqual(len(one['listCacheIdentity']), 64)
+        self.assertNotIn(one['csrf'], one['listCacheIdentity'])
+        self.assertEqual(self.request('GET', '/api/auth', headers=first)[2]['listCacheIdentity'], one['listCacheIdentity'])
+        second = self.login()
+        two = self.request('GET', '/api/auth', headers=second)[2]
+        self.assertNotEqual(two['listCacheIdentity'], one['listCacheIdentity'])
+        self.assertEqual(self.request('POST', '/api/logout', {}, first)[0], 200)
+        self.assertNotIn('listCacheIdentity', self.request('GET', '/api/auth', headers=first)[2])
 
     def test_wrong_password_and_explicit_passwordless(self):
         self.assertEqual(self.request('POST', '/api/login', {'username': 'admin', 'password': 'wrong'})[0], 403)

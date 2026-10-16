@@ -28,6 +28,34 @@ test('hidden panels do not query quota and resume when overdue',async()=>{
   const ui=fixture();ui.setValue(snapshot([row('current')]));await ui.panel.resume();ui.setVisible(false);await ui.advance(300000);assert.equal(ui.calls.length,2);assert.equal(ui.timers.size,0);
   ui.setVisible(true);await ui.panel.resume();assert.equal(ui.calls.length,4);
 });
+test('Claude list, timer, and return visits only read saved quota snapshots',async()=>{
+  const ui=fixture({provider:'claude'});ui.setValue(snapshot([row('current'),row('saved')]));
+  await ui.panel.resume();await ui.advance(300000);ui.setVisible(false);await ui.advance(300000);ui.setVisible(true);await ui.panel.resume();
+  assert.deepEqual(ui.calls.map(call=>call.action),['list','list','list']);
+  assert.match(ui.text(),/尚未查询/);
+  ui.english();assert.match(ui.text(),/Not queried yet/);
+});
+test('Claude explicit quota query is single-flight and failed refresh keeps the last success time',async()=>{
+  const ui=fixture({provider:'claude'}),saved={status:'ready',checkedAt:1000,limits:[{name:'5h',windows:[{remainingPercent:70}]}]};
+  ui.panel.accept(snapshot([row('current','account',saved)]));assert.match(ui.text(),/查询时间：/);assert.match(ui.text(),/1970-01-01 \d\d:16/);
+  let finish;ui.setHandler(()=>new Promise(resolve=>finish=resolve));
+  const button=ui.all().find(node=>node.tag==='button'&&node.textContent==='查看剩余额度');const pending=button.onclick();
+  assert.equal(ui.calls.length,1);assert.equal(ui.calls[0].refresh,true);
+  assert.equal(ui.all().find(node=>node.tag==='button'&&node.textContent==='查询中…').disabled,true);
+  await ui.panel.perform({action:'details',id:'current',refresh:true});assert.equal(ui.calls.length,1);
+  finish(snapshot([row('current','account',{...saved,status:'error',error:'无法查询 Claude 剩余额度，请确认客户端登录有效并解锁系统凭据存储后重试'})]));await pending;
+  assert.equal(ui.all().find(node=>node.tag==='button'&&node.textContent==='查看剩余额度').disabled,false);
+  assert.match(ui.text(),/70%/);assert.match(ui.text(),/无法查询 Claude 剩余额度/);assert.match(ui.text(),/保留上次结果/);assert.match(ui.text(),/1970-01-01 \d\d:16/);
+  ui.english();assert.match(ui.text(),/Queried at: /);assert.match(ui.text(),/Showing the last result/);assert.match(ui.text(),/Cannot check Claude remaining usage/);
+});
+test('Claude quota button shows an English pending state',async()=>{
+  const ui=fixture({provider:'claude'});ui.english();ui.panel.accept(snapshot([row('current')]));
+  let finish;ui.setHandler(()=>new Promise(resolve=>finish=resolve));
+  const pending=ui.all().find(node=>node.tag==='button'&&node.textContent==='View remaining quota').onclick();
+  assert.equal(ui.all().find(node=>node.tag==='button'&&node.textContent==='Checking…').disabled,true);
+  finish(snapshot([row('current')]));await pending;
+  assert.equal(ui.all().find(node=>node.tag==='button'&&node.textContent==='View remaining quota').disabled,false);
+});
 test('closing a panel discards its late account response and refresh timers',async()=>{
   const ui=fixture();let finish;ui.setRead(()=>new Promise(resolve=>finish=resolve));const pending=ui.panel.resume();ui.panel.dispose();finish(snapshot([row('current')]));await pending;assert.equal(ui.panel.value,null);assert.equal(ui.timers.size,0);assert.equal(ui.updates.length,0);
 });
@@ -47,6 +75,12 @@ test('Claude account switch explains unlock requirement in the same confirmation
  ui.english();await ui.panel.choose(row('other'));assert.equal(ui.calls.length,0);assert.match(ui.prompts[1],/unlocked/);assert.doesNotMatch(ui.prompts[1],/[\u4e00-\u9fff]/);
  ui.confirm(true);await ui.panel.choose(row('other'));assert.equal(ui.calls.length,1);assert.equal(ui.calls[0].action,'switch');assert.equal(ui.prompts.length,3,'each attempt has only one confirmation');
  const dsh=fixture();dsh.panel.accept(snapshot([row('current'),row('other')]));dsh.confirm(false);await dsh.panel.choose(row('other'));assert.doesNotMatch(dsh.prompts[0],/解锁|Claude/);assert.equal(dsh.calls.length,0);
+});
+test('Claude API switch sends local CLI choice only after checkbox selection',async()=>{
+ const ui=fixture({provider:'claude'});ui.panel.accept(snapshot([row('current'),row('other','api')]));
+ const box=ui.all().find(node=>node.tag==='input'&&node.type==='checkbox');
+ assert.ok(box);box.checked=true;box.onchange();ui.confirm(true);await ui.panel.choose(row('other','api'));
+ assert.equal(ui.calls[0].syncLocalCli,true);
 });
 test('switch remains pending until the backend finishes and rejects duplicate clicks',async()=>{
   const ui=fixture();ui.panel.accept(snapshot([row('current'),row('other')]));let finish;ui.setHandler(()=>new Promise(resolve=>finish=resolve));const pending=ui.panel.choose(row('other'));assert.equal(ui.panel.busy,true);await ui.panel.choose(row('other'));assert.equal(ui.calls.length,1);

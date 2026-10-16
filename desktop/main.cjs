@@ -50,12 +50,12 @@ function worker(action,payload){
   if(action==='snapshot'&&updateQuitting)return Promise.resolve({...lastSnapshot,update:updater.status()});
   if(setupPending&&['save','start','stop'].includes(action))return Promise.reject(Error('请等待服务器操作完成。'));
   if(action==='start')payload={...payload,connectionSecrets};
-  const writes=(['harness','desktop-sessions'].includes(action)&&!['status','clients','detect'].includes(payload?.action))||['server-setup','connection-credentials','save','start','stop','devices','notification-watches', 'transfer-settings'].includes(action);
+  const writes=(action==='cli-access'&&payload?.action!=='list')||(['harness','desktop-sessions'].includes(action)&&!['status','clients','detect'].includes(payload?.action))||['server-setup','connection-credentials','save','start','stop','devices','notification-watches', 'transfer-settings'].includes(action);
   if(writes&&updater?.busy)return Promise.reject(Error('正在更新应用，请稍候。'));
   if(writes)workerWrites++;
   if(action==='snapshot'&&snapshotPending)return snapshotPending;
   const options=workerFor({packaged:app.isPackaged,resources:process.resourcesPath,root,dataDir});
-  const result=(action==='snapshot'&&!updater?.busy?snapshotWorker.read(options):['accounts','account','desktop-sessions','start','stop','save'].includes(action)?managementWorker.call(options,action,payload):runWorker(options,action,payload)).then(value=>['snapshot','save'].includes(action)?{...value,networkInterfaces:interfaces(),cloudflaredInstall:installStatus,update:updater?.status(),updateResult:updateResult(),updateManaged:updateManaged(),loginStartup:loginStartup.status()}:value).finally(()=>{if(writes)workerWrites--;});
+  const result=(action==='snapshot'&&!updater?.busy?snapshotWorker.read(options):['accounts','account','cli-access','desktop-sessions','start','stop','save'].includes(action)?managementWorker.call(options,action,payload):runWorker(options,action,payload)).then(value=>['snapshot','save'].includes(action)?{...value,networkInterfaces:interfaces(),cloudflaredInstall:installStatus,update:updater?.status(),updateResult:updateResult(),updateManaged:updateManaged(),loginStartup:loginStartup.status()}:value).finally(()=>{if(writes)workerWrites--;});
   if(action==='snapshot')snapshotPending=result.then(value=>{lastSnapshot=value;return value;}).finally(()=>{snapshotPending=null;});
   return action==='snapshot'?snapshotPending:result;
 }
@@ -121,7 +121,7 @@ function register(){
     fs.writeFileSync(path.join(directory,'language.json'),JSON.stringify({language:value}));
     language=value;const title=t('Codex 手机网关');if(window.getTitle()!==title)window.setTitle(title);tray?.relabel();return language;
   });
-  for(const action of ['snapshot','save','start','stop','logs','test-notification','check-entry','tailscale-setup','devices','account', 'accounts', 'harness', 'desktop-sessions','notification-watches', 'transfer-settings'])ipcMain.handle('bridge:'+action,async(event,payload)=>{
+  for(const action of ['snapshot','save','start','stop','logs','test-notification','check-entry','tailscale-setup','devices','account', 'accounts', 'cli-access', 'harness', 'desktop-sessions','notification-watches', 'transfer-settings'])ipcMain.handle('bridge:'+action,async(event,payload)=>{
     authorize(event);
     if(action==='accounts'){
       if(updater?.busy&&payload?.action!=='list')throw Error('正在更新应用，请稍候。');
@@ -256,7 +256,7 @@ function register(){
     if(target==='data')return shell.openPath(dataDir);
     if(target==='tailscale-help'||target==='setup-tailscale')return shell.openExternal('https://tailscale.com/docs/how-to/quickstart');
     if(target==='cloudflare-dashboard')return shell.openExternal('https://one.dash.cloudflare.com/');
-    if(['setup-lan','setup-quick','setup-cloudflare','setup-server','setup-nas'].includes(target))return shell.openExternal('https://try2love.github.io/codex-mobile-bridge/setup.html?lang='+(language==='en'?'en':'zh')+'#'+target.slice(6));
+    if(['setup-lan','setup-quick','setup-cloudflare','setup-server','setup-nas','setup-external'].includes(target))return shell.openExternal('https://try2love.github.io/codex-mobile-bridge/setup.html?lang='+(language==='en'?'en':'zh')+'#'+target.slice(6));
     if(target==='cloudflare-domain-help')return shell.openExternal('https://developers.cloudflare.com/cloudflare-one/networks/connectors/cloudflare-tunnel/get-started/create-remote-tunnel/');
     if(target==='server-https-help')return shell.openExternal('https://caddyserver.com/docs/running');
     if(target==='server-ssh-help')return shell.openExternal('https://man.openbsd.org/sshd_config#AllowTcpForwarding');
@@ -277,7 +277,9 @@ function register(){
   });
   ipcMain.handle('bridge:copy',async(event,target)=>{
     authorize(event);const snapshot=await worker('snapshot');
-    if(!snapshot.urls.includes(target))throw Error('地址不可用');
+    const localPort=typeof target==='string'?/^http:\/\/127\.0\.0\.1:([1-9]\d{0,4})$/.exec(target):null;
+    const localTarget=localPort&&Number(localPort[1])<=65535;
+    if(!snapshot.urls.includes(target)&&!localTarget)throw Error('地址不可用');
     clipboard.writeText(target);
   });
 }

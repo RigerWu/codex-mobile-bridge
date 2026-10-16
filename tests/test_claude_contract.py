@@ -17,6 +17,11 @@ class ClaudeContract(unittest.IsolatedAsyncioTestCase):
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory(dir=ROOT/'.tmp'); self.addCleanup(self.temp.cleanup)
         self.adapter = Claude(Path(self.temp.name)/'adapter')
+        self.adapter.cli = Mock()
+        self.adapter.cli.profile_resolver.return_value = None
+        self.adapter.cli.listing.return_value = {'connected': False, 'sessions': []}
+        self.adapter.cli.contains.return_value = False
+        self.adapter.cli.status.return_value = {'cliAvailable': False, 'cliAuthReady': False}
         self.rows = {'code': {'sessionId': 'code-native', 'cwd': '/project', 'model': 'api/code', 'effort': 'high', 'permissionMode': 'default', 'isRunning': True},
                      'cowork': {'sessionId': 'cowork-native', 'cwd': '/vm/work', 'userSelectedFolders': ['/host/project'], 'model': 'api/cowork'}}
         self.calls = []
@@ -85,6 +90,8 @@ class ClaudeContract(unittest.IsolatedAsyncioTestCase):
         await self.adapter.dispatch('create', None, {'projectKey': project['key'], 'title': 'Test', 'firstMessage': 'Hello'})
         args = next(args for kind, method, args in self.calls if method == 'start')[0]
         self.assertEqual(args['message'], 'Hello'); self.assertEqual(args['userSelectedFolders'], ['/host/project']); self.assertNotIn('cwd', args)
+        self.adapter.cli.create.assert_not_called()
+        self.adapter.cli.listing.assert_not_called()
 
     async def test_account_has_no_session_dependency(self):
         value = await self.adapter.dispatch('account', None, {})
@@ -134,14 +141,14 @@ class ClaudeContract(unittest.IsolatedAsyncioTestCase):
         detail = await self.adapter.dispatch('detail', self.sid(), {})
         self.assertEqual([method for _, method, _ in self.calls], ['mobileList', 'mobileDetail'])
         self.assertTrue(listing['complete'])
-        self.assertEqual(listing['coverage'], {'code': True, 'cowork': True})
+        self.assertEqual(listing['coverage'], {'code': True, 'cowork': True, 'cli': False})
         self.assertEqual(detail['session']['id'], self.sid())
 
     async def test_missing_surface_never_claims_complete_activity_coverage(self):
         self.adapter.desktop.capabilities['cowork'] = []
         value = await self.adapter.dispatch('list', None, {})
         self.assertFalse(value['complete'])
-        self.assertEqual(value['coverage'], {'code': True, 'cowork': False})
+        self.assertEqual(value['coverage'], {'code': True, 'cowork': False, 'cli': False})
 
 
 class DesktopActionContract(unittest.IsolatedAsyncioTestCase):

@@ -18,11 +18,12 @@ class RemoteUnavailable(RuntimeError):
 
 
 def ssh_command(alias):
-    if not alias or alias.startswith('-') or any(c.isspace() for c in alias):
+    if not isinstance(alias, str) or not alias or alias.startswith('-') or any(c.isspace() for c in alias):
         raise RemoteUnavailable('SSH 别名无效')
     return ['ssh', '-T', '-o', 'BatchMode=yes', '-o', 'ClearAllForwardings=yes',
                '-o', 'ConnectTimeout=8', '-o', 'StrictHostKeyChecking=yes',
-               '-o', 'UpdateHostKeys=no', alias, 'python3 -']
+               '-o', 'UpdateHostKeys=no', alias,
+               'exec "$SHELL" -lc "exec python3 -"']
 
 
 def ssh_read(alias, source, timeout=18):
@@ -75,13 +76,18 @@ class RemoteStore:
         self.alias = alias
         self.home = None  # Never map remote paths onto the local filesystem.
         self.cache = {}
+        self.sources_cache = None
         self.kind_caches = {}
         self.lock = threading.Lock()
 
     def call(self, method, args):
         source = source_text('features/sessions/store.py')
-        return ssh_read(self.alias, source + '\nimport os\ns = SessionStore(Path(os.environ.get("CODEX_HOME", str(Path.home()/".codex"))))\n' +
-                        'print(json.dumps(s.' + method + '(**' + payload(args) + '), ensure_ascii=False))\n', timeout=30)
+        suffix = ('\nimport os\nhome_source = "environment" if os.environ.get("CODEX_HOME") else "default"\n'
+                  's = SessionStore(Path(os.environ.get("CODEX_HOME", str(Path.home()/".codex"))))\n'
+                  'result = s.' + method + '(**' + payload(args) + ')\n')
+        if method == 'discovery_diagnostics':
+            suffix += 'result["homeSource"] = home_source\n'
+        return ssh_read(self.alias, source + suffix + 'print(json.dumps(result, ensure_ascii=False))\n', timeout=30)
 
     def list(self, **kwargs):
         key = json.dumps(kwargs, sort_keys=True)
@@ -92,6 +98,14 @@ class RemoteStore:
             rows = self.call('list', kwargs)
             self.cache[key] = (time.monotonic(), rows)
             return rows
+
+    def available_sources(self):
+        with self.lock:
+            if self.sources_cache and time.monotonic() - self.sources_cache[0] < 15:
+                return list(self.sources_cache[1])
+            sources = self.call('available_sources', {})
+            self.sources_cache = (time.monotonic(), sources)
+            return list(sources)
 
     def notification_changes(self, since=0):
         return self.call('notification_changes', {'since': since})
@@ -113,6 +127,9 @@ class RemoteStore:
 
     def recencies(self, identifiers):
         return self.call('recencies', {'identifiers': identifiers})
+
+    def discovery_diagnostics(self, thread_id=None):
+        return self.call('discovery_diagnostics', {'thread_id': thread_id})
 
 
 class RemoteCatalog:
@@ -202,10 +219,17 @@ class AppHosts:
 
     def hosts(self):
         state = self.state()
-        relevant = {p['hostId'] for p in state.get('remote-projects', [])}
-        relevant.update(state.get('thread-project-membership-host-ids', {}).values())
         return {h['hostId']: h for h in state.get('codex-managed-remote-connections', [])
-                if h.get('hostId') in relevant and h.get('alias')}
+                if isinstance(h, dict) and isinstance(h.get('hostId'), str) and h['hostId']
+                and isinstance(h.get('alias'), str) and h['alias']
+                and not h['alias'].startswith('-') and not any(c.isspace() for c in h['alias'])}
+
+    def lifecycle_hosts(self):
+        """Keep shutdown/account checks scoped to App project and membership hosts."""
+        state = self.state()
+        relevant = {p.get('hostId') for p in state.get('remote-projects', []) if isinstance(p, dict)}
+        relevant.update(state.get('thread-project-membership-host-ids', {}).values())
+        return {host_id: host for host_id, host in self.hosts().items() if host_id in relevant}
 
     def projects(self):
         state = self.state()

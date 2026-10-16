@@ -160,7 +160,7 @@ class SideChatPanel {
     if(state.id&&this.attachments.key!==state.id)this.attachments.open(state.id);
     if(state.id){this.modelButton.textContent=[state.model,state.effort].filter(Boolean).join(' · ')||BridgeI18n.t('模型与思考程度');delete this.modelButton.dataset.i18n;}
     if(!this.modeSelected)this.workMode.value=state.collaborationMode==='plan'?'plan':'default';
-    const permission={'ask':'请求批准','auto-review':'帮我批准','full-access':'完全访问权限'}[state.permissionMode]||'权限';this.permissionsButton.textContent=BridgeI18n.t(permission);this.permissionsButton.dataset.i18n=permission;
+    const permission={'ask':'请求批准','auto-review':'帮我批准','full-access':'完全访问'}[state.permissionMode]||'权限';this.permissionsButton.textContent=BridgeI18n.t(permission);this.permissionsButton.dataset.i18n=permission;
     this.tab.body.classList.toggle('has-side-chat',!!state.id);
     if(this.pending&&state.submissions?.some(s=>s.id===this.pending.submissionId&&['accepted','queued'].includes(s.status))){
       if(this.input.value===this.pending.text)this.input.value='';this.attachments.clear(state.id,this.pending.attachments);this.pending=null;this.selectedSkills.clear();this.skillChips();this.resizeInput();

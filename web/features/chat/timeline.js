@@ -3,8 +3,8 @@ const timelineText=source=>typeof BridgeI18n==='undefined'?source:BridgeI18n.t(s
 
 // History and live changes share stable keys, but never share a request queue.
 class ChatTimeline {
-  constructor({url, request, renderMeta, renderText, status, onAction, elements = {}, active = () => true}) {
-    Object.assign(this,{url,request,renderMeta,renderText,status,onAction,active});
+  constructor({url, request, renderMeta, renderText, status, onAction, canEdit = () => true, elements = {}, active = () => true}) {
+    Object.assign(this,{url,request,renderMeta,renderText,status,onAction,canEdit,active});
     this.viewport=elements.viewport||document.getElementById('timeline');
     this.container=elements.container||document.getElementById('messages');
     this.older=elements.older||document.getElementById('older');
@@ -190,8 +190,9 @@ class ChatTimeline {
       const row=this.rows.get(key)?.row,bar=node.querySelector('.message-actions');if(!bar||!row)continue;
       if(!this.onAction)continue;
       const add=(action,label,disabled)=>{const cls=action==='fork'?'message-fork':'message-edit';let b=bar.querySelector('.'+cls);if(!b){b=document.createElement('button');b.type='button';b.className='plain '+cls;bar.append(b);}b.textContent=timelineText(label);b.disabled=disabled;b.onclick=()=>this.onAction(action,row,this);};
-      if(row.editable){const latest=this.meta?.latestUserTurnId===row.turnId;add(latest?'edit':'edit-fork',latest?'编辑并重新发送':'编辑并新建分支',row.turnStatus==='inProgress'||latest&&this.meta?.status==='active');}
-      if(row.forkable)add('fork','从这里分支',false);
+      for(const action of bar.querySelectorAll('.message-edit,.message-fork'))action.hidden=!this.canEdit();
+      if(row.editable&&this.canEdit()){const latest=this.meta?.latestUserTurnId===row.turnId;add(latest?'edit':'edit-fork',latest?'编辑并重新发送':'编辑并新建分支',row.turnStatus==='inProgress'||latest&&this.meta?.status==='active');}
+      if(row.forkable&&this.canEdit())add('fork','从这里分支',false);
     }
   }
   relabel(){

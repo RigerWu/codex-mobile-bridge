@@ -14,13 +14,14 @@ from contextlib import contextmanager, nullcontext
 from concurrent.futures import Future
 
 from bridge.clients.claude.adapter import Claude
+from bridge.clients.claude.cli_session import ResumePreflightBlocked
 from bridge.clients.deepseek.adapter import DeepSeek, BRIDGE_REVISION, LIFECYCLE_REVISIONS, UPDATE_REASON
 from bridge.clients.errors import BridgeUnavailable
 from bridge.app.lifecycle import private_json
 from bridge.platforms.windows import session as windows_session
 
 READS = {'list', 'detail', 'catalog', 'projects', 'account', 'access'}
-WRITES = {'send', 'stop', 'settings', 'respond', 'create', 'access'}
+WRITES = {'send', 'stop', 'settings', 'respond', 'create', 'access', 'resume'}
 
 
 class TaskStateUnavailable(ValueError):
@@ -44,9 +45,15 @@ class DesktopSessions:
         self.startup_thread = None
         self.client_lock = threading.RLock()
         self.client_cache = None
+        self.client_snapshot = None
+        self.client_snapshot_lock = threading.Lock()
+        self.client_refreshing = False
+        self.client_refresh_error = False
+        self.client_refresh_retry_at = 0
         self.workspace_roots = {}
         self.account_stores = {}
         self.account_operations = set()
+        self.cli_sync_status = {}
         self.deepseek_recovery = None
         self.claude_quit = None
         self.directory = Path(directory)/'desktop-sessions'
@@ -54,7 +61,11 @@ class DesktopSessions:
         self.config_path = self.directory/'settings.json'
         self.config = json.loads(self.config_path.read_text()) if self.config_path.exists() else {}
         self.adapters = {'deepseek': DeepSeek(self.directory/'deepseek', self.config.get('deepseekHome')),
-                         'claude': Claude(self.directory/'claude', auto_connect=False)}
+                         'claude': Claude(self.directory/'claude', auto_connect=False,
+                                          hosts=bridge.hosts if bridge is not None and hasattr(bridge, 'hosts') else None)}
+        if bridge is not None and getattr(bridge, 'cli_access', None) is not None:
+            bridge.desktop_sessions = self
+            self.adapters['claude'].cli.profile_resolver = bridge.cli_access.claude_profile
         self.deepseek_restore_error = None
         if self.config.get('deepseekAdapterDirectory'):
             try:
@@ -226,7 +237,7 @@ class DesktopSessions:
             return self._read(provider, action, sid, body)
         rid = str(uuid.UUID(body.get('id', '')))
         if action == 'send' and (not isinstance(body.get('text'), str) or
-                                 not body['text'].strip() and not body.get('resolvedImages') or len(body['text']) > 100000):
+                                 not body['text'].strip() and not (body.get('resolvedImages') or body.get('resolvedFiles')) or len(body['text']) > 100000):
             raise ValueError('请输入 1–100000 字的消息')
         if action == 'create' and (not isinstance(body.get('title', ''), str) or len(body.get('title', '')) > 120):
             raise ValueError('聊天名称不能超过 120 字')
@@ -256,6 +267,8 @@ class DesktopSessions:
                     raise
             try:
                 result = adapter.call(action, sid, body)
+            except ResumePreflightBlocked as exc:
+                result = {'status': 'blocked', 'id': rid, 'message': str(exc)}
             except Exception as exc:
                 # The desktop may already have accepted a command before a timeout.
                 # Do not turn an uncertain outcome into a safe-to-retry failure.
@@ -447,6 +460,9 @@ class DesktopSessions:
             self.bridge.assert_desktop_idle()
             return
         adapter = self.adapters[provider]
+        if provider == 'claude' and (adapter.cli.busy() is True or
+                                     getattr(adapter, 'remote_cli', None) is not None and adapter.remote_cli.busy() is True):
+            raise ValueError('有 Claude Code 任务运行或等待确认，请先结束任务再关闭客户端')
         try:
             status = adapter.call('status') if provider == 'deepseek' else adapter.status()
         except (ValueError, OSError, BridgeUnavailable):
@@ -462,7 +478,8 @@ class DesktopSessions:
                 raise ValueError('当前 Harness 接入版本无法核对任务状态，请在电脑端退出 Harness 后再连接')
         try:
             listing = (adapter.call('list', timeout=8) if native_confirmation else
-                       adapter.call('lifecycle' if provider == 'deepseek' else 'list'))
+                       adapter.desktop_listing() if provider == 'claude' else
+                       adapter.call('lifecycle'))
         except (ValueError, OSError, BridgeUnavailable):
             raise TaskStateUnavailable(unknown) from None
         sessions = listing.get('sessions')
@@ -693,9 +710,11 @@ class DesktopSessions:
     def _claude_quit_evidence(self):
         adapter = self.adapters['claude']
         try:
+            if adapter.cli.busy() is True or getattr(adapter, 'remote_cli', None) is not None and adapter.remote_cli.busy() is True:
+                return {'busy': True, 'unknown': False}
             if not adapter.status().get('connected'):
                 return {'busy': False, 'unknown': True}
-            listing = adapter.call('list')  # Fresh safety evidence, never shared.
+            listing = adapter.desktop_listing()  # Fresh Desktop evidence, never shared.
             sessions = listing.get('sessions')
             if not isinstance(sessions, list):
                 return {'busy': False, 'unknown': True}
@@ -781,7 +800,7 @@ class DesktopSessions:
                     pass
             rows.append({'id': 'codex', 'name': 'Codex', 'installed': discovered.get('codex', {}).get('installed', ready), 'configured': ready, 'connected': False,
                          'setupStatus': 'ready' if ready else 'unconfigured',
-                         'enabled': self.config.get('enabled', {}).get('codex', ready), 'reason': reason})
+                         'enabled': self.enabled('codex'), 'reason': reason})
             for provider, name in [('claude', 'Claude'), ('deepseek', 'DSH')]:
                 connected = ready = False
                 invalid = False
@@ -804,7 +823,7 @@ class DesktopSessions:
                             invalid = status.get('configured') is False
                             reason = (('已恢复此前的 Harness 接入' if setup.get('setupStatus') == 'recovered' else '接入配置已就绪') if ready else '请在桌面配置账号或 API')
                         else:
-                            sessions = self._read(provider, 'list').get('sessions', [])
+                            sessions = adapter.desktop_listing().get('sessions', [])
                             if sessions:
                                 catalog = self._read(provider, 'catalog', sessions[0]['id'], {'section': 'models'})
                                 ready = bool(catalog.get('models'))
@@ -835,7 +854,7 @@ class DesktopSessions:
                         private_json(self.config_path, self.config)
                 remembered = bool(binding.get('executable') and verified.get(provider) == binding and
                                   discovered.get(provider, {}).get('installed'))
-                configured = ready or remembered
+                configured = ready or remembered or (provider == 'claude' and status.get('cliAuthReady') is True)
                 if provider == 'deepseek' and (pending_restart or status.get('updateRequired')):
                     configured = False
                 if not connected and remembered and setup_status not in (
@@ -846,7 +865,10 @@ class DesktopSessions:
                     setup_status, reason = 'failed', setup.get('reason', reason)
                 rows.append({'id': provider, 'name': name, 'installed': discovered.get(provider, {}).get('installed', connected),
                              'setupStatus': ('recovered' if provider == 'deepseek' and setup_status == 'recovered' else 'ready') if ready and not pending_restart else setup_status, 'configured': configured, 'connected': connected,
-                             'enabled': self.enabled(provider), 'reason': reason})
+                             'enabled': self.enabled(provider), 'reason': reason,
+                             **({'cliAvailable': status.get('cliAvailable') is True,
+                                 'cliAuthReady': status.get('cliAuthReady') is True,
+                                 'canStartDesktop': status.get('automaticConnection') == 'native-console'} if provider == 'claude' else {})})
             from bridge.clients.lifecycle import inspect_clients
             descriptors = []
             for row in rows:
@@ -881,12 +903,18 @@ class DesktopSessions:
                 elif row['id'] == 'claude':
                     self._claude_progress(row, native_states.get('claude'))
                 # Selection is a startup preference; readiness still requires live evidence.
-                row['selectable'] = bool(row['configured'] or row['installed'] and row['setupStatus'] != 'unsupported')
+                row['selectable'] = bool(row['configured'] or row['installed'] and row['setupStatus'] != 'unsupported'
+                                         or row.get('cliAvailable'))
                 if row['id'] == 'claude':
+                    desktop_supported = row['canStartDesktop'] and self.gateway_running and row['installed'] and not row['connected']
+                    native_state = native or {}
+                    row['canStartDesktop'] = bool(desktop_supported and not row['running'] and native_state.get('unknown') is False)
+                    row['canInitializeDesktop'] = bool(desktop_supported and row['running'] and
+                                                       len(native_state.get('mainPids', [])) == 1 and native_state.get('unknown') is False)
                     row['initializationMode'] = 'background' if sys.platform == 'win32' else 'foreground'
                     row['reconnectSupported'] = self._claude_reconnect_supported()
                     row['canReconnect'] = bool(row['reconnectSupported'] and self.gateway_running and row['enabled'] and
-                                               len(native.get('mainPids', [])) == 1 and not native.get('unknown', True) and
+                                               len(native_state.get('mainPids', [])) == 1 and not native_state.get('unknown', True) and
                                                row['setupStatus'] != 'connecting')
                     row['canConfirmQuit'] = bool(sys.platform in ('darwin', 'win32') and row['mainRunning'])
                 if not self.gateway_running and row['enabled'] and row['setupStatus'] != 'recovery-required':
@@ -899,7 +927,51 @@ class DesktopSessions:
             if sys.platform == 'win32':
                 result['windowsSession'] = windows_session.status()
             self.client_cache = (time.monotonic(), result)
+            with self.client_snapshot_lock:
+                if not self.closed.is_set():
+                    self.client_snapshot = _copy_read(result)
+                    self.client_refresh_error = False
+                    self.client_refresh_retry_at = 0
             return result
+
+    def clients_status(self):
+        """Return display status without waiting for startup or native inspection."""
+        if self.closed.is_set():
+            raise BridgeUnavailable('客户端连接已关闭')
+        cached = None
+        if self.client_lock.acquire(blocking=False):
+            try:
+                cached = self.client_cache
+                pending = cached and any(row.get('connectionState') in ('starting', 'connecting')
+                                         for row in cached[1]['clients'])
+                if cached and time.monotonic() - cached[0] < (1 if pending else 15):
+                    with self.client_snapshot_lock:
+                        if not self.client_refreshing and not self.client_refresh_error:
+                            return {**_copy_read(cached[1]), 'pending': False}
+            finally:
+                self.client_lock.release()
+        with self.client_snapshot_lock:
+            snapshot = _copy_read(self.client_snapshot) if self.client_snapshot else {'clients': []}
+            now = time.monotonic()
+            start = not self.client_refreshing and now >= self.client_refresh_retry_at and not self.closed.is_set()
+            if start:
+                self.client_refreshing = True
+            failed = self.client_refresh_error and not self.client_refreshing
+        if start:
+            threading.Thread(target=self._refresh_clients_status, daemon=True).start()
+        return {**snapshot, 'pending': not failed, **({'refreshError': '客户端状态读取失败，请重试。'} if failed else {})}
+
+    def _refresh_clients_status(self):
+        try:
+            if not self.closed.is_set():
+                self.clients(refresh=True)
+        except Exception:
+            with self.client_snapshot_lock:
+                self.client_refresh_error = True
+                self.client_refresh_retry_at = time.monotonic() + 2
+        finally:
+            with self.client_snapshot_lock:
+                self.client_refreshing = False
 
     def _claude_progress(self, row, native):
         row.update(connectionState='connected' if row['connected'] else 'idle', retryable=False)
@@ -910,7 +982,12 @@ class DesktopSessions:
             row['connectionState'] = 'connecting'
         elif phase in ('starting', 'connecting', 'needs-initialization'):
             row['connectionState'] = phase
-            if phase != 'starting' and native is not None and not native['running']:
+            if phase == 'connecting' and native is not None and not native['running']:
+                # The initialization worker launches the process asynchronously.
+                # Keep its pending state (and short cache) until it reports an
+                # outcome; an absent process here is not a failed launch.
+                row['connectionState'] = 'starting'
+            elif phase == 'needs-initialization' and native is not None and not native['running']:
                 row.update(connectionState='error', reason='Claude 未运行，请重试后台启动', retryable=True)
         elif phase in ('failed', 'needs-retry'):
             row.update(connectionState='error', retryable=True)
@@ -1011,6 +1088,8 @@ class DesktopSessions:
                 elif provider == 'claude':
                     if value.get('initializeDesktop') is True:
                         self.adapters[provider].connect()
+                    elif self.adapters[provider].status().get('cliAvailable') is True:
+                        pass  # CLI-only selection never launches or activates Claude Desktop.
                     elif sys.platform == 'darwin':
                         result = launch_client(descriptor)
                         if not result.get('running'):
@@ -1025,6 +1104,10 @@ class DesktopSessions:
                     if not result.get('running'):
                         raise ValueError('客户端尚未启动，请在电脑端检查后重试')
             else:
+                if provider == 'claude' and (self.adapters[provider].cli.busy() is True or
+                                             getattr(self.adapters[provider], 'remote_cli', None) is not None and
+                                             self.adapters[provider].remote_cli.busy() is True):
+                    raise ValueError('有 Claude Code 任务运行或等待确认，请先结束任务再关闭客户端')
                 self._stop_client(provider, descriptor, inspect_client(descriptor),
                                   native_confirmation=value.get('quitDesktop') is True,
                                   force=value.get('forceDesktop') is True)
@@ -1068,7 +1151,8 @@ class DesktopSessions:
 
     def _accounts_public(self, provider, value):
         return {**value, 'provider': provider, 'gatewayRunning': self.gateway_running,
-                'canSwitch': provider not in self.account_operations}
+                'canSwitch': provider not in self.account_operations,
+                'cliSync': self.cli_sync_status.get(provider)}
 
     def _launch_account_client(self, provider, descriptor):
         from bridge.clients.lifecycle import launch_client
@@ -1093,6 +1177,11 @@ class DesktopSessions:
 
     def client_accounts(self, provider, value):
         operation = value.get('operation', 'list')
+        sync_cli = value.get('syncLocalCli') is True
+        if 'syncLocalCli' in value and not isinstance(value['syncLocalCli'], bool):
+            raise ValueError('本机 CLI 同步选项无效')
+        if sync_cli and (provider != 'claude' or operation != 'switch'):
+            raise ValueError('本机 CLI 同步仅支持 Claude Desktop 接入切换')
         store = self._account_store(provider)
         if operation == 'list':
             return self._accounts_public(provider, store.public())
@@ -1115,6 +1204,14 @@ class DesktopSessions:
             raise ValueError('不支持的账号操作')
         from bridge.clients.lifecycle import inspect_client
         with self.client_lock, self._changing(provider):
+            if sync_cli:
+                if not self.bridge or not getattr(self.bridge, 'cli_access', None):
+                    raise ValueError('本机 Claude Code CLI 接入管理器不可用')
+                from bridge.features.accounts.cli_sync import LocalCliSync
+                LocalCliSync(self.bridge).preflight('claude')
+                selected = next((row for row in store.public()['accounts'] if row['id'] == value.get('id')), None)
+                if not selected or selected.get('kind') != 'api' or selected.get('saved') is not True:
+                    raise ValueError('官方 Claude Desktop 登录不能同步到本机 CLI')
             # Harness persists one atomic credential file; saving it does not
             # require the multi-file profile snapshot used by Claude.
             if provider == 'deepseek' and operation == 'import-current':
@@ -1146,6 +1243,23 @@ class DesktopSessions:
                         active = result.get('activeIds', [result.get('activeId')])
                         if value.get('id') not in active:
                             raise ValueError('账号配置尚未生效，请重试')
+                if operation == 'switch' and sync_cli:
+                    try:
+                        imported = self.bridge.cli_access.change({'provider': 'claude', 'action': 'importDesktop',
+                                                                   'desktopId': value['id']})
+                        saved_id = imported.get('savedId')
+                        if not saved_id:
+                            raise ValueError('Claude Code CLI 接入未保存')
+                        selected = self.bridge.cli_access.change({'provider': 'claude', 'action': 'switch',
+                                                                   'id': saved_id, 'confirmed': True})
+                        if selected.get('claude', {}).get('activeId') != saved_id:
+                            raise ValueError('Claude Code CLI 未确认目标接入')
+                        self.cli_sync_status[provider] = {'status': 'verified'}
+                    except Exception as error:
+                        self.cli_sync_status[provider] = {'status': 'failed', 'error': str(error),
+                                                          'desktopStatus': 'verified'}
+                elif operation == 'switch':
+                    self.cli_sync_status[provider] = {'status': 'unchanged'}
             except Exception as error:
                 try:
                     if rollback is not None:

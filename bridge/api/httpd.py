@@ -1,6 +1,7 @@
 """Same-origin HTTP/SSE gateway. Desktop RPC is never exposed directly."""
 import base64
 import gzip
+import hashlib
 import hmac
 import json
 import logging
@@ -37,9 +38,10 @@ from bridge.features.sessions.store import StoreUnavailable
 from bridge.clients.codex.remote import RemoteUnavailable
 from bridge.features.sessions.create import CreationError
 from bridge.features.accounts.account import AccountError
+from bridge.api.html_preview import SHELL_PATH, SHELL_FILE, SHELL_CSP
 
 LOG = logging.getLogger(__name__)
-from bridge.api.assets import STATIC, FONT_ROUTE, asset_bytes
+from bridge.api.assets import STATIC, FONT_ROUTE, PDF_CMAP_ROUTE, PDF_FONT_ROUTE, asset_bytes
 
 THREAD_ROUTE = re.compile(r"^/api/sessions/([0-9a-f-]{36})(?:/(events|send|stop|history|respond|reconnect|queue|catalog|settings|permissions|poll|timeline|changes|detail|notifications|uploads|message-action|rename))?$")
 UPLOAD_PREVIEW_ROUTE = re.compile(r"^/api/sessions/([0-9a-f-]{36})/uploads/([0-9a-f-]{36})/preview$")
@@ -140,16 +142,20 @@ class Handler(BaseHTTPRequestHandler):
         # Request bodies, cookies, query strings and conversation IDs are private.
         pass
 
-    def headers_common(self, cache_control="no-store"):
+    def headers_common(self, cache_control="no-store", preview_shell=False):
         self.send_header("Cache-Control", cache_control)
         self.send_header("X-Content-Type-Options", "nosniff")
         self.send_header("Referrer-Policy", "no-referrer")
-        self.send_header("X-Frame-Options", "DENY")
+        self.send_header("X-Frame-Options", "SAMEORIGIN" if preview_shell else "DENY")
         # KaTeX emits inline layout styles; scripts and stylesheets stay same-origin.
-        self.send_header("Content-Security-Policy", "default-src 'self'; script-src 'self'; style-src 'self'; style-src-attr 'unsafe-inline'; img-src 'self' data:; connect-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'; object-src 'none'")
+        host = self.headers.get('Host', '')
+        origin = ('https://' if host in self.server.secure_hosts else 'http://') + host
+        frame_source = origin + SHELL_PATH if host in self.server.hosts else "'none'"
+        self.send_header("Content-Security-Policy", SHELL_CSP if preview_shell else
+                         "default-src 'self'; script-src 'self'; style-src 'self'; style-src-attr 'unsafe-inline'; img-src 'self' data:; connect-src 'self'; frame-src " + frame_source + "; frame-ancestors 'none'; base-uri 'none'; form-action 'self'; object-src 'none'")
         self.send_header("Permissions-Policy", "camera=(), microphone=(), geolocation=()")
 
-    def output(self, status, data, content_type="application/json; charset=utf-8", cookie=None, content_disposition=None):
+    def output(self, status, data, content_type="application/json; charset=utf-8", cookie=None, content_disposition=None, preview_shell=False):
         # Keep the browser cookie in step with the renewed server-side deadline,
         # including long-lived pages that do not revisit /api/auth.
         if cookie is None and 200 <= status < 300 and urlsplit(self.path).path.startswith('/api/'):
@@ -166,12 +172,14 @@ class Handler(BaseHTTPRequestHandler):
             if len(candidate) < len(body):
                 body, compressed = candidate, True
         self.send_response(status)
-        self.headers_common()
+        self.headers_common(preview_shell=preview_shell)
         self.send_header("Content-Type", content_type)
         self.send_header('Vary', 'Accept-Encoding')
         if compressed:
             self.send_header('Content-Encoding', 'gzip')
         self.send_header("Content-Length", str(len(body)))
+        if self.close_connection:
+            self.send_header("Connection", "close")
         if content_disposition:
             self.send_header("Content-Disposition", content_disposition)
         if cookie:
@@ -213,7 +221,8 @@ class Handler(BaseHTTPRequestHandler):
         if not self.server.local_access and (local_host or (self.connection.getsockname()[0] == '127.0.0.1' and host not in self.server.secure_hosts)):
             raise PermissionError('本机网页访问已关闭')
         origin = self.headers.get("Origin")
-        if (origin and origin not in self.server.origins) or (write and not origin):
+        expected_origin = ('https://' if host in self.server.secure_hosts else 'http://') + host
+        if len(self.headers.get_all("Origin", [])) > 1 or (origin and origin != expected_origin) or (write and not origin):
             raise PermissionError("不允许跨站请求")
         # External links may open the public HTML shell. Fetches, embedded pages
         # and API requests must still pass the cross-site restriction.
@@ -295,12 +304,23 @@ class Handler(BaseHTTPRequestHandler):
                 file = self.server.web_dir / 'vendor/katex/fonts' / font[1]
                 if file.is_file():
                     return self.output(200, file.read_bytes(), 'font/'+font[2])
+            cmap = PDF_CMAP_ROUTE.fullmatch(path)
+            if not write and cmap:
+                file = self.server.web_dir / 'vendor/pdfjs/cmaps' / cmap[1]
+                if file.is_file():
+                    return self.output(200, file.read_bytes(), 'application/octet-stream')
+            pdf_font = PDF_FONT_ROUTE.fullmatch(path)
+            if not write and pdf_font:
+                file = self.server.web_dir / 'vendor/pdfjs/standard_fonts' / pdf_font[1]
+                if file.is_file():
+                    return self.output(200, file.read_bytes(), 'font/ttf' if file.suffix == '.ttf' else 'application/octet-stream')
             if not write and path == "/api/auth":
                 session = self.login_session()
                 discovery = getattr(self.server, 'connection_discovery', None)
                 return self.output(200, {"uiLanguage": self.server.ui_language(), "authenticated": bool(session), "trustedDevice": bool(session and session.get("trustedDevice")), "csrf": session["csrf"] if session else None,
                                          "loginStatus": self.server.auth.login_status(self.client()["ip"]),
                                          "instanceId": self.server.instance_id, "cookieName": self.server.auth.cookie_name,
+                                         **({'listCacheIdentity': hashlib.sha256((self.server.instance_id + '\0' + session['csrf']).encode()).hexdigest()} if session else {}),
                                          **({"computer": {"name": socket.gethostname(), "platform": platform.system()}} if session else {}),
                                          **({'connection': discovery.descriptor(self.token())} if session and discovery else {}),
                                          "notifications": self.server.notifications is not None,
@@ -336,6 +356,11 @@ class Handler(BaseHTTPRequestHandler):
             auth = self.authorized(write)
             if not auth:
                 return
+            if path == SHELL_PATH:
+                if write or query:
+                    return self.output(405, {'error': '请求方式无效'})
+                return self.output(200, (self.server.web_dir / SHELL_FILE).read_bytes(),
+                                   'text/html; charset=utf-8', preview_shell=True)
             mobile_update = re.fullmatch(r'/api/mobile/update(?:/(prepare|status/([a-f0-9]{64})|packages/([a-f0-9]{64})))?', path)
             if mobile_update:
                 if self.server.auth.config.get('mode') == 'none':
@@ -383,7 +408,7 @@ class Handler(BaseHTTPRequestHandler):
                     if not isinstance(value, dict) or not {'provider', 'enabled'} <= set(value) or set(value) - {'provider', 'enabled', 'quitDesktop', 'initializeDesktop', 'forceDesktop', 'forceConfirmed'}:
                         raise ValueError('应用开关无效')
                     return self.output(200, manager.toggle_client(value))
-                return self.output(200, manager.clients())
+                return self.output(200, manager.clients_status())
             desktop_upload = re.fullmatch(r'/api/desktop-sessions/(deepseek|claude)/uploads(?:/([0-9a-f-]{36})/(thumb|preview))?', path)
             if desktop_upload:
                 manager, uploads = self.server.desktop_sessions, self.server.desktop_uploads
@@ -423,6 +448,8 @@ class Handler(BaseHTTPRequestHandler):
                 operation = value.get('action')
                 if operation not in (('details', 'switch') if write else ('list',)):
                     return self.output(403, {'error': '添加、修改与删除账号请在电脑端完成。'})
+                if write and operation == 'switch' and (set(value) - {'action', 'id', 'syncLocalCli'} or not isinstance(value.get('id'), str) or value.get('syncLocalCli', False) not in (True, False)):
+                    raise ValueError('账号切换请求包含不支持的字段')
                 if operation == 'switch' and self.server.auth.config.get('mode') == 'none':
                     raise PermissionError('请启用密码保护后再切换账号')
                 return self.output(200, manager.client_accounts(desktop_accounts.group(1), {**value, 'operation': operation}))
@@ -452,7 +479,14 @@ class Handler(BaseHTTPRequestHandler):
                 if write and parts[3] == 'send' and 'attachments' in body:
                     if self.server.desktop_uploads is None:
                         return self.output(503, {'error': '桌面会话接入不可用'})
-                    body['resolvedImages'] = self.server.desktop_uploads.resolve(parts[2], sid, body.pop('attachments'))
+                    detail = manager.call(parts[2], 'detail', sid)
+                    session = detail.get('session') or {}
+                    local_cli = parts[2] == 'claude' and session.get('backend') == 'cli'
+                    images, files = self.server.desktop_uploads.resolve(
+                        parts[2], sid, body.pop('attachments'), local_claude_cli=local_cli)
+                    body['resolvedImages'] = images
+                    if files:
+                        body['resolvedFiles'] = files
                 feed = self.server.notifications.mobile.checkpoint() if parts[3] == 'list' and self.server.notifications else None
                 result = manager.list_with_activity(parts[2]) if parts[3] == 'list' else manager.call(parts[2], parts[3], sid, body)
                 if feed is not None:
@@ -493,6 +527,17 @@ class Handler(BaseHTTPRequestHandler):
                 self.read_json()
                 self.server.auth.logout(self.token())
                 return self.output(200, {"ok": True}, cookie=self.cookie("", clear=True))
+            if path == '/api/cli-access':
+                if query:
+                    raise ValueError('CLI 接入请求包含不支持的参数')
+                manager = self.server.bridge.cli_access
+                if manager is None:
+                    return self.output(503, {'error': '本机 CLI 接入不可用'})
+                if write:
+                    if self.server.auth.config.get('mode') == 'none':
+                        raise PermissionError('免密访问不能修改 CLI 接入')
+                    return self.output(200, manager.change(self.read_json()))
+                return self.output(200, manager.public())
             if not write and path == '/api/accounts':
                 result = self.server.bridge.accounts.public()
                 result['canSwitch'] = self.server.auth.config.get('mode') != 'none'
@@ -531,20 +576,47 @@ class Handler(BaseHTTPRequestHandler):
                 if self.server.auth.config.get('mode') == 'none':
                     raise PermissionError('免密访问不能切换账号，请在桌面端操作')
                 body = self.read_json()
-                if set(body) != {'id', 'requestId', 'confirmed', 'tasksConfirmed'}:
+                if (set(body) - {'id', 'requestId', 'confirmed', 'tasksConfirmed', 'syncLocalCli'}
+                        or not {'id', 'requestId', 'confirmed', 'tasksConfirmed'} <= set(body)
+                        or 'syncLocalCli' in body and not isinstance(body['syncLocalCli'], bool)):
                     raise ValueError('账号切换请求包含不支持的字段')
                 return self.output(202, self.server.bridge.accounts.switch(body))
             if not write and path == '/api/account':
                 return self.output(200, self.server.bridge.account.read(refresh=query.get('cached', [''])[0] != '1'))
             if write and path == '/api/account/reset':
                 return self.output(200, self.server.bridge.account.consume(self.read_json()))
+            if not write and path == '/api/sessions/diagnostics':
+                if set(query) - {'thread'}:
+                    raise ValueError('诊断请求包含不支持的字段')
+                report = self.server.bridge.discovery_diagnostics(query.get('thread', [None])[0])
+                return self.output(200, report, content_disposition='attachment; filename="codex-session-diagnostics.json"')
             if not write and path == "/api/sessions":
+                source = query.get('source', ['all'])[0]
+                if source not in ('all', 'desktop', 'cli'):
+                    raise ValueError('不支持的会话来源')
                 feed = self.server.notifications.mobile.checkpoint() if self.server.notifications else None
-                rows = self.server.bridge.list(query=query.get("q", [""])[0][:200], offset=max(0, int(query.get("offset", [0])[0])), archived=query.get("archived", ["false"])[0] == "true")
-                return self.output(200, {"sessions": rows, "unavailableHosts": self.server.bridge.host_errors,
+                if query.get('scope', [None])[0] == 'host':
+                    host = query.get('host', ['local'])[0]
+                    host_infos = self.server.bridge.hosts.hosts()
+                    if host != 'local' and host not in host_infos:
+                        raise ValueError('未知 SSH 主机')
+                    offset = max(0, int(query.get('offset', [0])[0]))
+                    target = self.server.bridge.for_host(host)
+                    host_info = host_infos.get(host, {})
+                    rows, available = target.list(query=query.get('q', [''])[0][:200], limit=offset + 101,
+                                                  archived=query.get('archived', ['false'])[0] == 'true',
+                                                  source=source, include_sources=True, local_only=True,
+                                                  host_label=host_info.get('displayName') or host_info.get('alias'))
+                    return self.output(200, {'sessions': rows, 'availableSources': available,
+                                             'unavailableHosts': target.host_errors,
+                                             'remoteHosts': list(host_infos) if host == 'local' else [],
+                                             'complete': not target.host_errors,
+                                             'notificationRead': {key: feed[key] for key in ('streamId', 'cursor')} if feed else None})
+                rows, available = self.server.bridge.list(query=query.get("q", [""])[0][:200], offset=max(0, int(query.get("offset", [0])[0])), archived=query.get("archived", ["false"])[0] == "true", source=source, include_sources=True)
+                return self.output(200, {"sessions": rows, "availableSources": available, "unavailableHosts": self.server.bridge.host_errors,
                                         'notificationRead': {key: feed[key] for key in ('streamId', 'cursor')} if feed else None})
             if not write and path == '/api/projects':
-                return self.output(200, {'projects': self.server.bridge.hosts.projects()})
+                return self.output(200, {'projects': self.server.bridge.projects()})
             if write and path == '/api/activity':
                 groups = self.read_json().get('hosts')
                 if not isinstance(groups, dict) or len(groups) > 20:
@@ -555,7 +627,10 @@ class Handler(BaseHTTPRequestHandler):
                 return self.output(200, {'sessions': rows})
             if write and path == '/api/sessions':
                 body = self.read_json()
-                return self.output(200, self.server.bridge.create_chat(body.get('project'), body.get('title'), body.get('id')))
+                fields = (body.get('project'), body.get('title'), body.get('id'))
+                result = (self.server.bridge.create_chat(*fields, kind=body['kind']) if 'kind' in body
+                          else self.server.bridge.create_chat(*fields))
+                return self.output(200, result)
             if path == '/api/notifications/defaults':
                 if self.server.notifications is None:
                     raise ValueError('当前网关未启用通知服务')
@@ -693,8 +768,11 @@ class Handler(BaseHTTPRequestHandler):
                     policy = transfer_settings(self.server.transfer_directory)
                     if query.get('info') == ['1']:
                         return self.output(200, {**bridge.workspace(thread_id, 'info', {'path': relative}), **policy, 'locatable': True})
+                    preview = query.get('preview') == ['1']
+                    if 'preview' in query and (not preview or 'explicit' in query or 'archive' in query):
+                        raise ValueError('无效 PDF 预览下载参数')
                     explicit = query.get('explicit') == ['1']
-                    params = {'path': relative, 'limit': None if explicit else policy['clickDownloadMiB'] * 1024 * 1024, **self.download_request()}
+                    params = {'path': relative, 'limit': min(MAX_TRANSFER, policy['clickDownloadMiB'] * 1024 * 1024) if preview else None if explicit else policy['clickDownloadMiB'] * 1024 * 1024, **self.download_request()}
                     action = 'archive-stream' if explicit and query.get('archive') == ['1'] else 'download-stream'
                     with bridge.workspace(thread_id, action, params) as (metadata, stream):
                         return self.download_response(metadata, stream)
@@ -796,9 +874,10 @@ class Handler(BaseHTTPRequestHandler):
             elif action == "rename":
                 result = bridge.rename(thread_id, body.get("title"))
             elif action == "permissions":
-                if set(body) - {'preset', 'confirmed'}:
+                if set(body) - {'preset', 'confirmed', 'expectedRuntime'}:
                     raise ValueError('权限设置无效')
-                result = bridge.permissions(thread_id, body.get('preset'), body.get('confirmed', False))
+                result = bridge.permissions(thread_id, body.get('preset'), body.get('confirmed', False),
+                                            expected_runtime=body.get('expectedRuntime'))
             elif action == "settings":
                 if 'fastMode' in body and not isinstance(body['fastMode'], bool):
                     raise ValueError('Fast 模式开关无效')

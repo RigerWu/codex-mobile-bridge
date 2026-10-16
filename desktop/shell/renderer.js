@@ -5,7 +5,6 @@ let snapshot,dirty=false,loading=false,startingUntil=0,activeTab='overview',save
 const busyActions=new Set();
 let saving=false,startPending=false,stopPending=false,cloudflaredBusy=false,cloudflaredResult=null,cloudflaredProgress=null;
 const titles={'desktop-sessions':'桌面会话',harness:'Harness 官方 Web',overview:t('概览'),network:t('网络访问'),devices:t('登录与设备'),notifications:t('消息通知'),advanced:t('应用与维护'),accounts:t('客户端与接入'),account:t('账户与额度'),updates:t('应用更新'),logs:t('运行日志')};
-const accountPanel=new AccountPanel({root:$('account-content'),button:$('account-button'),read:refresh=>api.account({action:'read',refresh}),consume:value=>api.account({action:'consume',...value}),onConsumed:()=>{const id=accountsPanel?.value?.activeId;if(id)accountsPanel.perform({action:'details',id,section:'usage',refresh:true});},onHidden:()=>{$('account-details').open=false;},visible:()=>activeTab==='accounts'&&!document.hidden&&$('account-details').open});
 const watchPanel=new WatchPanel({root:$('watches'),change:value=>api.notificationWatches(value)});
 const harnessPanel=typeof HarnessPanel==='undefined'?null:new HarnessPanel({root:$('harness-panel'),api,t,feedback});
 const desktopConnections=typeof DesktopConnectionsPanel==='undefined'?null:new DesktopConnectionsPanel({root:$('desktop-connections'),api,feedback});
@@ -61,6 +60,7 @@ function showError(error){
 
 function moduleName(name){return ({account:'accounts','desktop-sessions':'accounts',harness:'accounts',updates:'advanced',logs:'advanced'})[name]||name;}
 function tab(name){const requested=name;name=moduleName(name);activeTab=name;
+  if(name!=='accounts'&&typeof codexCliAccessPanel!=='undefined'){codexCliAccessPanel?.clear();claudeCliAccessPanel?.clear();}
   if(name==='accounts'){desktopConnections?.refresh();desktopConnections?.refreshClients();harnessPanel?.refresh();accountsPanel?.refresh();}
   document.querySelectorAll('[data-panel]').forEach(node=>node.hidden=moduleName(node.dataset.panel)!==name);
   document.querySelectorAll('[data-tab]').forEach(node=>node.classList.toggle('active',node.dataset.tab===name));
@@ -100,9 +100,8 @@ function renderGatewayActions(){
 function render(value,watchRevision=watchPanel.revision){
   $('login-startup-setting').hidden=$('login-startup-hint').hidden=!value.loginStartup?.supported;
   $('login-startup-hint').textContent=t(value.loginStartup?.requiresApproval?'请在系统设置的登录项中允许此应用。':'开启后，登录电脑时自动启动网关。');
-  if(snapshot&&(snapshot.runtime.instanceId!==value.runtime.instanceId||snapshot.dataDir!==value.dataDir))resetPairing();
+  if(snapshot&&(snapshot.runtime.instanceId!==value.runtime.instanceId||snapshot.dataDir!==value.dataDir)){resetPairing();connectionSetupState.clear();}
   if(snapshot&&snapshot.dataDir!==value.dataDir){resetSecretFields();harnessPanel?.clear();if(activeTab==='accounts')harnessPanel?.refresh();watchPanel.clear();watchRevision=watchPanel.revision;devicesState=null;devicesDirty=false;$('device-list').replaceChildren();$('auto-blocks').replaceChildren();}
-  if(snapshot&&(snapshot.runtime.instanceId!==value.runtime.instanceId||snapshot.dataDir!==value.dataDir))accountPanel.clear();
   snapshot=value;const running=value.runtime.running;
   if(running||value.runtime.portOccupied)startingUntil=0;
   const starting=Date.now()<startingUntil;
@@ -145,7 +144,7 @@ function render(value,watchRevision=watchPanel.revision){
     $('login-startup').checked=!!(value.loginStartup?.enabled||value.loginStartup?.requiresApproval);$('auto-start').checked=p.autoStart;$('auto-start').disabled=!!(value.loginStartup?.enabled||value.loginStartup?.requiresApproval);$('lan').checked=p.lan;
     $('local-access').checked=p.localAccess!==false;input('lan-scope',p.lanAddresses==null?'all':'selected');
     lanDraft=p.lanAddresses==null?(value.networkInterfaces||[]).map(row=>row.address):[...p.lanAddresses];savedLan=JSON.stringify(lanDraft);
-    if(!document.activeElement?.closest('#connections')||JSON.stringify(p.connections||[])!==savedConnections){connectionDraft=JSON.parse(JSON.stringify(p.connections||[]));savedConnections=JSON.stringify(connectionDraft);renderConnections();}
+    if(!document.activeElement?.closest('#connections')||JSON.stringify(p.connections||[])!==savedConnections){const next=JSON.parse(JSON.stringify(p.connections||[]));for(const row of connectionDraft)if(JSON.stringify(row)!==JSON.stringify(next.find(c=>c.id===row.id)))connectionSetupState.delete(row.id);connectionDraft=next;savedConnections=JSON.stringify(connectionDraft);renderConnections();}
     const fixed=connectionDraft.filter(c=>c.enabled).map(c=>c.publicUrl);
     input('origins',value.origins.filter(o=>!fixed.includes(o)).join('\n'));input('auth-mode',value.auth.mode);input('session-hours',value.auth.sessionHours??12);input('username',value.auth.username);
     $('mobile-enabled').checked=!!n.mobileEnabled;$('mobile-app-links').checked=!!n.mobileAppLinks;
@@ -162,7 +161,11 @@ function render(value,watchRevision=watchPanel.revision){
   $('network-lock').hidden=!running;
   for(const id of ['lan','local-access','port','connection-kind','add-connection','origins','cloudflared','codex-home','ipc-path','codex-bin'])$(id).disabled=running;
   document.querySelectorAll('[data-connection-field],[data-remove-connection]').forEach(node=>node.disabled=running);
-  for(const node of document.querySelectorAll('[data-connection-status]'))node.textContent=t([connectionSetupState.get(node.dataset.connectionStatus),value.externalStatus?.[node.dataset.connectionStatus]?.message].filter(Boolean).map(t).join(' ')||(!running?t(connectionDraft.find(c=>c.id===node.dataset.connectionStatus)?.accessMode==='tailscale'?'先保存连接配置，然后检测 Tailscale。':'网关未启动。可先保存配置并导出部署包。'):t('网关正在运行；固定入口是否可用，请点击检测。')));
+  for(const node of document.querySelectorAll('[data-connection-status]')){
+    const row=connectionDraft.find(c=>c.id===node.dataset.connectionStatus),mode=row?.accessMode;
+    node.textContent=t([connectionSetupState.get(node.dataset.connectionStatus),value.externalStatus?.[node.dataset.connectionStatus]?.message].filter(Boolean).map(t).join(' ')||(!running?t(mode==='tailscale'?'先保存连接配置，然后检测 Tailscale。':mode==='external'?'保存并启动网关后可检测入口。':'网关未启动。可先保存配置并导出部署包。'):t('网关正在运行；固定入口是否可用，请点击检测。')));
+    const summary=node.closest('.connection-card')?.querySelector('.connection-summary');if(summary&&row)summary.textContent=connectionSummary(row);
+  }
   document.querySelectorAll('[data-pick]').forEach(button=>button.disabled=running);
   renderLan();
   renderCloudflared();
@@ -171,7 +174,7 @@ function render(value,watchRevision=watchPanel.revision){
 }
 let renderedSnapshot='',renderedDirty=false,renderedRevision=-1;
 async function refresh(force=false){if(loading||(document.hidden&&force!==true))return;loading=true;try{const revision=watchPanel.revision,value=await api.snapshot(),signature=JSON.stringify(value);if(signature!==renderedSnapshot||renderedDirty!==dirty||renderedRevision!==revision||startingUntil){render(value,revision);renderedSnapshot=signature;renderedDirty=dirty;renderedRevision=revision;}}catch(e){feedback(e.message,true);}finally{loading=false;}}
-function collect(){return {...(snapshot?.loginStartup?.supported?{loginStartup:$('login-startup').checked}:{}),preferences:{autoStart:$('auto-start').checked,port:Number($('port').value),lan:$('lan').checked,lanAddresses:$('lan-scope').value==='all'?null:[...lanDraft],localAccess:$('local-access').checked,connections:connectionDraft,cloudflared:$('cloudflared').value.trim(),codexHome:$('codex-home').value.trim(),ipcPath:$('ipc-path').value.trim(),codexBin:$('codex-bin').value.trim()},auth:{sessionHours:Number($('session-hours').value),mode:$('auth-mode').value,username:$('username').value.trim(),password:submittedSecret('password')},origins:$('origins').value.split('\n').map(s=>s.trim()).filter(Boolean),notifications:{mobileEnabled:$('mobile-enabled').checked,mobileAppLinks:$('mobile-app-links').checked,securityEnabled:$('security-enabled').checked,addressEnabled:$('address-enabled').checked,addressName:$('address-name').value.trim(),pushplusEnabled:$('pushplus-enabled').checked,pushplusToken:submittedSecret('pushplus-token'),clearPushplusToken:$('clear-pushplus-token').checked,enabled:$('ntfy-enabled').checked,server:$('ntfy-server').value.trim(),topic:$('ntfy-topic').value.trim(),token:submittedSecret('ntfy-token'),clearToken:$('clear-token').checked,barkEnabled:$('bark-enabled').checked,barkServer:$('bark-server').value.trim(),barkKey:submittedSecret('bark-key'),clearBarkKey:$('clear-bark-key').checked,clickBase:$('click-base').value.trim(),includeTitle:$('include-title').checked}};}
+function collect(){return {...(snapshot?.loginStartup?.supported?{loginStartup:$('login-startup').checked}:{}),preferences:{autoStart:$('auto-start').checked,port:Number($('port').value),lan:$('lan').checked,lanAddresses:$('lan-scope').value==='all'?null:[...lanDraft],localAccess:$('local-access').checked,connections:connectionDraft.map(row=>row.accessMode==='external'||row.accessMode==='nas'?{...row,publicUrl:normalizeExternalUrl(row.publicUrl||'')}:row),cloudflared:$('cloudflared').value.trim(),codexHome:$('codex-home').value.trim(),ipcPath:$('ipc-path').value.trim(),codexBin:$('codex-bin').value.trim()},auth:{sessionHours:Number($('session-hours').value),mode:$('auth-mode').value,username:$('username').value.trim(),password:submittedSecret('password')},origins:$('origins').value.split('\n').map(s=>s.trim()).filter(Boolean),notifications:{mobileEnabled:$('mobile-enabled').checked,mobileAppLinks:$('mobile-app-links').checked,securityEnabled:$('security-enabled').checked,addressEnabled:$('address-enabled').checked,addressName:$('address-name').value.trim(),pushplusEnabled:$('pushplus-enabled').checked,pushplusToken:submittedSecret('pushplus-token'),clearPushplusToken:$('clear-pushplus-token').checked,enabled:$('ntfy-enabled').checked,server:$('ntfy-server').value.trim(),topic:$('ntfy-topic').value.trim(),token:submittedSecret('ntfy-token'),clearToken:$('clear-token').checked,barkEnabled:$('bark-enabled').checked,barkServer:$('bark-server').value.trim(),barkKey:submittedSecret('bark-key'),clearBarkKey:$('clear-bark-key').checked,clickBase:$('click-base').value.trim(),includeTitle:$('include-title').checked}};}
 $('settings').onsubmit=async event=>{
   event.preventDefault();if(saving||busyActions.size)return;const invalid=[...$('settings').querySelectorAll('input,textarea,select')].find(node=>!node.closest('#file-transfer-settings')&&!node.disabled&&!node.validity.valid&&(!node.closest('.connection-card')||connectionDraft.find(row=>row.id===node.closest('.connection-card').dataset.connectionId)?.enabled));if(invalid){focusField(invalid);feedback(invalid.validationMessage,true);return;}saving=true;$('save').disabled=true;const submitted=fieldValues(),submittedConnections=JSON.stringify(connectionDraft),submittedLan=JSON.stringify(lanDraft);
   try{
@@ -243,7 +246,7 @@ let refreshTimer=setInterval(refresh,3000);
 document.addEventListener('visibilitychange',()=>{clearInterval(refreshTimer);refreshTimer=null;if(!document.hidden){refresh();refreshTimer=setInterval(refresh,3000);}});
 
 function applyLanguage(value){
-  BridgeI18n.setLanguage(value==='en'?'en':'zh');BridgeI18n.apply();accountPanel.render();if(typeof accountsPanel!=="undefined")accountsPanel?.render();
+  BridgeI18n.setLanguage(value==='en'?'en':'zh');BridgeI18n.apply();if(typeof accountsPanel!=="undefined")accountsPanel?.render();
   $('language').value=BridgeI18n.language();
   document.title=t('Codex 手机网关');
   if(snapshot){const pending=dirty;dirty=true;render(snapshot);dirty=pending;renderConnections();updateDirty();}
@@ -373,8 +376,7 @@ $('refresh-devices').onclick=loadDevices;
 $('device-policy').oninput=$('device-policy').onchange=()=>{devicesDirty=true;$('device-feedback').textContent=t('IP 规则有未保存的修改。');};
 $('device-policy').onsubmit=event=>{event.preventDefault();return changeDevices({action:'save',policy:devicePolicy()});};
 
-const accountsPanel=typeof AccountsPanel==='undefined'?null:new AccountsPanel({root:$('accounts-content'),desktop:true,read:()=>api.accounts({action:'list'}),request:value=>api.accounts(value),onReset:async()=>{$('account-details').open=true;await accountPanel.refresh();$('account-content').querySelector('.account-cards')?.scrollIntoView({block:'nearest'});},onChanged:()=>accountPanel.clear(),onUpdate:value=>{desktopConnections?.renderAccount(value);accountPanel.schedule();$('account-button').hidden=value.current?.kind!=='chatgpt';if($('account-button').hidden)$('account-details').open=false;}});
-
-$('account-details').ontoggle=()=>{if($('account-details').open)accountPanel.refresh();};
-
-if(accountsPanel){accountsPanel.current.after($('account-details'));}
+const codexCliAccessPanel=typeof CliAccessPanel==='undefined'?null:new CliAccessPanel({root:$('cli-access-content'),provider:'codex',read:()=>api.cliAccess({action:'list'}),request:value=>api.cliAccess(value)});
+const claudeCliAccessPanel=typeof CliAccessPanel==='undefined'?null:new CliAccessPanel({root:$('cli-access-claude-content'),provider:'claude',read:()=>api.cliAccess({action:'list'}),request:value=>api.cliAccess(value)});
+document.addEventListener('bridge-client-config',event=>{codexCliAccessPanel?.clear();claudeCliAccessPanel?.clear();if(event.detail==='codex')codexCliAccessPanel?.refresh();else if(event.detail==='claude')claudeCliAccessPanel?.refresh();});
+const accountsPanel=typeof AccountsPanel==='undefined'?null:new AccountsPanel({root:$('accounts-content'),desktop:true,read:()=>api.accounts({action:'list'}),request:value=>api.accounts(value),onUpdate:value=>desktopConnections?.renderAccount(value)});

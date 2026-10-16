@@ -1,5 +1,6 @@
-"""Read-only discovery and history for existing desktop chats."""
+"""Read-only discovery and history for existing Codex chats."""
 import copy
+import os
 import threading
 from collections import OrderedDict
 import json
@@ -16,6 +17,8 @@ class StoreUnavailable(RuntimeError):
 
 
 class SessionStore:
+    DESKTOP_ORIGINATORS = ('Codex Desktop', 'codex_work_desktop', 'codex_mobile_bridge')
+
     def __init__(self, codex_home):
         self.home = Path(codex_home).resolve()
         self.history_cache = OrderedDict()
@@ -60,26 +63,72 @@ class SessionStore:
                 bool(database and Path(str(database) + '-shm').exists()), exc)
             raise StoreUnavailable("暂时无法读取 Codex 会话数据库，请稍后重试或重新打开电脑 Codex。") from exc
 
-    def list(self, query="", limit=100, offset=0, archived=False):
+    def list(self, query="", limit=100, offset=0, archived=False, source='all'):
+        if source not in ('all', 'desktop', 'cli'):
+            raise ValueError('不支持的会话来源')
         with self._connect() as conn:
             columns = {r[1] for r in conn.execute("PRAGMA table_info(threads)")}
             fields = [name for name in ("id", "name", "title", "cwd", "updated_at", "updated_at_ms", "recency_at", "recency_at_ms", "model_provider", "model", "originator", "source", "archived", "is_pinned") if name in columns]
             where = ["archived = ?"]
             params = [int(archived)]
-            if "originator" in columns:
-                # Older desktop imports have no originator but retain their app source.
-                where.append("(originator IN ('Codex Desktop', 'codex_work_desktop', 'codex_mobile_bridge') OR (originator IS NULL AND source = 'vscode'))")
+            where.append(self._user_origin_filter(columns))
             if "thread_source" in columns:
                 where.append("COALESCE(thread_source, '') != 'subagent'")
             if "source" in columns:
                 where.append("COALESCE(source, '') NOT LIKE '%\"subagent\"%'")
+            if source != 'all':
+                where.append(self._source_filter(columns, source))
             if query:
                 search_fields = [name for name in ("name", "title", "cwd") if name in columns]
                 where.append("(" + " OR ".join(name + " LIKE ?" for name in search_fields) + ")")
                 params += ["%" + query + "%"] * len(search_fields)
             recency = "COALESCE(recency_at_ms, recency_at * 1000, updated_at * 1000)" if "recency_at_ms" in columns else "COALESCE(recency_at, updated_at)" if "recency_at" in columns else "updated_at"
             rows = conn.execute("SELECT " + ",".join(fields) + " FROM threads WHERE " + " AND ".join(where) + " ORDER BY " + recency + " DESC, id DESC LIMIT ? OFFSET ?", params + [limit, offset]).fetchall()
-            return [dict(row) for row in rows]
+            return [dict(row, origin=self._origin(dict(row))) for row in rows]
+
+    def available_sources(self):
+        """Original sources across the complete visible inventory, independent of list filters."""
+        with self._connect() as conn:
+            columns = {r[1] for r in conn.execute("PRAGMA table_info(threads)")}
+            where = [self._user_origin_filter(columns)]
+            if 'thread_source' in columns:
+                where.append("COALESCE(thread_source, '') != 'subagent'")
+            if 'source' in columns:
+                where.append("COALESCE(source, '') NOT LIKE '%\"subagent\"%'")
+            fields = [name for name in ('originator', 'source') if name in columns]
+            if not fields:
+                return []
+            rows = conn.execute('SELECT DISTINCT ' + ','.join(fields) + ' FROM threads WHERE ' + ' AND '.join(where)).fetchall()
+            return sorted({self._origin(dict(row)) for row in rows})
+
+    @staticmethod
+    def _source_filter(columns, source):
+        if source == 'desktop':
+            originators = "originator IN ('Codex Desktop', 'codex_work_desktop', 'codex_mobile_bridge')" if 'originator' in columns else '0'
+            legacy = "(originator IS NULL AND source = 'vscode')" if 'originator' in columns and 'source' in columns else "source = 'vscode'" if 'source' in columns else '0'
+            return '(' + originators + ' OR ' + legacy + ')'
+        originators = "originator IN ('codex-tui', 'codex_cli_rs', 'codex-mobile-bridge-cli')" if 'originator' in columns else '0'
+        legacy = "(originator IS NULL AND source = 'cli')" if 'originator' in columns and 'source' in columns else "source = 'cli'" if 'source' in columns else '0'
+        return '(' + originators + ' OR ' + legacy + ')'
+
+    @staticmethod
+    def _user_origin_filter(columns):
+        if 'originator' in columns:
+            recognized = "originator IN ('Codex Desktop', 'codex_work_desktop', 'codex_mobile_bridge', 'codex-tui', 'codex_cli_rs', 'codex-mobile-bridge-cli')"
+            if 'source' in columns:
+                return '(' + recognized + " OR (originator IS NULL AND source IN ('vscode', 'cli')))"
+            return recognized
+        return "source IN ('vscode', 'cli')" if 'source' in columns else '0'
+
+    @classmethod
+    def _origin(cls, row):
+        if row.get('thread_source') == 'subagent' or '"subagent"' in (row.get('source') or ''):
+            return 'subagent'
+        if row.get('originator') in cls.DESKTOP_ORIGINATORS or (row.get('originator') is None and row.get('source') == 'vscode'):
+            return 'desktop'
+        if row.get('originator') in ('codex-tui', 'codex_cli_rs', 'codex-mobile-bridge-cli') or (row.get('originator') is None and row.get('source') == 'cli'):
+            return 'cli'
+        return 'other'
 
     def notification_changes(self, since=0):
         """Only metadata changed since discovery; never read rollout history."""
@@ -88,7 +137,7 @@ class SessionStore:
             clocks = [name + ('' if name.endswith('_ms') else ' * 1000')
                       for name in ('updated_at', 'updated_at_ms', 'recency_at', 'recency_at_ms') if name in columns]
             clock = 'MAX(' + ','.join('COALESCE(' + c + ',0)' for c in clocks) + ',0)'
-            owner = "(originator IN ('Codex Desktop', 'codex_work_desktop', 'codex_mobile_bridge') OR (originator IS NULL AND source = 'vscode'))" if 'originator' in columns else '1'
+            owner = self._user_origin_filter(columns)
             filters = [owner, clock + ' >= ?']
             if 'thread_source' in columns:
                 filters.append("COALESCE(thread_source, '') != 'subagent'")
@@ -132,12 +181,76 @@ class SessionStore:
         with self._connect() as conn:
             row = conn.execute("SELECT * FROM threads WHERE id = ?", (thread_id,)).fetchone()
             if not row:
-                raise KeyError("找不到这个桌面会话")
+                raise KeyError("找不到这个 Codex 会话")
             result = dict(row)
-            desktop = result.get("originator") in ("Codex Desktop", "codex_work_desktop", "codex_mobile_bridge") or (result.get("originator") is None and result.get("source") == "vscode")
-            if not desktop or result.get("thread_source") == "subagent" or '"subagent"' in (result.get("source") or ""):
-                raise KeyError("不是桌面 App 会话")
+            origin = self._origin(result)
+            if origin not in ('desktop', 'cli'):
+                raise KeyError("不是可访问的 Codex 会话")
+            result['origin'] = origin
             return result
+
+    def _rollout_in_home(self, resolved):
+        for base in (self.home / 'sessions', self.home / 'archived_sessions'):
+            root = base.resolve()
+            if root in resolved.parents:
+                return True
+            if os.name == 'nt':
+                # Native Windows metadata may use \\?\ paths while CODEX_HOME
+                # uses a drive path. Compare actual directories only in that case.
+                for parent in resolved.parents:
+                    try:
+                        if root.samefile(parent):
+                            return True
+                    except OSError:
+                        continue
+        return False
+
+    def discovery_diagnostics(self, thread_id=None):
+        """Return aggregate source and read status, never chat content or private paths."""
+        with self._connect() as conn:
+            columns = {r[1] for r in conn.execute('PRAGMA table_info(threads)')}
+            fields = [name for name in ('id', 'originator', 'source', 'thread_source', 'archived', 'rollout_path') if name in columns]
+            rows = [dict(row) for row in conn.execute('SELECT ' + ','.join(fields) + ' FROM threads')]
+        counts = {'desktop': 0, 'cli': 0, 'other': 0, 'subagent': 0, 'visible': 0, 'archived': 0}
+        target = None
+        for row in rows:
+            origin = self._origin(row)
+            counts[origin] += 1
+            if row.get('archived'):
+                counts['archived'] += 1
+            elif origin in ('desktop', 'cli'):
+                counts['visible'] += 1
+            if thread_id is not None and row['id'] == thread_id:
+                target = row
+        result = {'status': 'ok', 'phase': 'discovery', 'homeSource': 'provided', 'counts': counts,
+                  'schema': {'originator': 'originator' in columns, 'source': 'source' in columns,
+                             'threadSource': 'thread_source' in columns, 'rolloutPath': 'rollout_path' in columns}}
+        if thread_id is not None:
+            if target is None:
+                result['target'] = {'found': False, 'origin': None, 'archived': None,
+                                    'reason': 'missing', 'read': 'unavailable'}
+            else:
+                origin = self._origin(target)
+                reason = 'subagent' if origin == 'subagent' else 'unsupported_origin' if origin == 'other' else 'readable'
+                if reason == 'readable':
+                    path = target.get('rollout_path')
+                    if not path:
+                        reason = 'rollout_missing'
+                    else:
+                        resolved = Path(path).resolve()
+                        if not self._rollout_in_home(resolved):
+                            reason = 'rollout_outside_home'
+                        elif not resolved.is_file():
+                            reason = 'rollout_missing'
+                        else:
+                            try:
+                                with resolved.open('rb') as stream:
+                                    stream.read(1)
+                            except OSError:
+                                reason = 'rollout_unreadable'
+                result['target'] = {'found': True, 'origin': origin, 'archived': bool(target.get('archived')), 'reason': reason,
+                                    'read': 'ready' if reason == 'readable' else 'unavailable'}
+        return result
 
     @staticmethod
     def _recent_lines(path, turn_limit):
@@ -221,7 +334,7 @@ class SessionStore:
         path = Path(meta["rollout_path"])
         # The file path must be an actual rollout in this user's Codex home.
         resolved = path.resolve()
-        if not any(root.resolve() in resolved.parents for root in (self.home / "sessions", self.home / "archived_sessions")):
+        if not self._rollout_in_home(resolved):
             raise ValueError("会话记录路径不在 Codex 数据目录中")
         stat = resolved.stat()
         cache_key = (str(resolved), stat.st_ino, stat.st_size, stat.st_mtime_ns, turn_limit)

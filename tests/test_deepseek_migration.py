@@ -98,6 +98,54 @@ class DeepSeekMigrationTests(unittest.TestCase):
         self.assertEqual(self.new.directory, self.old.directory)
         self.assertEqual(before, {path: path.read_bytes() for path in before})
 
+    def test_current_source_lf_and_crlf_are_reused_as_current_without_writes(self):
+        source = self.old.directory/'mobile-host.mjs'
+        current = Path(__file__).resolve().parents[1]/'bridge/clients/deepseek/host.mjs'
+        lf = current.read_bytes().replace(b'\r\n', b'\n')
+        self.assertIn(b'\n', lf)
+        for content in (lf, lf.replace(b'\n', b'\r\n')):
+            with self.subTest(line_ending='CRLF' if b'\r\n' in content else 'LF'):
+                source.write_bytes(content)
+                before = {path: (path.read_bytes(), path.stat().st_mtime_ns)
+                          for path in (*self.old.directory.iterdir(), self.profile)}
+                adapter = DeepSeek(self.new_path, self.home)
+                discovered = adapter.discover_existing()
+                self.assertTrue(discovered['reused'])
+                self.assertFalse(discovered['legacyProtocol'])
+                self.assertFalse(discovered['updateRequired'])
+                self.assertFalse(discovered['restartRequired'])
+                self.assertTrue(adapter.ensure_installed()['reused'])
+                self.assertEqual(adapter.directory, self.old.directory)
+                self.assertEqual(before, {path: (path.read_bytes(), path.stat().st_mtime_ns)
+                                          for path in before})
+                self.assertFalse(self.new_path.exists())
+
+        source.write_bytes(lf)
+        original_read_bytes = Path.read_bytes
+        def packaged_crlf(path):
+            return lf.replace(b'\n', b'\r\n') if path == current else original_read_bytes(path)
+        before = {path: (path.read_bytes(), path.stat().st_mtime_ns)
+                  for path in (*self.old.directory.iterdir(), self.profile)}
+        with patch.object(Path, 'read_bytes', autospec=True, side_effect=packaged_crlf):
+            discovered = DeepSeek(self.new_path, self.home).discover_existing()
+        self.assertTrue(discovered['reused'])
+        self.assertFalse(discovered['legacyProtocol'])
+        self.assertFalse(discovered['updateRequired'])
+        self.assertEqual(before, {path: (path.read_bytes(), path.stat().st_mtime_ns)
+                                  for path in before})
+
+        for content in (lf.replace(b'\n', b'\r\n')+b'// modified code\r\n',
+                        lf.replace(b'\n', b'\r\n', 1)):
+            with self.subTest(modification='code' if b'modified code' in content else 'mixed endings'):
+                source.write_bytes(content)
+                before = {path: (path.read_bytes(), path.stat().st_mtime_ns)
+                          for path in (*self.old.directory.iterdir(), self.profile)}
+                with self.assertRaisesRegex(ValueError, '无法验证'):
+                    self.new.ensure_installed()
+                self.assertEqual(before, {path: (path.read_bytes(), path.stat().st_mtime_ns)
+                                          for path in before})
+                self.assertFalse(self.new_path.exists())
+
     def test_restore_saved_directory_is_checked_against_actual_insertion(self):
         self.assertTrue(self.new.use_existing(self.old.directory)['reused'])
         with self.assertRaisesRegex(ValueError, '无法验证'):

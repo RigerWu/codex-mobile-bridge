@@ -4,7 +4,7 @@ class DesktopClientAccountsPanel {
   constructor({root,provider,read,request,readModels=null,desktop=false,visible=null,onChanged=()=>{},onUpdate=()=>{}}){
     Object.assign(this,{root,provider,read,request,readModels,desktop,onChanged,onUpdate});
     this.visible=visible||(()=>!document.hidden&&!root.closest('[hidden]')&&(!root.closest('dialog')||root.closest('dialog').open));
-    this.value=null;this.generation=0;this.checkedAt=0;this.busy=false;this.loading=false;this.error='';this.models=null;this.modelsOpen=false;this.modelsRevision=0;
+    this.value=null;this.generation=0;this.checkedAt=0;this.busy=false;this.loading=false;this.queryingId=null;this.error='';this.models=null;this.modelsOpen=false;this.modelsRevision=0;this.syncLocalCliIds=new Set();
     this.languageListener=()=>{BridgeI18n.apply(this.root);this.render();};this.visibilityListener=()=>this.resume();
     document.addEventListener('bridge-language',this.languageListener);document.addEventListener('visibilitychange',this.visibilityListener);
     this.build();this.render();
@@ -71,7 +71,7 @@ class DesktopClientAccountsPanel {
     if(this.disposed||this.loading||this.busy)return;clearTimeout(this.timer);this.loading=true;this.error='';this.render();const generation=this.generation;
     try{
       const value=await this.read();if(generation!==this.generation)return;this.accept(value);
-      if(this.visible())for(const row of this.value.accounts){
+      if(this.provider!=='claude'&&this.visible())for(const row of this.value.accounts){
         if(!this.visible()||generation!==this.generation)break;
         const details=await this.request({action:'details',id:row.id,refresh:force});if(generation!==this.generation)return;this.accept(details);
       }
@@ -79,10 +79,10 @@ class DesktopClientAccountsPanel {
     finally{if(generation===this.generation){this.checkedAt=Date.now();this.loading=false;this.render();if(this.value)this.onUpdate(this.value);this.schedule();}}
   }
   async perform(value){
-    if(this.disposed||this.busy||this.loading)return false;clearTimeout(this.timer);this.busy=true;this.error='';this.render();const generation=this.generation;
+    if(this.disposed||this.busy||this.loading)return false;clearTimeout(this.timer);this.busy=true;this.queryingId=this.provider==='claude'&&value.action==='details'?value.id:null;this.error='';this.render();const generation=this.generation;
     try{const result=await this.request(value);if(generation!==this.generation)return false;this.accept(result,!['import-current','save-api','rename','remove'].includes(value.action));return true;}
     catch(error){if(generation===this.generation)this.error=error.message;return false;}
-    finally{if(generation===this.generation){this.busy=false;this.checkedAt=Date.now();this.render();if(this.value)this.onUpdate(this.value);this.schedule();}}
+    finally{if(generation===this.generation){this.busy=false;this.queryingId=null;this.checkedAt=Date.now();this.render();if(this.value)this.onUpdate(this.value);this.schedule();}}
   }
   async importCurrent(kind){
     if(!this.desktop||this.busy||this.loading)return;
@@ -93,9 +93,11 @@ class DesktopClientAccountsPanel {
   choose(row){
     if(this.busy||this.loading||this.value?.canSwitch!==true||this.activeIds().has(row.id))return;
     const prompt=this.text('切换会重启对应桌面应用。未发送草稿按账号保留，待发附件需重新添加。请先结束任务并保存工作，确认切换？')+(this.provider==='claude'?'\n\n'+this.text('重新启动 Claude Desktop 后，初始化连接需要电脑处于解锁状态。是否确认退出？'):'');
-    if(window.confirm(prompt))return this.perform({action:'switch',id:row.id});
+    if(window.confirm(prompt))return this.perform({action:'switch',id:row.id,
+      ...(this.provider==='claude'&&this.syncLocalCliIds.has(row.id)?{syncLocalCli:true}:{})});
   }
   duration(minutes){return !minutes?'额度窗口':minutes%1440===0?minutes/1440+this.text(' 天'):minutes%60===0?minutes/60+this.text(' 小时'):minutes+this.text(' 分钟');}
+  queryTime(seconds){const date=new Date(seconds*1000),pad=value=>String(value).padStart(2,'0');return `${date.getFullYear()}-${pad(date.getMonth()+1)}-${pad(date.getDate())} ${pad(date.getHours())}:${pad(date.getMinutes())}`;}
   usage(box,row){
     const usage=row.usage||row.quota;
     if(row.kind==='api'&&!usage?.balance)return;
@@ -113,10 +115,10 @@ class DesktopClientAccountsPanel {
       if(wallet.toppedUp!=null||wallet.granted!=null)line.append(this.node('small',[wallet.toppedUp!=null?this.text('充值余额：')+wallet.toppedUp:'',wallet.granted!=null?this.text('赠送余额：')+wallet.granted:''].filter(Boolean).join(' · '),'account-reset-time'));
       box.append(line);shown=true;
     }
-    if(!shown)box.append(this.node('span',usage?.status==='error'?(usage.error||'额度查询失败'):usage?.status==='loading'?'查询中…':usage?.status==='unsupported'?'暂未提供额度信息':!usage?'正在读取额度…':'暂未提供额度信息','account-muted'));
-    if(shown&&usage?.status==='error')box.append(this.node('small','保留上次结果，数据尚未更新','account-muted'));
-    if(usage?.checkedAt)box.append(this.node('small',this.text('更新于：')+new Date(usage.checkedAt*1000).toLocaleString(BridgeI18n.locale()),'account-updated'));
-    const refresh=this.button('查看剩余额度',()=>this.perform({action:'details',id:row.id,refresh:true}));refresh.disabled=this.busy||this.loading;box.append(refresh);
+    if(!shown)box.append(this.node('span',usage?.status==='error'?(usage.error||'额度查询失败'):usage?.status==='loading'?'查询中…':usage?.status==='unsupported'?'暂未提供额度信息':!usage&&this.provider==='claude'?'尚未查询':!usage?'正在读取额度…':'暂未提供额度信息','account-muted'));
+    if(shown&&usage?.status==='error')box.append(this.node('small',this.text(usage.error||'额度查询失败')+' · '+this.text('保留上次结果，数据尚未更新'),'account-muted'));
+    if(usage?.checkedAt)box.append(this.node('small',this.text(this.provider==='claude'?'查询时间：':'更新于：')+(this.provider==='claude'?this.queryTime(usage.checkedAt):new Date(usage.checkedAt*1000).toLocaleString(BridgeI18n.locale())),'account-updated'));
+    const refresh=this.button(this.queryingId===row.id?'查询中…':'查看剩余额度',()=>this.perform({action:'details',id:row.id,refresh:true}));refresh.disabled=this.busy||this.loading;box.append(refresh);
   }
   async toggleModels(){
     this.modelsOpen=!this.modelsOpen;if(!this.modelsOpen||this.models){this.render();return;}
@@ -144,6 +146,8 @@ class DesktopClientAccountsPanel {
     const value=this.value;this.refreshButton.disabled=this.busy||this.loading;
     this.status.textContent=this.text(this.busy?'正在处理…':this.loading?'正在读取…':value?.message||(value?.gatewayRunning===false?'网关未启动':''));this.errorNode.textContent=this.text(this.error||'');
     this.current.textContent=this.text('当前接入：')+(value?.current?.name||value?.current?.label||value?.accounts.find(row=>row.id===value.activeId)?.name||this.text('暂未识别'))+(value?.current?.routes?.length?' · '+this.text('已配置接入：')+value.current.routes.map(route=>this.text(({'deepseek-account':'官方账号','deepseek-official':'API 接入'})[route]||route)).join(' / '):'');
+    if(value?.cliSync?.status==='verified')this.current.textContent+=' · '+this.text('本机 CLI 已核验');
+    else if(value?.cliSync?.status==='failed')this.current.textContent+=' · '+this.text('本机 CLI 同步失败：')+this.text(value.cliSync.error||'请检查接入');
     this.hint.textContent=this.text(this.desktop?'官方账号请先在对应桌面应用登录，再保存当前接入。API 可在此添加；保存后选择切换才会应用。':'添加账号或 API，请在电脑端完成。')+(this.provider==='deepseek'?' '+this.text('现有会话继续使用各自选择的模型接入。'):'');
     this.modelsButton.hidden=!this.readModels;this.modelsButton.textContent=this.text(this.modelsOpen?'收起模型':'查看可用模型');this.modelsButton.disabled=this.busy||this.modelsLoading;this.modelsBox.hidden=!this.modelsOpen;this.modelsBox.replaceChildren();if(this.modelsOpen)this.renderModels(this.modelsBox);
     if(this.nameInput)this.nameInput.disabled=this.busy||this.loading;
@@ -161,6 +165,7 @@ class DesktopClientAccountsPanel {
       name.append(this.node('p',row.kind==='api'?'API 接入':'官方账号','account-muted'));if(row.email)name.append(this.node('p',row.email,'account-muted'));identity.append(name);
       const usage=this.node('div',undefined,'accounts-usage');this.usage(usage,row);if(usage.children.length)identity.append(usage);card.append(identity);
       const actions=this.node('div',undefined,'accounts-actions'),switcher=this.button(active?'当前接入':'切换到此接入',()=>this.choose(row));switcher.disabled=active||this.busy||this.loading||value.canSwitch!==true;actions.append(switcher);
+      if(this.provider==='claude'&&!active){const label=this.node('label',undefined,'account-reminder'),checkbox=this.node('input');checkbox.type='checkbox';checkbox.checked=row.kind==='api'&&this.syncLocalCliIds.has(row.id);checkbox.disabled=row.kind!=='api'||this.busy||this.loading;checkbox.onchange=()=>{if(checkbox.checked)this.syncLocalCliIds.add(row.id);else this.syncLocalCliIds.delete(row.id);};label.append(checkbox,this.node('span','同时应用到本机 CLI'));actions.append(label);if(row.kind!=='api')actions.append(this.node('small','官方 Claude Desktop 登录不能直接同步到 Claude Code CLI','account-muted'));}
       if(this.desktop&&row.saved!==false){for(const [label,fn] of [['编辑',()=>this.editAccount(row)],['删除',()=>this.removeAccount(row)]]){const button=this.button(label,fn);button.disabled=this.busy||this.loading;actions.append(button);}}
       card.append(actions);this.rows.append(card);
     }

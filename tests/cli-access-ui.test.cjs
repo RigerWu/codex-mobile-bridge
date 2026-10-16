@@ -44,12 +44,16 @@ test('source selector uses full inventory and preserves its open options across 
   ctx.listSource='cli';ctx.availableSources=['desktop'];assert.equal(ctx.renderSourceFilter(),false);
   assert.equal($('source-filter-label').hidden,true);assert.equal(ctx.listSource,'all');assert.deepEqual(saved.at(-1),['codex-source-filter','all']);
 });
-test('CLI list rows retain source identity and show badges only for a mixed full inventory',()=>{
-  const {ctx,$}=fixture();ctx.listRows=[{id:'a',host:'local',title:'CLI thread',projectName:'Project',projectKey:'p',recency:1,access:cli},{id:'b',host:'local',title:'Desktop thread',projectName:'Project',projectKey:'p',recency:2,access:{source:'desktop'}}];$('list-mode').value='recent';ctx.renderList();
-  assert.equal($('sessions').children[0].children.length,2);
-  ctx.availableSources=['cli','desktop'];ctx.renderList();
-  assert.equal($('sessions').children[0].children[1].textContent,'CLI');
-  assert.equal($('sessions').children[1].children[1].textContent,'APP');
+test('every Codex row identifies its source even with a single-source inventory',()=>{
+  const {ctx,$}=fixture();$('list-mode').value='recent';
+  for(const source of ['desktop','cli','ide','unknown',undefined]){
+    ctx.availableSources=source?[source]:[];ctx.listRenderStamp='';
+    ctx.listRows=[{id:'a',host:'local',title:'Saved thread',projectName:'Project',projectKey:'p',recency:1,...(source?{access:{source}}:{})}];ctx.renderList();
+    const row=$('sessions').children[0];
+    assert.equal(row.children[1].cls,'session-source');
+    assert.equal(row.children[1].textContent,({desktop:'APP',cli:'CLI',ide:'IDE',unknown:'Other source'})[source]||'APP');
+    assert.equal(row.children[2].tag,'small');assert.equal(row.children[2].children[1].tag,'time');
+  }
   assert.equal(ctx.sessionAccess().canSend,true);assert.equal(ctx.sessionAccess(cli).canSend,false);
   assert.equal(ctx.sessionAccess({...cli,readOnly:false,canConfigure:false}).canChangeModel,false);
   assert.equal(ctx.sessionAccess({...cli,readOnly:false,canConfigure:true}).canSelectSkills,true);

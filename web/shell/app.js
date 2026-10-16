@@ -196,7 +196,7 @@ function renderList(){
   listRenderStamp=stamp;
   const scrollTop=$('sessions').scrollTop;
   $('sessions').replaceChildren();
-  const grouped=$('list-mode').value==='project', groups=new Map(),showSources=availableSources.includes('desktop')&&availableSources.includes('cli');
+  const grouped=$('list-mode').value==='project', groups=new Map();
   for(const chat of listRows){
     let parent=$('sessions');
     if(grouped){
@@ -212,10 +212,8 @@ function renderList(){
     const button=el('button','session'+(chat.id===currentId&&chat.host===currentHost?' selected':''));
     button.dataset.id=chat.id;button.dataset.host=chat.host;
     button.append(el('strong','',chat.title));
-    if(showSources){
-      const source=chat.access?.source;
-      if(['desktop','cli'].includes(source))button.append(el('span','session-source',source==='desktop'?'APP':'CLI'));
-    }
+    const source=sessionAccess(chat.access).source;
+    button.append(el('span','session-source',source==='desktop'?'APP':sourceLabel({source})||t('其他来源')));
     const meta=el('small');meta.append(el('span','',chat.projectName+' · '+(chat.host==='local'?t('此电脑'):chat.hostLabel)),el('time','',dateText(chat.recency/1000)));
     button.append(meta);button.onclick=()=>openChat(chat.id,chat.host).catch(e=>toast(e.message));parent.append(button);
   }

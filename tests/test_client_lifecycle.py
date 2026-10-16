@@ -847,6 +847,36 @@ class ClientLifecycleTests(unittest.TestCase):
         self.assertEqual(row['connectionState'], 'error')
         self.assertTrue(row['retryable'])
 
+    def test_claude_launch_waits_for_process_and_does_not_cache_false_failure(self):
+        for platform in ('darwin', 'win32'):
+            with self.subTest(platform=platform), patch('bridge.clients.manager.sys.platform', platform):
+                self.running = False
+                self.claude.status.return_value = {'connected': False, 'setupState': 'connecting',
+                                                   'reason': '正在连接 Claude'}
+                with patch('bridge.clients.manager.time.monotonic', return_value=10):
+                    first = self.manager.clients(refresh=True)
+                row = next(r for r in first['clients'] if r['id'] == 'claude')
+                self.assertEqual(row['connectionState'], 'starting')
+                self.assertFalse(row['retryable'])
+                self.assertFalse(row['connected'])
+                self.running = True
+                self.claude.status.return_value = {'connected': True, 'setupState': 'connected'}
+                # A launch must retain the short pending cache instead of the
+                # 15-second idle/error cache hiding its signed connection.
+                with patch('bridge.clients.manager.time.monotonic', return_value=12):
+                    ready = next(r for r in self.manager.clients()['clients'] if r['id'] == 'claude')
+                self.assertEqual(ready['connectionState'], 'connected')
+                self.assertTrue(ready['connected'])
+
+    def test_claude_launch_failure_remains_terminal_without_a_process(self):
+        self.running = False
+        self.claude.status.return_value = {'connected': False, 'setupState': 'failed',
+                                           'reason': 'native launch failed'}
+        row = next(r for r in self.manager.clients(refresh=True)['clients'] if r['id'] == 'claude')
+        self.assertEqual(row['connectionState'], 'error')
+        self.assertEqual(row['reason'], 'native launch failed')
+        self.assertTrue(row['retryable'])
+
     def test_explicit_claude_connect_button_may_launch_and_initialize(self):
         self.running = False
         self.claude.status.return_value = {'connected': False, 'setupState': 'needs-initialization'}

@@ -1041,15 +1041,23 @@ class ClaudeKeyboard {
         return false;
     }
     static string CollectConsoleSource(string expected,Func<string> read,Action home,Action down,
-        Action check,Action pause,Func<bool> expired) {
+        Action check,Action<int> pause,Func<bool> expired) {
         bool[] covered=new bool[expected.Length];int count=0,frontier=0;
         check();home();
+        var settle=Stopwatch.StartNew();
         int steps=Math.Min(expected.Split('\n').Length+2,18);
         for(int step=0;step<steps;step++) {
             check();if(expired())throw new Exception("Console 全文核对超时，未执行");
-            if(step>0){down();check();}
-            pause();check();if(expired())throw new Exception("Console 全文核对超时，未执行");
+            if(step>0){down();settle.Restart();check();}
+            pause(Math.Max(0,50-(int)settle.ElapsedMilliseconds));
+            check();if(expired())throw new Exception("Console 全文核对超时，未执行");
             string observed=read();
+            if(observed==expected)return expected;
+            // Only a complete match can return early. A partial viewport must
+            // have the full settle period after the last navigation key.
+            pause(Math.Max(0,200-(int)settle.ElapsedMilliseconds));
+            check();if(expired())throw new Exception("Console 全文核对超时，未执行");
+            observed=read();
             if(observed==null)throw new Exception("Console 片段无法读取，未执行");
             if(observed==expected)return expected;
             int start=UniqueSegmentStart(expected,observed);
@@ -1083,9 +1091,9 @@ class ClaudeKeyboard {
             },false,()=>{
                 if(text.Contains("\n"))verified=CollectConsoleSource(text,
                     ()=>document.DocumentRange.GetText(-1).TrimEnd('\r','\n'),
-                    ()=>{CheckPrompt(prompt);Send(new[]{Key(17,false),Key(36,false),Key(36,true),Key(17,true)});},
-                    ()=>{CheckPrompt(prompt);Send(new[]{Key(17,false),Key(40,false),Key(40,true),Key(17,true)});},
-                    ()=>CheckPrompt(prompt),()=>Thread.Sleep(200),()=>timer.Elapsed.TotalSeconds>=6);
+                    ()=>Send(new[]{Key(17,false),Key(36,false),Key(36,true),Key(17,true)}),
+                    ()=>Send(new[]{Key(17,false),Key(40,false),Key(40,true),Key(17,true)}),
+                    ()=>CheckPrompt(prompt),ms=>Thread.Sleep(ms),()=>timer.Elapsed.TotalSeconds>=6);
                 else RefreshConsoleReadback(prompt,document,text,()=>timer.Elapsed.TotalSeconds>=6);
             },
             ()=>timer.ElapsedMilliseconds>=250);
@@ -1268,7 +1276,7 @@ class ClaudeKeyboard {
                 ()=>verified??"partial",check,()=>{},()=>false,()=>enters++,false,
                 ()=>{verified=CollectConsoleSource(expected,
                     ()=>views[Math.Min(cursor,views.Length-1)],()=>cursor=0,()=>cursor++,
-                    check,()=>{},()=>timeout);},()=>true);
+                    check,ms=>{},()=>timeout);},()=>true);
         } catch {return enters;}
         if(writes!=1)throw new Exception("Console 分段写入次数自检失败");
         return enters;
@@ -1287,6 +1295,17 @@ class ClaudeKeyboard {
         string expected=builder.ToString();
         string first=expected.Substring(0,1500),middle=expected.Substring(1000,1600),last=expected.Substring(2200);
         string virtualGap=expected.Substring(0,80)+"\n"+expected.Substring(2000);
+        int reads=0,pauses=0,cursor=0;
+        string[] growing={expected.Substring(0,32),first,middle,middle,last,last};
+        string settled=CollectConsoleSource(expected,()=>growing[Math.Min(reads++,growing.Length-1)],
+            ()=>cursor=0,()=>cursor++,()=>{},ms=>pauses++,()=>false);
+        if(settled!=expected||cursor!=2||reads!=6||pauses!=6)
+            throw new Exception("Console 片段未延后核验自检失败");
+        reads=0;pauses=0;
+        settled=CollectConsoleSource(expected,()=>{reads++;return expected;},
+            ()=>{},()=>{},()=>{},ms=>pauses++,()=>false);
+        if(settled!=expected||reads!=1||pauses!=1)
+            throw new Exception("Console 全文提前核验自检失败");
         if(CollectorSelfCheckEnters(expected,new[]{first,virtualGap,middle,middle,middle,last})!=1||
            CollectorSelfCheckEnters(expected,new[]{first,expected.Substring(1499)})!=1||
            CollectorSelfCheckEnters(expected,new[]{first,expected.Substring(1800)})!=0||

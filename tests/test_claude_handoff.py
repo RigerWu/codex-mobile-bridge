@@ -27,10 +27,10 @@ class ClaudeHandoff(unittest.IsolatedAsyncioTestCase):
         value = {'generation': self.desktop.generation, 'timestamp': time.time(),
                  'connected': True, 'connectorRevision': CONNECTOR_REVISION,
                  'surfaces': {'code': ['getAll', 'sendMessage']}, **fields}
-        (self.directory/'response.json').write_text(self.desktop.pack(value))
+        (self.directory/'response.json').write_text(self.desktop.pack(value), encoding='utf-8')
 
     def request(self):
-        return json.loads(json.loads((self.directory/'request.json').read_text())['payload'])
+        return json.loads(json.loads((self.directory/'request.json').read_text(encoding='utf-8'))['payload'])
 
     async def wait_request(self, kind):
         for _ in range(100):

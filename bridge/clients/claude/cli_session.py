@@ -190,7 +190,8 @@ def _saved(path, origin):
     assistants = [event for event in events if event.get('type') == 'assistant'
                   and isinstance(event.get('message'), dict)]
     selected_model = next((event['message'].get('model') for event in reversed(assistants)
-                           if isinstance(event['message'].get('model'), str)), '')
+                           if isinstance(event['message'].get('model'), str)
+                           and event['message'].get('model') != '<synthetic>'), '')
     permission = next((event.get('mode') for event in reversed(events)
                        if event.get('type') == 'mode' and event.get('mode') in MODES), None)
     if permission is None:

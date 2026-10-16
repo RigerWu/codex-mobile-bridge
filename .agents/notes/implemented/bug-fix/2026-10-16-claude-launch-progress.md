@@ -17,3 +17,5 @@ Waiting synchronously for the process would block status reads. Treating process
 ## Consequences
 
 Regression tests reproduce the false failure on both platform branches and verify that a signed connection replaces it after two seconds rather than remaining behind the idle cache. Native launch failures and stopped, uninitialized clients still report errors. These source tests do not measure full native startup duration.
+
+Installed Test acceptance on macOS and Windows observed `starting` → `connecting` → `connected` through normal quit and cold initialization, with no false failure in between. Single runs completed in 10.243 and 30.437 seconds respectively; these are full cold-start observations, not a controlled speed comparison. The original Test settings were retained and the macOS formal gateway and active Codex host remained unchanged.

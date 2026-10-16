@@ -982,7 +982,12 @@ class DesktopSessions:
             row['connectionState'] = 'connecting'
         elif phase in ('starting', 'connecting', 'needs-initialization'):
             row['connectionState'] = phase
-            if phase != 'starting' and native is not None and not native['running']:
+            if phase == 'connecting' and native is not None and not native['running']:
+                # The initialization worker launches the process asynchronously.
+                # Keep its pending state (and short cache) until it reports an
+                # outcome; an absent process here is not a failed launch.
+                row['connectionState'] = 'starting'
+            elif phase == 'needs-initialization' and native is not None and not native['running']:
                 row.update(connectionState='error', reason='Claude 未运行，请重试后台启动', retryable=True)
         elif phase in ('failed', 'needs-retry'):
             row.update(connectionState='error', retryable=True)

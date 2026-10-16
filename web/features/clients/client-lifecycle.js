@@ -22,7 +22,7 @@ const ClientLifecycle=(()=>{
     const canReconnect=client.id==='claude'&&client.canReconnect===true&&client.reconnectSupported===true&&!client.connected&&!pending&&!['recovery-required','restart-required'].includes(setup);
     const canInitialize=client.id==='claude'&&!canStartDesktop&&client.enabled&&client.installed!==false&&!client.connected&&!pending&&(['needs-initialization','needs-retry','needs-developer-mode','needs-trust','needs-permission','needs-unlock','needs-desktop','cancelled','failed'].includes(setup)||stage==='needs-initialization'||client.canInitializeDesktop===true&&!canReconnect);
     const retryable=client.retryable===true&&client.enabled&&!client.connected&&!pending&&!canInitialize&&!canReconnect&&!canStartDesktop&&!['recovery-required','restart-required'].includes(setup);
-    return {label,reason,waiting:pending,action:action||setup==='recovery-required',retryable:!!retryable,canReconnect:!!canReconnect,canInitialize:!!canInitialize,canStartDesktop:!!canStartDesktop,error:!client.connected&&['error','timeout'].includes(stage)||!client.connected&&setup==='failed'};
+    return {label,reason,waiting:pending,action:action||setup==='recovery-required',retryable:!!retryable,canReconnect:!!canReconnect,canInitialize:!!canInitialize,canStartDesktop:!!canStartDesktop,error:!pending&&!client.connected&&(['error','timeout'].includes(stage)||setup==='failed')};
   }
   function request(operation,{timeout=45000,uncertain=true,message='操作结果尚未确认，请刷新状态后再重试。'}={}){
     const controller=typeof AbortController!=='undefined'?new AbortController():null;let timer;

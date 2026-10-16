@@ -105,6 +105,21 @@ test('Claude recent list combines types chronologically and retains archive, sea
  ui.view.search.value='Cowork';ui.view.renderList();assert.match(ui.view.rowsRoot.textContent,/Cowork chat/);assert.doesNotMatch(ui.view.rowsRoot.textContent,/Code chat/);
  ui.view.search.value='';ui.view.archived.checked=true;ui.view.listMode.value='project';ui.view.renderList();assert.match(ui.view.rowsRoot.textContent,/Archive/);assert.equal(ui.view.rowsRoot.querySelectorAll('details').length,1);assert.equal(ui.view.rowsRoot.querySelector('summary').textContent,'/same');
 });
+test('Claude recent list compares Desktop milliseconds and CLI seconds as the same time scale',async()=>{
+ const ui=fixture();await ui.view.choose('claude');
+ const desktopOlder=Date.UTC(2026,9,14,12),cliNewest=Date.UTC(2026,9,16,12),desktopMiddle=Date.UTC(2026,9,15,12);
+ ui.view.rows=[{id:'code',title:'Desktop Code',backend:'code',cwd:'/same',updatedAt:desktopOlder},
+  {id:'cli',title:'CLI latest',backend:'cli',cwd:'/same',updatedAt:cliNewest/1000},
+  {id:'cowork',title:'Desktop Cowork',backend:'cowork',cwd:'/same',updatedAt:desktopMiddle}];
+ ui.view.renderList();
+ const ids=()=>ui.view.rowsRoot.querySelectorAll('.session').map(row=>row.dataset.id);
+ assert.deepEqual(ids(),['cli','cowork','code']);
+ assert.equal(ui.view.rowsRoot.querySelector('.session').querySelector('time').textContent,
+  new Date(cliNewest).toLocaleDateString('zh-CN',{month:'numeric',day:'numeric'}));
+ ui.view.surface.value='cli';ui.view.surface.onchange();assert.deepEqual(ids(),['cli']);
+ ui.view.surface.value='all';ui.view.surface.onchange();ui.view.search.value='Desktop';ui.view.renderList();assert.deepEqual(ids(),['cowork','code']);
+ ui.view.search.value='';ui.view.listMode.value='project';ui.view.renderList();assert.deepEqual(ids(),['cli','cowork','code']);
+});
 test('Claude type filter uses full inventory and returns to all when a type disappears',async()=>{
  const ui=fixture();await ui.view.choose('claude');ui.view.rows=[{id:'code',title:'Code chat',backend:'code',updatedAt:2},{id:'cli',title:'CLI chat',backend:'cli',updatedAt:1}];ui.view.renderList();const selector=ui.view.surface;assert.equal(selector.hidden,false);assert.deepEqual(selector.children.map(n=>n.value),['all','code','cli']);assert.equal(selector.children[0].textContent,'全部会话');assert.deepEqual(ui.view.rowsRoot.querySelectorAll('.session').map(n=>n.dataset.id),['code','cli']);
  selector.value='cli';selector.onchange();assert.deepEqual(ui.view.rowsRoot.querySelectorAll('.session').map(n=>n.dataset.id),['cli']);const options=[...selector.children];ui.view.rows=[{id:'code',title:'Code updated',backend:'code',updatedAt:3},{id:'cli',title:'CLI chat',backend:'cli',updatedAt:1}];ui.view.renderList();assert.strictEqual(selector.children[0],options[0]);assert.strictEqual(selector.children[2],options[2]);ui.view.search.value='Code';ui.view.renderList();assert.strictEqual(selector.children[2],options[2]);assert.equal(selector.hidden,false);assert.equal(selector.value,'cli');ui.run("BridgeI18n.setLanguage('en')");ui.view.relabel();assert.equal(selector.children[0].textContent,'All');assert.equal(selector.value,'cli');ui.view.search.value='';ui.view.rows=[{id:'code',title:'Code chat',backend:'code',updatedAt:2}];ui.view.renderList();assert.equal(selector.hidden,true);assert.equal(selector.value,'all');assert.equal(ui.view.rowsRoot.querySelector('.ds-session-type').textContent,'Code');assert.equal(ui.view.rowsRoot.querySelector('.session').classList.contains('ds-session-row'),true);

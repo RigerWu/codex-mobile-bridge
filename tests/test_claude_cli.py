@@ -63,6 +63,31 @@ class ClaudeCliContract(unittest.TestCase):
         self.assertTrue(detail['capabilities']['resume'])
         self.assertFalse(detail['capabilities']['send'])
 
+    def test_synthetic_assistant_model_does_not_replace_real_model(self):
+        with self.path.open('a') as target:
+            target.write(json.dumps({'type': 'assistant', 'cwd': str(self.cwd),
+                                     'message': {'model': '<synthetic>', 'content': []}}) + '\n')
+        self.assertEqual(self.cli.listing()['sessions'][0]['model'], 'fixture-model')
+
+    def test_synthetic_only_history_resumes_without_forcing_model(self):
+        events = self.path.read_text().replace('"model": "fixture-model"', '"model": "<synthetic>"')
+        self.path.write_text(events)
+        self.assertEqual(self.cli.listing()['sessions'][0]['model'], '')
+        process = Mock()
+        process.poll.return_value = None
+        with patch('bridge.clients.claude.cli_session.subprocess.Popen', return_value=process) as popen, \
+             patch('bridge.clients.claude.cli_session._Owned') as owner_type:
+            owner = owner_type.return_value
+            owner.origin = self.profile['origin']
+            owner.process = process
+            owner.catalog = {'current_permission_mode': 'plan'}
+            owner.pending = {}
+            owner.active = False
+            owner.error = None
+            owner.control.return_value = owner.catalog
+            self.assertEqual(self.cli.call('resume', self.sid, {})['status'], 'ready')
+        self.assertNotIn('--model', popen.call_args.args[0])
+
     def test_saved_context_uses_latest_native_assistant_reading(self):
         event = {'type': 'assistant', 'cwd': str(self.cwd), 'message': {'id': 'last', 'role': 'assistant',
                  'model': 'fixture-model', 'usage': {'input_tokens': 12,

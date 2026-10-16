@@ -15,7 +15,7 @@
 	<key>CFBundleShortVersionString</key>
 	<string>2.1.0</string>
 	<key>CFBundleVersion</key>
-	<string>31</string>
+	<string>32</string>
 	<key>LSRequiresIPhoneOS</key>
 	<true/>
 	<key>NSSupportsLiveActivities</key>
@@ -56,6 +56,6 @@
 		</dict>
 	</array>
 	<key>BridgeReleaseVersion</key>
-	<string>2.1.0-preview.1</string>
+	<string>2.1.0</string>
 </dict>
 </plist>

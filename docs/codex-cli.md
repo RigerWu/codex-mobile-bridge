@@ -1,6 +1,6 @@
-# Codex CLI 会话接入（v2.1.0-preview.1）
+# Codex CLI 会话接入（v2.1.0）
 
-聊天列表纳入现有 Codex CLI 会话。完整可见库存同时包含 APP 与 CLI 会话时，列表显示来源筛选和行标记；来源取自会话的原始记录，接续后的运行方不改变来源。筛选先于分页，搜索或翻页不会让来源选项消失。打开聊天先读已保存历史，并只读查找已有 Codex App 执行连接；不启动 CLI、不向桌面 App 跳转，也不发送模型请求。Codex App 已配置的有效 SSH 连接会参与发现；远端通过用户登录 shell 读取其 `CODEX_HOME`，未设置时使用 `~/.codex`。
+聊天列表纳入现有 Codex CLI 会话。列表始终在日期上方显示会话来源；完整可见库存同时包含 APP 与 CLI 会话时，显示来源筛选；来源取自会话的原始记录，接续后的运行方不改变来源。筛选先于分页，搜索或翻页不会让来源选项消失。打开聊天先读已保存历史，并只读查找已有 Codex App 执行连接；不启动 CLI、不向桌面 App 跳转，也不发送模型请求。Codex App 已配置的有效 SSH 连接会参与发现；远端通过用户登录 shell 读取其 `CODEX_HOME`，未设置时使用 `~/.codex`。
 
 ## 继续 CLI 中的工作
 
@@ -42,7 +42,7 @@ Windows 保存历史读取和冷恢复可识别普通路径与扩展路径指向
 
 ## English
 
-When the readable inventory contains both App and CLI origins, type filters and **CLI** badges are shown. Opening one reads saved history and passively checks for an existing Codex App owner. If App already owns the chat, Bridge verifies and follows that owner. Otherwise, select **Continue chat** to connect to the native CLI daemon or explicitly start its already installed, managed daemon and resume the same chat, even if the terminal has closed. It does not install CLI, bypass SSH host-key checks, change the chat's identity, or seize another runtime's writer lock. Supported actions include send, queue, steer, interrupt, approvals and input requests, plus model/effort selection, Skills and default/plan modes. Compatible joined native CLI runtimes, including SSH hosts, support creating, pausing, editing, resuming and clearing Goals through the same daemon. SSH chats owned by the desktop App do not expose Goal controls.
+Source labels remain visible above dates; when the readable inventory contains both App and CLI origins, type filters are shown. Opening one reads saved history and passively checks for an existing Codex App owner. If App already owns the chat, Bridge verifies and follows that owner. Otherwise, select **Continue chat** to connect to the native CLI daemon or explicitly start its already installed, managed daemon and resume the same chat, even if the terminal has closed. It does not install CLI, bypass SSH host-key checks, change the chat's identity, or seize another runtime's writer lock. Supported actions include send, queue, steer, interrupt, approvals and input requests, plus model/effort selection, Skills and default/plan modes. Compatible joined native CLI runtimes, including SSH hosts, support creating, pausing, editing, resuming and clearing Goals through the same daemon. SSH chats owned by the desktop App do not expose Goal controls.
 
 Native CLI controls use the same daemon for catalogs, settings, Skills, modes and Goals. Custom providers accept manually entered model IDs without switching providers. Catalogs load after connection; transient disconnects retain draft text and selected Skills. Permission controls follow the execution runtime and its policy on local and SSH CLI chats; App-owned chats use their existing owner. Changes apply to subsequent turns and require effective runtime confirmation. Editing/forking, rename and side chats remain unavailable for CLI-origin chats.
 

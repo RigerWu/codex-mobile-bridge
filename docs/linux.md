@@ -41,13 +41,13 @@ from the matching child thread; an empty RPC acknowledgement is not treated as a
 successful change. These compatibility checks do not change SSH or macOS/Windows
 permission handling.
 
-Preview 3 discovery resolves symlinked shell launchers to an executable sibling
+Current discovery resolves symlinked shell launchers to an executable sibling
 GUI, including the Ubuntu `codex-launcher` / `ChatGPT` layout. It never executes
 launch scripts during discovery, and ignores non-executable files and standalone
 `codex` / `claude` CLI binaries. Claude's native Console auto-connection helper
 currently supports macOS and Windows only; Linux reports that limitation.
 
-## CLI access in v2.1.0-preview.1
+## CLI access in v2.1.0
 
 Use Codex CLI and Claude Code locally or through configured SSH hosts. Read saved history, resume closed sessions, create chats in known projects and send replies. Codex supports model/effort, Skills, permissions and Goal controls on compatible native runtimes. Claude Code supports models, permissions, Skills, file uploads, approvals and interrupt.
 

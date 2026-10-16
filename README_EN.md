@@ -5,13 +5,11 @@
 
 # Codex Mobile Bridge · A remote workbench for desktop agents
 
-> **v2.0.3 (stable)**: [Release page](https://github.com/try2love/codex-mobile-bridge/releases/tag/v2.0.3) · [Full release notes](RELEASE_NOTES.md) · [Mobile installation](mobile/README.md). This release adds Android in-app updates with download choices and mobile/Web third-party notification settings, and improves search, landscape layouts and connection recovery.
-
-> **v2.1.0-preview.1 (preview):** [Download the preview](https://github.com/try2love/codex-mobile-bridge/releases/tag/v2.1.0-preview.1) · [What’s new](RELEASE_NOTES.md). Try Codex/Claude CLI access, existing HTTPS tunnels and improved file reading. The stable downloads below remain v2.0.3.
+> **v2.1.0 (stable):** [Release page](https://github.com/try2love/codex-mobile-bridge/releases/tag/v2.1.0) · [Full release notes](RELEASE_NOTES.md) · [Mobile installation](mobile/README.md). This release adds Codex/Claude CLI access, existing HTTPS entries and file reading, and improves Windows terminals, Claude/DSH connections and mobile browsing.
 
 [简体中文](README.md) · [English](README_EN.md)
 
-**[Product guide and interactive demos ↗](https://try2love.github.io/codex-mobile-bridge/?lang=en)** · **[Download desktop and mobile apps](https://github.com/try2love/codex-mobile-bridge/releases/tag/v2.0.3)**
+**[Product guide and interactive demos ↗](https://try2love.github.io/codex-mobile-bridge/?lang=en)** · **[Download desktop and mobile apps](https://github.com/try2love/codex-mobile-bridge/releases/tag/v2.1.0)**
 
 [![Desktop gateway: clients and access, with demo data](site/assets/v2-clients.png)](https://try2love.github.io/codex-mobile-bridge/?lang=en)
 
@@ -19,7 +17,13 @@ Continue **Codex, Claude Code / Cowork and DeepSeek Harness** sessions from a ph
 
 Tasks run on the original computer, or the original SSH host for Codex remote sessions. Bridge reuses the desktop session, authentication and execution environment. Your phone does not need the same model-service account: use gateway login or revocable QR pairing.
 
-## What's new in v2.0.3
+## What's new in v2.1.0
+
+- **CLI and file reading:** read and explicitly resume Codex/Claude Code CLI chats from mobile or Web; dedicated previews for source, PDF and self-contained HTML.
+- **Connections and lists:** configure an existing HTTPS tunnel or reverse proxy; progressively show Codex chats by host, sort mixed Claude chats by recency and keep source labels visible.
+- **Cross-platform experience:** improve Windows persistent terminals and Claude setup, DSH host detection, the iOS Safari viewport during input and stable client swipes. The gateway remains manageable with every client disabled.
+
+### What's new in v2.0.3
 
 - **Android updates:** download and install updates in the app, choose phone or computer downloads, and resume installation or export a completed APK. See [mobile installation and upgrades](mobile/README.md).
 - **Third-party notifications:** configure, save and test Bark for iPhone, ntfy for Android or PushPlus for WeChat on mobile or Web, using the same settings as the desktop gateway.
@@ -28,7 +32,7 @@ Tasks run on the original computer, or the original SSH host for Codex remote se
 
 <a id="workspace-reading"></a>
 
-## File reading and previews (v2.1.0-preview.1)
+## File reading and previews (v2.1.0)
 
 - **Directory-aware Back:** return to the parent folder first, then to chat from the project root. Back exits fullscreen first.
 - **Source reading:** view common languages with syntax highlighting and line numbers. Select **Wrap lines** to fit long lines to the screen, or restore **Original line width**. Copy preserves the source without line numbers; previews never edit the file. Unknown languages and larger text use plain text.
@@ -38,13 +42,13 @@ Tasks run on the original computer, or the original SSH host for Codex remote se
 
 PDF previews are capped at **20 MiB** and the configured ordinary-download limit, whichever is lower. HTML and source previews accept **UTF-8 text up to 512 KiB**. Download larger or unsupported files to open elsewhere. Update both the gateway and mobile app for the complete feature set; browser users reload after updating the gateway.
 
-## CLI chats (v2.1.0-preview.1)
+## CLI chats (v2.1.0)
 
-Saved local and configured SSH CLI chats are readable without starting a runtime. Chat-type filters and CLI badges appear when the readable inventory contains multiple types. If Codex App already owns a chat, Bridge verifies and follows that connection. Otherwise, select **Continue chat** to connect to or resume the original native CLI chat, even if its terminal has closed. This explicit action may start the already installed managed daemon; Bridge does not install CLI or accept new SSH host keys.
+Saved local and configured SSH CLI chats are readable without starting a runtime. Source badges remain visible above dates; chat-type filters appear when multiple origins are present. If Codex App already owns a chat, Bridge verifies and follows that connection. Otherwise, select **Continue chat** to connect to or resume the original native CLI chat, even if its terminal has closed. This explicit action may start the already installed managed daemon; Bridge does not install CLI or accept new SSH host keys.
 
 Open **SSH diagnostics** in Settings to inspect local and remote status and counts, copy a sanitized summary, or export a file. Older mobile apps can read and copy but need an update to export. After connection, supported controls include model/effort, Skills, default/plan modes, permissions and Goals on compatible local/SSH native CLI runtimes. See the [CLI guide](docs/codex-cli.md) for limits.
 
-Codex and Claude CLI access are configured in their own account sections. Local CLI sync is opt-in, with separate Desktop and CLI verification results; SSH hosts retain their own configuration. Claude can create CLI chats from existing local or SSH projects with the selected profile and directory. Type filters and labels appear only for a fully readable inventory containing multiple types. Claude uses a blue context ring for known capacity and a neutral ring otherwise.
+Codex and Claude CLI access are configured in their own account sections. Local CLI sync is opt-in, with separate Desktop and CLI verification results; SSH hosts retain their own configuration. Claude can create CLI chats from existing local or SSH projects with the selected profile and directory. Source labels are always visible; type filters appear when multiple origins are present. Claude uses a blue context ring for known capacity and a neutral ring otherwise.
 
 ### Platforms and access
 
@@ -80,18 +84,18 @@ Supports macOS, Windows and experimental Ubuntu x64/ARM64. See the [Linux guide]
 
 ## Download and quick start (recommended)
 
-Download the desktop App for everyday use. **No deployment Agent, Python, Node.js or terminal is required.** The links below target **v2.0.3 (stable)**.
+Download the desktop App for everyday use. **No deployment Agent, Python, Node.js or terminal is required.** The links below target **v2.1.0 (stable)**.
 
 | Platform | Download | Open |
 | --- | --- | --- |
-| Windows x64 (recommended installer) | [Download Setup.exe](https://github.com/try2love/codex-mobile-bridge/releases/download/v2.0.3/Codex-Mobile-Bridge-2.0.3-Windows-x64-Setup.exe) | Run the installer and launch from the shortcut |
-| Windows x64 (no installation) | [Download full ZIP](https://github.com/try2love/codex-mobile-bridge/releases/download/v2.0.3/Codex-Mobile-Bridge-2.0.3-Windows-x64.zip) | Extract the entire ZIP and run `Codex Mobile Bridge.exe`; do not move just the exe |
-| macOS Apple Silicon (M series) | [Download arm64 DMG](https://github.com/try2love/codex-mobile-bridge/releases/download/v2.0.3/Codex-Mobile-Bridge-2.0.3-macOS-arm64.dmg) | Open the DMG and drag the App to Applications |
-| macOS Intel | [Download x64 DMG](https://github.com/try2love/codex-mobile-bridge/releases/download/v2.0.3/Codex-Mobile-Bridge-2.0.3-macOS-x64.dmg) | Open the DMG and drag the App to Applications |
-| Ubuntu x64 (experimental) | [Download .deb](https://github.com/try2love/codex-mobile-bridge/releases/download/v2.0.3/Codex-Mobile-Bridge-2.0.3-Linux-amd64.deb) | Ubuntu 22.04; launch as a regular user |
-| Ubuntu ARM64 (experimental) | [Download .deb](https://github.com/try2love/codex-mobile-bridge/releases/download/v2.0.3/Codex-Mobile-Bridge-2.0.3-Linux-arm64.deb) | Ubuntu 22.04 ARM64; no 32-bit ARM build |
+| Windows x64 (recommended installer) | [Download Setup.exe](https://github.com/try2love/codex-mobile-bridge/releases/download/v2.1.0/Codex-Mobile-Bridge-2.1.0-Windows-x64-Setup.exe) | Run the installer and launch from the shortcut |
+| Windows x64 (no installation) | [Download full ZIP](https://github.com/try2love/codex-mobile-bridge/releases/download/v2.1.0/Codex-Mobile-Bridge-2.1.0-Windows-x64.zip) | Extract the entire ZIP and run `Codex Mobile Bridge.exe`; do not move just the exe |
+| macOS Apple Silicon (M series) | [Download arm64 DMG](https://github.com/try2love/codex-mobile-bridge/releases/download/v2.1.0/Codex-Mobile-Bridge-2.1.0-macOS-arm64.dmg) | Open the DMG and drag the App to Applications |
+| macOS Intel | [Download x64 DMG](https://github.com/try2love/codex-mobile-bridge/releases/download/v2.1.0/Codex-Mobile-Bridge-2.1.0-macOS-x64.dmg) | Open the DMG and drag the App to Applications |
+| Ubuntu x64 (experimental) | [Download .deb](https://github.com/try2love/codex-mobile-bridge/releases/download/v2.1.0/Codex-Mobile-Bridge-2.1.0-Linux-amd64.deb) | Ubuntu 22.04; launch as a regular user |
+| Ubuntu ARM64 (experimental) | [Download .deb](https://github.com/try2love/codex-mobile-bridge/releases/download/v2.1.0/Codex-Mobile-Bridge-2.1.0-Linux-arm64.deb) | Ubuntu 22.04 ARM64; no 32-bit ARM build |
 
-[All releases and release notes](https://github.com/try2love/codex-mobile-bridge/releases) · [Download SHA256 checksums](https://github.com/try2love/codex-mobile-bridge/releases/download/v2.0.3/SHA256SUMS.txt). Both Mac architectures also include ZIPs for in-app updates or manual replacement. Windows ARM packages are not available. The Mac build is ad-hoc signed but not notarized and may require manual approval; Windows builds have no certificate signature. See the macOS first-launch instructions below.
+[All releases and release notes](https://github.com/try2love/codex-mobile-bridge/releases) · [Download SHA256 checksums](https://github.com/try2love/codex-mobile-bridge/releases/download/v2.1.0/SHA256SUMS.txt). Both Mac architectures also include ZIPs for in-app updates or manual replacement. Windows ARM packages are not available. The Mac build is ad-hoc signed but not notarized and may require manual approval; Windows builds have no certificate signature. See the macOS first-launch instructions below.
 
 1. Install and sign in to the desktop clients you need. Open **Codex Mobile Bridge**, inspect **Clients and access**, complete required permissions and enable configured clients.
 2. Keep LAN access or add an HTTPS entry under **Network access**, save, and select **Start gateway** from Overview or Clients. Preserve your configured port.
@@ -100,7 +104,7 @@ Download the desktop App for everyday use. **No deployment Agent, Python, Node.j
 
 For remote access, choose [Tailscale HTTPS](docs/tailscale.md), bundled temporary Cloudflare HTTPS, a [fixed Cloudflare tunnel](docs/fixed-domain.md), an [existing HTTPS tunnel](docs/external-tunnel.md), [your own SSH server](docs/server-ssh.md) or an advanced NAS proxy. See [Parallel connections](#parallel-connections). Fixed addresses do not guarantee mainland China performance; test the actual cellular network.
 
-Android APK, unsigned iOS IPA and Xcode source downloads are in the same [v2.0.3 Release](https://github.com/try2love/codex-mobile-bridge/releases/tag/v2.0.3). Install Android over the existing app; iOS requires your own signing, with no App Store/TestFlight distribution. Source/custom setups are covered by the [Deployment Agent instructions](#deployment-agent-instructions).
+Android APK, unsigned iOS IPA and Xcode source downloads are in the same [v2.1.0 Release](https://github.com/try2love/codex-mobile-bridge/releases/tag/v2.1.0). Install Android over the existing app; iOS requires your own signing, with no App Store/TestFlight distribution. Source/custom setups are covered by the [Deployment Agent instructions](#deployment-agent-instructions).
 
 ### In-app updates
 
@@ -108,7 +112,7 @@ Android APK, unsigned iOS IPA and Xcode source downloads are in the same [v2.0.3
 
 Starting with `v0.2.0-beta.5`, use **App updates** to check for a release, read its notes, and select **Update and restart**. The app verifies the signed manifest and package before replacing itself, preserves login, network, notification and watched-chat settings, and restores a previously running gateway. Installation failures attempt to restore the previous app. Older versions need one manual upgrade to a version with this feature. Temporary HTTPS addresses change when the gateway restarts.
 
-**Windows beta.7 / 1.0.0 users:** the old updater may roll back with `WinError 32` because its working directory is locked. Choose **Stop gateway and quit** in the tray, then install **2.0.3 Setup.exe** to the same location. Do not uninstall or delete your data. Version 1.1.0 fixes this working-directory issue for subsequent updates.
+**Windows beta.7 / 1.0.0 users:** the old updater may roll back with `WinError 32` because its working directory is locked. Choose **Stop gateway and quit** in the tray, then install **2.1.0 Setup.exe** to the same location. Do not uninstall or delete your data. Version 1.1.0 fixes this working-directory issue for subsequent updates.
 
 Android v2.0.3 adds in-app APK updates with a phone/computer download choice. Older apps can be upgraded manually once; computer-assisted downloads need a compatible gateway. Failed downloads allow another route, and completed APKs remain available for installation or export. iOS still uses the signing and installation flow described in the [mobile guide](mobile/README.md).
 
@@ -132,7 +136,7 @@ The accounts panel follows the selected client. Codex official accounts show rem
 
 Opening the Codex panel queries usage automatically; visible panels update every five minutes. Manual refresh runs immediately and restarts the timer. Failed queries preserve the last successful values and timestamp; unavailable upstream data remains unknown.
 
-In v2.1.0-preview.1, Claude queries usage only when you select **View remaining quota**. Opening, revisiting and periodically refreshing its panel show saved usage with the original successful date and time. Failures preserve that snapshot and indicate it was not updated. This reduces unrequested quota credential reads without claiming to eliminate every Keychain prompt. DSH keeps its existing query behavior.
+In v2.1.0, Claude queries usage only when you select **View remaining quota**. Opening, revisiting and periodically refreshing its panel show saved usage with the original successful date and time. Failures preserve that snapshot and indicate it was not updated. This reduces unrequested quota credential reads without claiming to eliminate every Keychain prompt. DSH keeps its existing query behavior.
 
 View remaining percentages, reset times and available usage resets. In v2.0.0, reset credits can be used for the current or another saved official account without switching sign-in or enabling Codex's agent usage-reset setting. Confirm the account and credit expiry, then wait five seconds before using a credit. Interrupted requests retain their original redemption ID for retry. Subscription dates are queried online; blocked or missing results remain unconfirmed rather than being inferred from token expiry or old login records. Account credentials are never sent to the phone.
 
@@ -156,7 +160,7 @@ The Mac build has an **ad-hoc integrity signature**, but **no Apple Developer ID
 1. Download the DMG or ZIP for your Mac's chip and `SHA256SUMS.txt` from this repository's Release. Calculate the downloaded file's hash and compare it with the matching filename in the checksum file. If they differ, download again instead of allowing the app. The example below uses the 2.0.3 Apple Silicon DMG; replace the filename for other downloads.
 
    ```sh
-   shasum -a 256 "$HOME/Downloads/Codex-Mobile-Bridge-2.0.3-macOS-arm64.dmg"
+   shasum -a 256 "$HOME/Downloads/Codex-Mobile-Bridge-2.1.0-macOS-arm64.dmg"
    ```
 
 2. Open the DMG, drag `Codex Mobile Bridge.app` to Applications, then eject the disk image. For a ZIP, extract it and move the App instead. Try opening it from Applications, then go to **System Settings → Privacy & Security → Open Anyway** and confirm.
@@ -368,7 +372,7 @@ Alternatively, double-click `启动手机网关.command`. Stop with `Ctrl+C`, `p
 
 Open the printed LAN URL on a phone on the same network, for example `http://192.168.1.10:8787`. The initial username is `admin`; the generated password is in `.local/首次登录.txt`. Select a chat and wait for **Connected** before sending.
 
-Without `--lan`, the gateway listens only on `127.0.0.1`. It does not install a system login service. Restarting the gateway requires logging in again. If a Desktop chat shows saved history only, open it in the desktop App and reconnect on the phone; the gateway does not replace its original execution owner. In v2.1.0-preview.1, use **Continue chat** to explicitly connect or resume a CLI chat after its terminal closes. Reading history does not start a runtime.
+Without `--lan`, the gateway listens only on `127.0.0.1`. It does not install a system login service. Restarting the gateway requires logging in again. If a Desktop chat shows saved history only, open it in the desktop App and reconnect on the phone; the gateway does not replace its original execution owner. In v2.1.0, use **Continue chat** to explicitly connect or resume a CLI chat after its terminal closes. Reading history does not start a runtime.
 
 ## Temporary HTTPS and existing proxies
 

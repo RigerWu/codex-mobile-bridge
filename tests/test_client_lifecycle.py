@@ -199,6 +199,13 @@ class ClientLifecycleTests(unittest.TestCase):
         self.assertFalse(codex['configured'])
         self.assertFalse(codex['connected'])
 
+    def test_unconfigured_codex_switch_matches_default_enabled_preference(self):
+        self.manager.config['enabled'].pop('codex')
+        self.accounts.info.current = lambda: {'status': 'signedOut'}
+        codex = next(row for row in self.manager.clients(refresh=True)['clients'] if row['id'] == 'codex')
+        self.assertFalse(codex['configured'])
+        self.assertEqual(codex['enabled'], self.manager.enabled('codex'))
+
     def toggle(self, provider, enabled):
         return self.manager.toggle_client({'provider': provider, 'enabled': enabled})
 
@@ -229,6 +236,20 @@ class ClientLifecycleTests(unittest.TestCase):
         self.assertTrue(self.running)
         saved = json.loads(self.manager.config_path.read_text())
         self.assertEqual(saved['enabled'], dict.fromkeys(('codex', 'claude', 'deepseek'), False))
+
+    def test_all_disabled_preferences_survive_restart_without_launching_a_client(self):
+        for provider in ('codex', 'claude', 'deepseek'):
+            self.manager.toggle_client({'provider': provider, 'enabled': False, 'quitDesktop': False})
+        reopened = DesktopSessions(self.root, self.bridge, gateway_running=True)
+        try:
+            with patch.object(reopened, 'scan') as scan, patch.object(reopened, 'toggle_client') as toggle:
+                reopened.start_enabled()
+            scan.assert_called_once_with()
+            toggle.assert_not_called()
+            self.assertEqual([row['enabled'] for row in reopened.clients(refresh=True)['clients']], [False] * 3)
+            self.assertTrue(self.running)
+        finally:
+            reopened.close()
 
     def test_explicit_quit_keeps_busy_guard_and_enabled_preference(self):
         self.claude.call.side_effect = lambda *args: {'complete': True, 'sessions': [

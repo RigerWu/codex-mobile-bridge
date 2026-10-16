@@ -32,6 +32,19 @@ test('clicking the selected provider does not reset its view or issue another re
  const {nav}=fixture();let calls=0;nav.view.choose=async()=>{calls++;};await nav.choose('claude');assert.equal(calls,0);
 });
 
+test('turning the last client off and re-enabling Codex refreshes its list',async()=>{
+ const {nav}=fixture(),selected=[];nav.clients=[{id:'codex',enabled:true,configured:true}];nav.provider=nav.view.provider='codex';
+ nav.view.onSelect=id=>selected.push(id);
+ nav.view.choose=async function(id){if(id===this.provider)return;this.provider=id;this.onSelect(id);};
+ let complete;
+ nav.request=(_path,body)=>new Promise(resolve=>{complete=()=>resolve({clients:[{...nav.clients[0],enabled:body.enabled}]});});
+ nav.applyClients({clients:[{...nav.clients[0],enabled:false}]});await Promise.resolve();
+ assert.equal(nav.provider,null);assert.deepEqual(selected,[]);
+ const enabling=nav.toggle('codex',true);assert.deepEqual(selected,[]);
+ complete();await enabling;
+ assert.equal(nav.provider,'codex');assert.deepEqual(selected,['codex']);
+});
+
 test('phone initialization sends foreground intent only after an explicit confirmation',async()=>{
  for(const accepted of [false,true]){
   const ui=fixture(),nav=ui.nav,calls=[];ui.setInitializeChoice(accepted);Object.assign(nav.clients[1],{installed:true,connected:false,setupStatus:'needs-initialization'});nav.request=async(url,body)=>{calls.push(body);return {clients:nav.clients.map(client=>client.id==='claude'?{...client,connectionState:'connecting'}:client)};};

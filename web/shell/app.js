@@ -139,7 +139,7 @@ async function enter(authInfo){
   restoreListSnapshot();
   refreshComputer();$('login').hidden=true;$('app').hidden=false;$('bootstrap-status').hidden=true;window.BridgeBootstrap?.ready();document.dispatchEvent(new Event('bridge-authenticated'));
   const clientsReady=clientNavigation.refresh();accountsPanel?.refresh();
-  if(clientNavigation.provider==='codex')loadList(true).catch(e=>toast(e.message));
+  if(clientNavigation.provider==='codex')loadList(true).catch(async e=>{await clientsReady.catch(()=>{});if(clientNavigation.provider==='codex')toast(e.message);});
   await clientsReady;
   await clientNavigation.openChatLink(chatLink,openChat);
 }

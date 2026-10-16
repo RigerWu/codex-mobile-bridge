@@ -23,7 +23,7 @@ class ClientLifecycleTests(unittest.TestCase):
         self.root = Path(self.temp.name)
         self.claude, self.dsh = Mock(), Mock()
         self.claude.status.return_value = {'connected': True}
-        self.claude.desktop_listing.return_value = {'connected': True, 'sessions': [
+        self.claude.desktop_listing.return_value = {'connected': True, 'complete': True, 'coverage': {'code': True, 'cowork': True}, 'sessions': [
             {'id': 'one', 'status': 'idle', 'runtimeKnown': True, 'requests': []}]}
         self.claude.call.side_effect = lambda action, *args: ({'connected': True, 'complete': True,
             'sessions': [{'id': 'one', 'status': 'idle', 'runtimeKnown': True, 'requests': []}]} if action == 'list' else {'models': [{'id': 'model'}]})
@@ -252,7 +252,7 @@ class ClientLifecycleTests(unittest.TestCase):
             reopened.close()
 
     def test_explicit_quit_keeps_busy_guard_and_enabled_preference(self):
-        self.claude.call.side_effect = lambda *args: {'complete': True, 'sessions': [
+        self.claude.desktop_listing.return_value = {'complete': True, 'sessions': [
             {'id': 'one', 'status': 'running', 'runtimeKnown': True, 'requests': []}]}
         with self.assertRaisesRegex(ValueError, '任务运行或等待'):
             self.manager.toggle_client({'provider': 'claude', 'enabled': False, 'quitDesktop': True})
@@ -551,7 +551,7 @@ class ClientLifecycleTests(unittest.TestCase):
     def test_account_switch_checks_idle_before_touching_credentials(self):
         store = Mock()
         self.manager._account_store = Mock(return_value=store)
-        self.claude.call.side_effect = lambda action, *args: {'complete': True, 'sessions': [
+        self.claude.desktop_listing.return_value = {'complete': True, 'sessions': [
             {'id': 'busy', 'status': 'active', 'runtimeKnown': True}]}
         with self.assertRaisesRegex(ValueError, '运行或等待'):
             self.manager.client_accounts('claude', {'operation': 'switch', 'id': 'other'})
@@ -856,8 +856,8 @@ class ClientLifecycleTests(unittest.TestCase):
         self.claude.reconnect.assert_not_called()
 
     def test_pending_interaction_blocks_stop_and_preserves_preference(self):
-        self.claude.call.side_effect = lambda action, *args: ({'connected': True, 'complete': True,
-            'sessions': [{'id': 'one', 'status': 'idle', 'runtimeKnown': True, 'requests': [{'id': 'question'}]}]} if action == 'list' else {'models': [{'id': 'model'}]})
+        self.claude.desktop_listing.return_value = {'complete': True,
+            'sessions': [{'id': 'one', 'status': 'idle', 'runtimeKnown': True, 'requests': [{'id': 'question'}]}]}
         with self.assertRaisesRegex(ValueError, '任务运行或等待'):
             self.toggle('claude', False)
         self.stop.assert_not_called(); self.claude.cancel.assert_not_called()
@@ -866,10 +866,21 @@ class ClientLifecycleTests(unittest.TestCase):
     def test_missing_surface_or_missing_runtime_state_cannot_prove_idle(self):
         for payload in ({'connected': True, 'complete': False, 'sessions': []},
                         {'connected': True, 'complete': True, 'sessions': [{'id': 'one', 'status': 'idle', 'runtimeKnown': False}]}):
-            self.claude.call.side_effect = lambda *args: payload
+            self.claude.desktop_listing.return_value = payload
             with self.assertRaisesRegex(ValueError, '无法确认'):
                 self.toggle('claude', False)
         self.stop.assert_not_called()
+
+    def test_mac_claude_quit_uses_fresh_desktop_inventory_not_incomplete_cli_history(self):
+        self.claude.call.side_effect = lambda action, *args: ({'complete': False, 'sessions': [
+            {'id': 'unrelated-cli-history', 'backend': 'cli', 'status': 'idle', 'runtimeKnown': False}]} if action == 'list' else {'models': [{'id': 'model'}]})
+        self.claude.desktop_listing.reset_mock()
+        with patch.object(self.manager, 'clients', return_value={'clients': []}):
+            self.manager.toggle_client({'provider': 'claude', 'enabled': False, 'quitDesktop': True})
+        self.claude.desktop_listing.assert_called_once_with()
+        self.assertFalse(any(call.args[0] == 'list' for call in self.claude.call.call_args_list))
+        self.stop.assert_called_once()
+        self.assertFalse(self.manager.enabled('claude'))
 
     def test_unavailable_adapter_never_means_idle(self):
         self.dsh.call.side_effect = BridgeUnavailable('disconnected')
@@ -884,8 +895,8 @@ class ClientLifecycleTests(unittest.TestCase):
         self.assertTrue(self.manager.enabled('deepseek'))
 
     def test_restart_claude_uses_same_busy_guard(self):
-        self.claude.call.side_effect = lambda action, *args: ({'connected': True, 'complete': True,
-            'sessions': [{'id': 'one', 'status': 'active', 'runtimeKnown': True, 'requests': []}]} if action == 'list' else {'models': [{'id': 'model'}]})
+        self.claude.desktop_listing.return_value = {'complete': True,
+            'sessions': [{'id': 'one', 'status': 'active', 'runtimeKnown': True, 'requests': []}]}
         with self.assertRaisesRegex(ValueError, '任务运行或等待'):
             self.manager.control({'action': 'restart-claude'})
         self.stop.assert_not_called(); self.claude.connect.assert_not_called()

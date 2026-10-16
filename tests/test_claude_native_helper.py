@@ -160,10 +160,11 @@ final class Connector {
 ''' + actual + '''}
 let connector = Connector(), prompt = AXUIElement(), good = "abcdefghij"
 func run(_ name: String, _ reads: [String?], settable: Bool = true, stopAt: Int? = nil,
-         stopState: String = "cancelled", pass: Bool, moves: Int, selections: Int? = nil, restored: Bool = false) {
+         stopState: String = "cancelled", expected: String = "abcdefghij", pass: Bool, moves: Int,
+         selections: Int? = nil, restored: Bool = false) {
     scenario = Scenario(reads, settable: settable, stopAt: stopAt, stopState: stopState)
     var succeeded = false, stopped = false
-    do { try connector.verify(prompt, good); succeeded = true }
+    do { try connector.verify(prompt, expected); succeeded = true }
     catch let error as SetupError { stopped = error.state == stopState }
     catch { fatalError("unexpected error in " + name) }
     precondition(succeeded == pass, name)
@@ -173,6 +174,9 @@ func run(_ name: String, _ reads: [String?], settable: Bool = true, stopAt: Int?
     precondition(scenario.positions.count == (selections ?? moves), name)
 }
 run("exact", [good], pass: true, moves: 0)
+let long = String(repeating: "a", count: 4000), partial = String(repeating: "a", count: 1000)
+run("early-reveal", Array(repeating: partial, count: 5) + [long], expected: long, pass: true, moves: 1, restored: true)
+run("early-then-settled", Array(repeating: partial, count: 10) + [long], expected: long, pass: true, moves: 1, restored: true)
 run("revealed", Array(repeating: "abc", count: 40) + [good], pass: true, moves: 0, restored: true)
 run("midpoint", Array(repeating: "abc", count: 42) + ["abcdef", good], pass: true, moves: 1, restored: true)
 run("same-length-middle-change", ["abcxefghij"], pass: false, moves: 3)
@@ -181,14 +185,14 @@ run("unreadable", [nil], pass: false, moves: 0)
 run("not-settable", ["abcdefghi"], settable: false, pass: false, moves: 0)
 run("cancelled", ["abcdefghi"], stopAt: 1, pass: false, moves: 0)
 run("focus-changed", ["abcdefghi"], stopAt: 44, stopState: "needs-attention", pass: false, moves: 0, selections: 1)
-print("9 product verify flow fixtures passed")
+print("11 product verify flow fixtures passed")
 '''
         with tempfile.TemporaryDirectory(dir=ROOT/'.tmp') as folder:
             folder = Path(folder); script = folder/'verify.swift'; script.write_text(fixture)
             result = subprocess.run(['swift', '-module-cache-path', str(folder/'modules'), str(script)],
                                     capture_output=True, text=True, timeout=90)
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
-        self.assertIn('9 product verify flow fixtures passed', result.stdout)
+        self.assertIn('11 product verify flow fixtures passed', result.stdout)
 
 
 @unittest.skipUnless(sys.platform == 'win32', 'Windows native helper required')

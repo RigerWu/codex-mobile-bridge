@@ -478,7 +478,8 @@ class DesktopSessions:
                 raise ValueError('当前 Harness 接入版本无法核对任务状态，请在电脑端退出 Harness 后再连接')
         try:
             listing = (adapter.call('list', timeout=8) if native_confirmation else
-                       adapter.call('lifecycle' if provider == 'deepseek' else 'list'))
+                       adapter.desktop_listing() if provider == 'claude' else
+                       adapter.call('lifecycle'))
         except (ValueError, OSError, BridgeUnavailable):
             raise TaskStateUnavailable(unknown) from None
         sessions = listing.get('sessions')
@@ -713,7 +714,7 @@ class DesktopSessions:
                 return {'busy': True, 'unknown': False}
             if not adapter.status().get('connected'):
                 return {'busy': False, 'unknown': True}
-            listing = adapter.call('list')  # Fresh safety evidence, never shared.
+            listing = adapter.desktop_listing()  # Fresh Desktop evidence, never shared.
             sessions = listing.get('sessions')
             if not isinstance(sessions, list):
                 return {'busy': False, 'unknown': True}
@@ -799,7 +800,7 @@ class DesktopSessions:
                     pass
             rows.append({'id': 'codex', 'name': 'Codex', 'installed': discovered.get('codex', {}).get('installed', ready), 'configured': ready, 'connected': False,
                          'setupStatus': 'ready' if ready else 'unconfigured',
-                         'enabled': self.config.get('enabled', {}).get('codex', ready), 'reason': reason})
+                         'enabled': self.enabled('codex'), 'reason': reason})
             for provider, name in [('claude', 'Claude'), ('deepseek', 'DSH')]:
                 connected = ready = False
                 invalid = False

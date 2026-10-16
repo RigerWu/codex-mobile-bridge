@@ -249,40 +249,53 @@ final class Connector {
             Thread.sleep(forTimeInterval: 0.025); try check(prompt)
             return (attribute(prompt, kAXValueAttribute) as? String)?.trimmingCharacters(in: .newlines)
         }
-        var observed: String?
-        for _ in 0..<40 {
-            observed = try read()
-            if observed == expected { return }
-        }
-        if !expected.isEmpty && observed?.isEmpty == false {
+        func reveal(_ attempts: Int) throws -> Bool {
             // A long Console line can expose only a rendered slice through AX.
             // Move the caret to reveal more; only a single full-value match
             // establishes that the editor contains the expected source.
             var settable = DarwinBoolean(false)
             try check(prompt)
-            if AXUIElementIsAttributeSettable(prompt, kAXSelectedTextRangeAttribute as CFString, &settable) == .success && settable.boolValue {
-                for _ in 0..<3 {
-                    let live = try read()
-                    if live == expected {
+            guard AXUIElementIsAttributeSettable(prompt, kAXSelectedTextRangeAttribute as CFString, &settable) == .success && settable.boolValue else { return false }
+            for _ in 0..<attempts {
+                let live = try read()
+                if live == expected {
+                    try key(125, flags: .maskCommand, prompt: prompt)
+                    return true
+                }
+                guard let live = live, !live.isEmpty else { break }
+                let position = min(expected.utf16.count / 2, live.utf16.count - 1)
+                var range = CFRange(location: position, length: 0)
+                guard let selected = AXValueCreate(.cfRange, &range) else { break }
+                try check(prompt)
+                guard AXUIElementSetAttributeValue(prompt, kAXSelectedTextRangeAttribute as CFString, selected) == .success else { break }
+                // A selection alone need not scroll CodeMirror; Right updates its viewport.
+                try key(124, prompt: prompt)
+                for _ in 0..<4 {
+                    if try read() == expected {
                         try key(125, flags: .maskCommand, prompt: prompt)
-                        return
-                    }
-                    guard let live = live, !live.isEmpty else { break }
-                    let position = min(expected.utf16.count / 2, live.utf16.count - 1)
-                    var range = CFRange(location: position, length: 0)
-                    guard let selected = AXValueCreate(.cfRange, &range) else { break }
-                    try check(prompt)
-                    guard AXUIElementSetAttributeValue(prompt, kAXSelectedTextRangeAttribute as CFString, selected) == .success else { break }
-                    // A selection alone need not scroll CodeMirror; Right updates its viewport.
-                    try key(124, prompt: prompt)
-                    for _ in 0..<4 {
-                        if try read() == expected {
-                            try key(125, flags: .maskCommand, prompt: prompt)
-                            return
-                        }
+                        return true
                     }
                 }
             }
+            return false
+        }
+        var observed: String?, previous: String?, stable = 0, earlyAttempted = false
+        for attempt in 0..<40 {
+            observed = try read()
+            if observed == expected {
+                if earlyAttempted { try key(125, flags: .maskCommand, prompt: prompt) }
+                return
+            }
+            stable = observed?.isEmpty == false && observed == previous ? stable + 1 : 1
+            previous = observed
+            if attempt == 3, stable == 4, expected.utf16.count > 3500,
+               let observed = observed, expected.contains(observed) {
+                earlyAttempted = true
+                if try reveal(1) { return }
+            }
+        }
+        if !expected.isEmpty && observed?.isEmpty == false {
+            if try reveal(3) { return }
         }
         try fail("needs-attention", "Console 无法核验完整内容，未执行连接脚本，请重试")
     }

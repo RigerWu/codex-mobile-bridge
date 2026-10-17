@@ -62,7 +62,20 @@ test('closing a panel discards its late account response and refresh timers',asy
 test('DSH wallet amounts stay separate from percent quota and never invent missing balances',()=>{
   const ui=fixture();ui.panel.accept(snapshot([row('current','account',{status:'ready',limits:[],balance:{wallets:[{currency:'CNY',remaining:'12.30',toppedUp:'10.00',granted:'2.30'},{currency:'USD',remaining:'4.00'}]}})]));
   assert.match(ui.text(),/CNY 12.30/);assert.match(ui.text(),/USD 4.00/);assert.match(ui.text(),/10.00/);assert.equal(ui.all().filter(node=>node.tag==='progress').length,0);
-  ui.panel.accept(snapshot([row('current','account',{status:'unsupported',limits:[]})]));assert.match(ui.text(),/暂未提供额度信息/);assert.doesNotMatch(ui.text(),/0%|12.30|USD/);
+  const card=ui.panel.rows.children[0];assert.match(card.className,/accounts-client-card is-current/);assert.match(card.children[1].className,/accounts-client-usage/);
+  assert.equal(card.children[1].children[0].children[0].textContent,'账户余额');assert.equal(card.children[1].children[0].children[1].textContent,'刷新余额');
+  ui.panel.accept(snapshot([row('current','account',{status:'unsupported',limits:[]})]));assert.match(ui.text(),/余额信息暂不可用/);assert.doesNotMatch(ui.text(),/0%|12.30|USD/);
+});
+test('client cards keep provider usage and API actions distinct',async()=>{
+  const claude=fixture({provider:'claude'});claude.panel.accept(snapshot([row('current'),row('api','api')]));
+  assert.match(claude.panel.rows.children[0].children[1].className,/accounts-client-usage/);
+  assert.equal(claude.panel.rows.children[0].children[1].children[0].children[1].textContent,'查看剩余额度');
+  assert.equal(claude.panel.rows.children[1].children.length,2,'API card has identity and actions, no invented quota');
+  const dsh=fixture();dsh.panel.accept(snapshot([row('current'),row('api','api')]));
+  assert.equal(dsh.panel.rows.children[1].children.length,2);
+  dsh.english();assert.match(dsh.text(),/Refresh balance/);assert.doesNotMatch(dsh.text(),/[\u4e00-\u9fff]/);
+  await dsh.panel.rows.children[0].children[1].children[0].children[1].onclick();
+  assert.deepEqual(JSON.parse(JSON.stringify(dsh.calls)),[{action:'details',id:'current',refresh:true}]);
 });
 test('Claude enrollment confirms restart while DSH API import remains a read-only native snapshot',async()=>{
   const ui=fixture({desktop:true,provider:'claude'});ui.setValue(snapshot([row('current')]));ui.panel.accept(snapshot([row('current')]));ui.confirm(false);await ui.panel.importCurrent();assert.equal(ui.calls.length,0);

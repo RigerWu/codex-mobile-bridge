@@ -100,7 +100,12 @@ class DesktopClientAccountsPanel {
   queryTime(seconds){const date=new Date(seconds*1000),pad=value=>String(value).padStart(2,'0');return `${date.getFullYear()}-${pad(date.getMonth()+1)}-${pad(date.getDate())} ${pad(date.getHours())}:${pad(date.getMinutes())}`;}
   usage(box,row){
     const usage=row.usage||row.quota;
-    if(row.kind==='api'&&!usage?.balance)return;
+    const heading=this.node('div',undefined,'accounts-client-usage-heading');
+    heading.append(this.node('strong',this.provider==='claude'?'剩余额度':'账户余额'));
+    const refresh=this.button(this.queryingId===row.id?'查询中…':this.provider==='claude'?'查看剩余额度':'刷新余额',()=>this.perform({action:'details',id:row.id,refresh:true}));
+    refresh.className='accounts-client-usage-refresh';refresh.disabled=this.busy||this.loading;
+    heading.append(refresh);box.append(heading);
+    const results=this.node('div',undefined,'accounts-client-usage-results');
     let shown=false;
     for(const bucket of usage?.limits||[])for(const window of bucket.windows||[]){
       const line=this.node('div',undefined,'accounts-window'),percent=window.remainingPercent;
@@ -108,17 +113,18 @@ class DesktopClientAccountsPanel {
       line.append(this.node('span',[bucket.name,this.text(this.duration(window.windowDurationMins))].filter(Boolean).join(' · ')),this.node('strong',remaining));
       if(Number.isFinite(percent)){const progress=this.node('progress');progress.max=100;progress.value=Math.min(100,Math.max(0,percent));progress.setAttribute('aria-label',this.text('剩余额度'));line.append(progress);}
       if(window.resetsAt)line.append(this.node('small',this.text('恢复时间：')+new Date(window.resetsAt*1000).toLocaleString(BridgeI18n.locale()),'account-reset-time'));
-      box.append(line);shown=true;
+      results.append(line);shown=true;
     }
     for(const wallet of usage?.balance?.wallets||[]){
       const line=this.node('div',undefined,'accounts-window');line.append(this.node('span','账户余额'),this.node('strong',[wallet.currency,wallet.remaining].filter(value=>value!=null).join(' ')));
       if(wallet.toppedUp!=null||wallet.granted!=null)line.append(this.node('small',[wallet.toppedUp!=null?this.text('充值余额：')+wallet.toppedUp:'',wallet.granted!=null?this.text('赠送余额：')+wallet.granted:''].filter(Boolean).join(' · '),'account-reset-time'));
-      box.append(line);shown=true;
+      results.append(line);shown=true;
     }
-    if(!shown)box.append(this.node('span',usage?.status==='error'?(usage.error||'额度查询失败'):usage?.status==='loading'?'查询中…':usage?.status==='unsupported'?'暂未提供额度信息':!usage&&this.provider==='claude'?'尚未查询':!usage?'正在读取额度…':'暂未提供额度信息','account-muted'));
-    if(shown&&usage?.status==='error')box.append(this.node('small',this.text(usage.error||'额度查询失败')+' · '+this.text('保留上次结果，数据尚未更新'),'account-muted'));
-    if(usage?.checkedAt)box.append(this.node('small',this.text(this.provider==='claude'?'查询时间：':'更新于：')+(this.provider==='claude'?this.queryTime(usage.checkedAt):new Date(usage.checkedAt*1000).toLocaleString(BridgeI18n.locale())),'account-updated'));
-    const refresh=this.button(this.queryingId===row.id?'查询中…':'查看剩余额度',()=>this.perform({action:'details',id:row.id,refresh:true}));refresh.disabled=this.busy||this.loading;box.append(refresh);
+    const unavailable=this.provider==='claude'?'暂未提供额度信息':'余额信息暂不可用',failure=this.provider==='claude'?'额度查询失败':'余额查询失败';
+    if(!shown)results.append(this.node('span',usage?.status==='error'?(usage.error||failure):usage?.status==='loading'?'查询中…':usage?.status==='unsupported'?unavailable:!usage&&this.provider==='claude'?'尚未查询':!usage?'正在读取余额…':unavailable,'account-muted'));
+    if(shown&&usage?.status==='error')results.append(this.node('small',this.text(usage.error||failure)+' · '+this.text('保留上次结果，数据尚未更新'),'account-muted'));
+    if(usage?.checkedAt)results.append(this.node('small',this.text(this.provider==='claude'?'查询时间：':'更新于：')+(this.provider==='claude'?this.queryTime(usage.checkedAt):new Date(usage.checkedAt*1000).toLocaleString(BridgeI18n.locale())),'account-updated'));
+    box.append(results);
   }
   async toggleModels(){
     this.modelsOpen=!this.modelsOpen;if(!this.modelsOpen||this.models){this.render();return;}
@@ -160,10 +166,10 @@ class DesktopClientAccountsPanel {
     const activeIds=this.activeIds(),accounts=[...(value?.accounts||[])].sort((a,b)=>Number(activeIds.has(b.id))-Number(activeIds.has(a.id)));
     if(value&&!accounts.length)this.rows.append(this.node('p','尚未保存此客户端的接入。','account-muted'));
     for(const row of accounts){
-      const active=activeIds.has(row.id),card=this.node('section',undefined,'account-bucket'+(active?' is-current':'')),identity=this.node('div',undefined,'accounts-identity'),name=this.node('div',undefined,'accounts-name'),heading=this.node('div',undefined,'accounts-name-heading');
-      heading.append(this.node('h3',row.name||row.email||row.id));if(row.saved===false)heading.append(this.node('span','尚未保存','account-muted'));if(active)heading.append(this.node('span','当前接入','accounts-plan'));name.append(heading);
-      name.append(this.node('p',row.kind==='api'?'API 接入':'官方账号','account-muted'));if(row.email)name.append(this.node('p',row.email,'account-muted'));identity.append(name);
-      const usage=this.node('div',undefined,'accounts-usage');this.usage(usage,row);if(usage.children.length)identity.append(usage);card.append(identity);
+      const active=activeIds.has(row.id),card=this.node('section',undefined,'account-bucket accounts-client-card'+(active?' is-current':'')),identity=this.node('div',undefined,'accounts-identity'),name=this.node('div',undefined,'accounts-name'),heading=this.node('div',undefined,'accounts-name-heading');
+      heading.append(this.node('h3',row.name||row.email||row.id));if(active)heading.append(this.node('span','当前接入','accounts-plan'));if(row.saved===false)heading.append(this.node('span','尚未保存','account-muted'));name.append(heading);
+      name.append(this.node('p',row.kind==='api'?'API 接入':'官方账号','account-muted'));if(row.email)name.append(this.node('p',row.email,'account-muted'));identity.append(name);card.append(identity);
+      if(row.kind!=='api'){const usage=this.node('div',undefined,'accounts-usage accounts-client-usage');this.usage(usage,row);card.append(usage);}
       const actions=this.node('div',undefined,'accounts-actions'),switcher=this.button(active?'当前接入':'切换到此接入',()=>this.choose(row));switcher.disabled=active||this.busy||this.loading||value.canSwitch!==true;actions.append(switcher);
       if(this.provider==='claude'&&!active){const label=this.node('label',undefined,'account-reminder'),checkbox=this.node('input');checkbox.type='checkbox';checkbox.checked=row.kind==='api'&&this.syncLocalCliIds.has(row.id);checkbox.disabled=row.kind!=='api'||this.busy||this.loading;checkbox.onchange=()=>{if(checkbox.checked)this.syncLocalCliIds.add(row.id);else this.syncLocalCliIds.delete(row.id);};label.append(checkbox,this.node('span','同时应用到本机 CLI'));actions.append(label);if(row.kind!=='api')actions.append(this.node('small','官方 Claude Desktop 登录不能直接同步到 Claude Code CLI','account-muted'));}
       if(this.desktop&&row.saved!==false){for(const [label,fn] of [['编辑',()=>this.editAccount(row)],['删除',()=>this.removeAccount(row)]]){const button=this.button(label,fn);button.disabled=this.busy||this.loading;actions.append(button);}}

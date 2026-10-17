@@ -34,6 +34,16 @@ def session_file_lock(path):
                 fcntl.flock(stream, fcntl.LOCK_UN)
 
 
+def replace_session_file(path, contents):
+    temporary = path.with_name(path.name + '.' + secrets.token_hex(8) + '.tmp')
+    try:
+        with os.fdopen(os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600), 'wb') as stream:
+            stream.write(contents)
+        temporary.replace(path)
+    finally:
+        temporary.unlink(missing_ok=True)
+
+
 def session_hours(value):
     if type(value) is not int or not 0 <= value <= 87600:
         raise ValueError('登录有效期必须为 0–87600 的整数小时')
@@ -136,34 +146,41 @@ class Auth:
             current = self.path.read_bytes() if self.path.exists() else None
             if current != self._loaded:
                 raise ValueError('设备授权已变化，请刷新后重试')
-            temporary = self.path.with_name(self.path.name + '.' + secrets.token_hex(8) + '.tmp')
-            try:
-                with os.fdopen(os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600), 'w', encoding='utf-8') as stream:
-                    json.dump({'identity': self.identity, 'cookieName': self.cookie_name, 'policy': self.policy, 'sessions': self.sessions, 'failures': self.failures, 'autoBlocks': self.auto_blocks}, stream)
-                temporary.replace(self.path)
-                self._loaded = self.path.read_bytes()
-            finally:
-                temporary.unlink(missing_ok=True)
+            contents = json.dumps({'identity': self.identity, 'cookieName': self.cookie_name, 'policy': self.policy, 'sessions': self.sessions, 'failures': self.failures, 'autoBlocks': self.auto_blocks}).encode('utf-8')
+            replace_session_file(self.path, contents)
+            self._loaded = contents
 
     @classmethod
-    def preserve_trusted_on_password_change(cls, old_config, new_config, data_dir):
-        """Move only current native-client sessions to the new credential identity.
+    def preserve_trusted_on_password_change(cls, old_config, new_config, data_dir, publish_config):
+        """Move current trusted phone sessions and publish credentials as one locked operation.
 
-        Call while the gateway is stopped, before publishing the new config. A
-        crash between these writes fails closed under either credential set.
+        A process crash between session and config writes fails closed. A
+        caught config-write failure restores the exact previous session file.
         """
-        old = cls(old_config, data_dir)
-        changed = cls(new_config)
-        if old.path and old.path.exists():
-            # persist rejects a stale snapshot under the shared file lock.
-            saved = json.loads(old._loaded)
-            if saved['identity'] != old.identity:
+        path = Path(data_dir) / 'auth-sessions.json'
+        old_identity = cls(old_config).identity
+        new_identity = cls(new_config).identity
+        with session_file_lock(path):
+            before = path.read_bytes() if path.exists() else None
+            if before is None:
+                publish_config()
+                return
+            saved = json.loads(before)
+            if saved['identity'] != old_identity:
                 raise ValueError('设备授权已变化，请刷新后重试')
-            old.sessions = {key: session for key, session in saved['sessions'].items()
-                            if cls.valid(session) and session.get('trustedDevice') is True
-                            and cls.mobile_client(session.get('userAgent', ''))}
-            old.identity = changed.identity
-            old.persist()
+            migrated = {**saved, 'identity': new_identity,
+                        'sessions': {key: session for key, session in saved['sessions'].items()
+                                     if cls.valid(session) and session.get('trustedDevice') is True
+                                     and cls.mobile_client(session.get('userAgent', ''))}}
+            after = json.dumps(migrated).encode('utf-8')
+            replace_session_file(path, after)
+            try:
+                publish_config()
+            except Exception:
+                # No cooperating writer can change this file while the lock is held.
+                if path.read_bytes() == after:
+                    replace_session_file(path, before)
+                raise
 
     def permitted(self, address):
         with self.lock:

@@ -2,6 +2,7 @@ import copy
 import os
 import socket
 import tempfile
+import threading
 import unittest
 from pathlib import Path
 from unittest.mock import patch
@@ -118,6 +119,77 @@ class DesktopTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             self.desktop.save(value)
         self.assertEqual(self.desktop.config_path.read_bytes(), before)
+
+    def test_failed_config_write_restores_phone_bindings_and_can_retry(self):
+        value = self.value()
+        old_config = self.desktop.config()['auth']
+        phone, _ = Auth(old_config, self.directory).new_session('192.0.2.1', 'BridgeMobile/0.1-iOS')
+        before_config = self.desktop.config_path.read_bytes()
+        before_sessions = (self.directory/'auth-sessions.json').read_bytes()
+        value['auth'].update(password='new-password-for-testing', revokeBoundDevices=False)
+        from bridge.app.desktop import write_json
+        with patch('bridge.app.desktop.write_json', side_effect=lambda path, data: (_ for _ in ()).throw(OSError('disk full')) if path == self.desktop.config_path else write_json(path, data)):
+            with self.assertRaises(OSError):
+                self.desktop.save(value)
+        self.assertEqual(self.desktop.config_path.read_bytes(), before_config)
+        self.assertEqual((self.directory/'auth-sessions.json').read_bytes(), before_sessions)
+        self.assertIsNotNone(Auth(old_config, self.directory).get(phone))
+        self.desktop.save(value)
+        self.assertIsNotNone(Auth(self.desktop.config()['auth'], self.directory).get(phone))
+
+    def test_stale_credential_migration_rejects_without_erasing_new_bindings(self):
+        value = self.value()
+        old_config = dict(self.desktop.config()['auth'])
+        phone, _ = Auth(old_config, self.directory).new_session('192.0.2.1', 'BridgeMobile/0.1-iOS')
+        value['auth'].update(password='new-password-for-testing', revokeBoundDevices=False)
+        self.desktop.save(value)
+        current_config = dict(self.desktop.config()['auth'])
+        current_sessions = (self.directory/'auth-sessions.json').read_bytes()
+        with self.assertRaises(ValueError):
+            Auth.preserve_trusted_on_password_change(old_config, {**old_config, 'hash': 'stale-new-hash'},
+                                                     self.directory, lambda: self.fail('stale config published'))
+        self.assertEqual((self.directory/'auth-sessions.json').read_bytes(), current_sessions)
+        self.assertIsNotNone(Auth(current_config, self.directory).get(phone))
+
+    def test_concurrent_password_saves_preserve_only_current_bindings(self):
+        first = self.value()
+        second = self.value()
+        phone, _ = Auth(self.desktop.config()['auth'], self.directory).new_session('192.0.2.1', 'BridgeMobile/0.1-iOS')
+        first['auth'].update(password='first-new-password', revokeBoundDevices=False)
+        second['auth'].update(password='second-new-password', revokeBoundDevices=False)
+        entered = threading.Event()
+        release = threading.Event()
+        errors = []
+        from bridge.app.desktop import password_record
+        calls = 0
+
+        def delayed_record(password):
+            nonlocal calls
+            calls += 1
+            if calls == 1:
+                entered.set()
+                if not release.wait(5):
+                    raise TimeoutError('first save did not resume')
+            return password_record(password)
+
+        def save(desktop, value):
+            try:
+                desktop.save(value)
+            except Exception as error:
+                errors.append(error)
+
+        with patch('bridge.app.desktop.password_record', side_effect=delayed_record):
+            one = threading.Thread(target=save, args=(self.desktop, first))
+            two = threading.Thread(target=save, args=(Desktop(self.directory), second))
+            one.start()
+            self.assertTrue(entered.wait(5))
+            two.start()
+            release.set()
+            one.join(10)
+            two.join(10)
+        self.assertFalse(one.is_alive() or two.is_alive())
+        self.assertEqual(errors, [])
+        self.assertIsNotNone(Auth(self.desktop.config()['auth'], self.directory).get(phone))
 
     def test_account_change_cannot_keep_phone_binding(self):
         value = self.value()

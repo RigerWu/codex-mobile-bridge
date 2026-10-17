@@ -13,7 +13,7 @@ from pathlib import Path
 
 from bridge.resources import project_root
 
-from bridge.features.auth.auth import Auth, password_record, session_hours
+from bridge.features.auth.auth import Auth, password_record, session_hours, session_file_lock
 from bridge.app.lifecycle import read_record, request_stop, request_pairing
 from bridge.features.notifications.channels import Notifications, read_json, write_json, settings, save_settings, publish, publish_bark, publish_pushplus
 from bridge.features.sessions.store import SessionStore, StoreUnavailable
@@ -192,6 +192,10 @@ class Desktop:
                 'runtime': runtime, 'urls': urls, 'externalStatus': external, 'cloudflared': cloudflared, 'quickTunnel': quick}
 
     def save(self, value):
+        with session_file_lock(self.config_path):
+            return self._save(value)
+
+    def _save(self, value):
         old_preferences = self.preferences()
         preferences = {**old_preferences, **{k: v for k, v in value['preferences'].items() if k in old_preferences}}
         preferences['connections'] = access.validate_connections(preferences)
@@ -254,8 +258,10 @@ class Desktop:
         config['lanAddresses'] = preferences['lanAddresses']
         config['localAccess'] = preferences['localAccess']
         if preserve_bound_devices:
-            Auth.preserve_trusted_on_password_change(old_auth, config['auth'], self.data_dir)
-        write_json(self.config_path, config)
+            Auth.preserve_trusted_on_password_change(old_auth, config['auth'], self.data_dir,
+                                                     lambda: write_json(self.config_path, config))
+        else:
+            write_json(self.config_path, config)
         write_json(self.data_dir/'desktop.json', preferences)
         if password:
             (self.data_dir/'首次登录.txt').unlink(missing_ok=True)

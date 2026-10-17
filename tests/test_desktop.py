@@ -180,7 +180,9 @@ class DesktopTests(unittest.TestCase):
 
         with patch('bridge.app.desktop.password_record', side_effect=delayed_record):
             one = threading.Thread(target=save, args=(self.desktop, first))
-            two = threading.Thread(target=save, args=(Desktop(self.directory), second))
+            other = Desktop(self.directory)
+            other.status = self.desktop.status
+            two = threading.Thread(target=save, args=(other, second))
             one.start()
             self.assertTrue(entered.wait(5))
             two.start()

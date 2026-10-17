@@ -2636,12 +2636,18 @@ class Bridge:
         self.terminals.close()
         self.side_chats.close()
         self.closed.set()
+        if hasattr(self.catalog_reader, 'stop_model_refresh'):
+            self.catalog_reader.stop_model_refresh()
         with self.native_model_lock:
             for timer in self.native_model_timers.values():
                 timer.cancel()
             self.native_model_timers.clear()
         if self.host == "local" and self.accounts:
             self.accounts.login_cancel.set()
+            with self.accounts.lock:
+                for timer in self.accounts.api_model_timers.values():
+                    timer.cancel()
+                self.accounts.api_model_timers.clear()
         for bridge in list(self.remote_bridges.values()):
             bridge.close()
         with self.lock:

@@ -212,19 +212,64 @@ class InfoTests(unittest.TestCase):
         info = self.manager.info
         account_key = 'a' * 64
         identity = {'kind': 'chatgpt', 'name': 'ChatGPT',
-                    'login': {'owner': None, 'context': {'accountKey': account_key, 'email': 'fixture@example.test'}}}
+                    'login': {'owner': None, 'context': {'accountKey': account_key, 'email': 'fixture@example.test',
+                                                        '_routeCacheKey': 'route-a'}}}
         info.identity = identity
         info.stamp = info.source_stamp()
         info.checked_at = time.time()
         row = info.current_login()
         self.assertTrue(row['transient'])
+        with patch('bridge.features.accounts.info.threading.Thread') as worker:
+            info.request({'id': row['id'], 'section': 'models'})
+            args = worker.call_args.kwargs['args']
+        self.assertEqual(info.entries[row['id']]['models']['_routeCacheKey'], 'route-a')
         with patch.object(info, 'read_identity', return_value=identity), patch.object(
                 self.bridge.catalog_reader, 'get_kind', return_value={'models': [{'id': 'fixture-model'}]}, create=True) as catalog:
-            info.read(row, 'models')
+            info.read(*args)
         self.assertEqual(info.entries[row['id']]['models']['models'], [{'id': 'fixture-model'}])
+        self.assertEqual(info.entries[row['id']]['models']['_routeCacheKey'], 'route-a')
+        self.assertEqual(self.manager.public()['loginAccount']['details']['models']['models'],
+                         [{'id': 'fixture-model'}])
+        self.assertNotIn('_routeCacheKey', json.dumps(self.manager.public()))
+        with patch('bridge.features.accounts.info.threading.Thread') as worker:
+            info.request({'id': row['id'], 'section': 'models'})
+            worker.assert_not_called()
         catalog.assert_called_once_with('models', str(self.home), refresh=False, provider='openai')
         with patch.object(info, 'read_identity', return_value={**identity, 'kind': 'api'}), patch.object(
                 self.bridge.catalog_reader, 'get_kind', create=True) as catalog:
             info.read(row, 'models', refresh=True)
         catalog.assert_not_called()
         self.assertEqual(info.entries[row['id']]['models']['status'], 'error')
+
+    def test_transient_models_discard_changed_login_or_route_and_end_failed_loading(self):
+        info = self.manager.info
+        original = {'kind': 'chatgpt', 'name': 'ChatGPT', 'login': {'owner': None, 'context': {
+            'accountKey': 'a' * 64, '_routeCacheKey': 'route-a'}}}
+        info.identity = original
+        info.stamp = info.source_stamp()
+        info.checked_at = time.time()
+        for changed_context in ({'accountKey': 'b' * 64, '_routeCacheKey': 'route-a'},
+                                {'accountKey': 'a' * 64, '_routeCacheKey': 'route-b'}):
+            with self.subTest(changed_context=changed_context):
+                info.identity = original
+                info.entries.clear()
+                with patch('bridge.features.accounts.info.threading.Thread') as worker:
+                    info.request({'id': 'current-login', 'section': 'models'})
+                    args = worker.call_args.kwargs['args']
+                changed = {**original, 'login': {**original['login'], 'context': changed_context}}
+                def change_during_catalog(*args, **kwargs):
+                    info.identity = changed
+                    return {'models': [{'id': 'stale-model'}]}
+                with patch.object(info, 'read_identity', side_effect=[original, changed]), patch.object(
+                        self.bridge.catalog_reader, 'get_kind', side_effect=change_during_catalog, create=True):
+                    info.read(*args)
+                self.assertNotIn('models', info.entries['current-login'])
+        info.identity = original
+        with patch('bridge.features.accounts.info.threading.Thread') as worker:
+            info.request({'id': 'current-login', 'section': 'models'})
+            args = worker.call_args.kwargs['args']
+        with patch.object(info, 'read_identity', return_value=original), patch.object(
+                self.bridge.catalog_reader, 'get_kind', return_value={'modelError': 'upstream unavailable'}, create=True):
+            info.read(*args)
+        self.assertEqual(info.entries['current-login']['models']['status'], 'error')
+        self.assertNotEqual(info.entries['current-login']['models']['status'], 'loading')

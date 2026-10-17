@@ -21,6 +21,16 @@ MAX_UNSCANNED_CHARS = 16 * 1024
 RASTER_TYPES = {'image/png': 'png', 'image/jpeg': 'jpg', 'image/gif': 'gif', 'image/webp': 'webp'}
 
 
+def json_size_within(value, limit, *, ensure_ascii):
+    """Count JSON characters up to a limit without materializing the whole value."""
+    size = 0
+    for chunk in json.JSONEncoder(ensure_ascii=ensure_ascii).iterencode(value):
+        size += len(chunk)
+        if size > limit:
+            return None
+    return size
+
+
 def decode_tool_image(data, mime):
     if (not isinstance(mime, str) or mime not in RASTER_TYPES or not isinstance(data, str)
             or len(data) > ((MAX_IMAGE_BYTES + 2) // 3) * 4):
@@ -34,7 +44,7 @@ def decode_tool_image(data, mime):
 
 def extract_tool_images(output, *, remember=None):
     """Return sanitized output and image descriptors for native or JSON-wrapped MCP results."""
-    images, seen = [], set()
+    images, seen_data = [], {}
     total = nodes = parsed_chars = kept = 0
     exhausted = False
 
@@ -44,7 +54,8 @@ def extract_tool_images(output, *, remember=None):
         nonlocal kept, exhausted
         if not exhausted:
             try:
-                size = len(value) if isinstance(value, str) else len(json.dumps(value, ensure_ascii=False))
+                size = len(value) if isinstance(value, str) else json_size_within(
+                    value, MAX_UNSCANNED_CHARS - kept, ensure_ascii=False)
             except (TypeError, ValueError, RecursionError):
                 size = None
             if size is not None and kept + size <= MAX_UNSCANNED_CHARS:
@@ -94,14 +105,25 @@ def extract_tool_images(output, *, remember=None):
             elif not isinstance(data, str):
                 return value
             placeholder = {'type': 'image', 'preview': 'unavailable'}
+            if not isinstance(data, str) or not isinstance(mime, str) or mime not in RASTER_TYPES:
+                return placeholder
+            known = seen_data.get((mime, data))
+            if known is not None:
+                return {'type': 'image', 'mimeType': mime, 'preview': known}
+            # Base64 length bounds decoded bytes before allocating them. A
+            # repeated accepted payload was handled above even at the limit.
+            remaining = min(MAX_IMAGE_BYTES, MAX_TOTAL_BYTES - total)
+            if (len(images) >= MAX_IMAGES or remaining <= 0 or
+                    len(data) > ((remaining + 2) // 3) * 4):
+                return placeholder
             raw = decode_tool_image(data, mime)
             if raw is None:
                 return placeholder
             identifier = hashlib.sha256(raw).hexdigest()
-            if identifier not in seen:
-                if len(images) >= MAX_IMAGES or total + len(raw) > MAX_TOTAL_BYTES:
-                    return placeholder
-                seen.add(identifier)
+            if total + len(raw) > MAX_TOTAL_BYTES:
+                return placeholder
+            seen_data[(mime, data)] = identifier
+            if identifier not in (image['desktopId'] for image in images):
                 total += len(raw)
                 images.append({'type': 'toolImage', 'desktopId': identifier, 'mime': mime,
                                'name': 'Image ' + str(len(images) + 1) + '.' + RASTER_TYPES[mime], 'data': data})
@@ -168,17 +190,26 @@ class ToolImageCache:
     def extract(self, output):
         # Key by content, not mutable item identity: live patches can replace or
         # edit an output in place without changing its tool-call id.
-        encoded = json.dumps(output, ensure_ascii=True, separators=(',', ':')).encode('ascii')
-        key = hashlib.sha256(encoded).digest()
+        digest = hashlib.sha256()
+        input_size = 0
+        encoder = json.JSONEncoder(ensure_ascii=True, separators=(',', ':'))
+        for chunk in encoder.iterencode(output):
+            input_size += len(chunk)
+            if input_size > self.output_limit:
+                break
+            digest.update(chunk.encode('ascii'))
+        key = digest.digest() if input_size <= self.output_limit else None
         with self.lock:
-            entry = self.outputs.get(key)
+            entry = self.outputs.get(key) if key is not None else None
             if entry is not None:
                 self.outputs.move_to_end(key)
                 return copy.deepcopy(entry[0])
             result = extract_tool_images(output, remember=self._remember)
             # Conservatively count input plus cached projection and metadata.
-            size = len(encoded) + len(json.dumps(result, ensure_ascii=True).encode('ascii')) + 1024
-            if size <= self.output_limit:
+            result_size = json_size_within(result, self.output_limit - input_size - 1024,
+                                           ensure_ascii=True) if key is not None else None
+            size = input_size + result_size + 1024 if result_size is not None else self.output_limit + 1
+            if key is not None and size <= self.output_limit:
                 self._put(self.outputs, key, copy.deepcopy(result), size,
                           'output_bytes', self.output_limit)
             return result

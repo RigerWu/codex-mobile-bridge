@@ -132,6 +132,25 @@ class ToolImageTests(unittest.TestCase):
             nested = {'content': [nested]}
         self.assertEqual(extract_tool_images(nested)[1], [])
 
+    def test_overflow_images_are_rejected_before_decode(self):
+        from bridge.features.sessions.tool_images import extract_tool_images
+        original = tool_images.decode_tool_image
+        with patch.object(tool_images, 'decode_tool_image', wraps=original) as decode:
+            with patch.object(tool_images, 'MAX_IMAGES', 1):
+                clean, images = extract_tool_images({'content': [image(), image(),
+                                                               image(base64.b64encode(base64.b64decode(PNG) + b'new').decode())]})
+            self.assertEqual(decode.call_count, 1)
+            self.assertEqual(len(images), 1)
+            self.assertEqual(clean['content'][1]['preview'], images[0]['desktopId'])
+            self.assertEqual(clean['content'][2]['preview'], 'unavailable')
+        with patch.object(tool_images, 'decode_tool_image', wraps=original) as decode:
+            with patch.object(tool_images, 'MAX_TOTAL_BYTES', len(base64.b64decode(PNG))):
+                clean, images = extract_tool_images({'content': [image(), image(),
+                                                               image(base64.b64encode(base64.b64decode(PNG) + b'new').decode())]})
+            self.assertEqual(decode.call_count, 1)
+            self.assertEqual(len(images), 1)
+            self.assertEqual(clean['content'][2]['preview'], 'unavailable')
+
     def test_unscanned_bulk_past_budgets_is_omitted_and_small_values_are_kept(self):
         from bridge.features.sessions.tool_images import extract_tool_images, MAX_UNSCANNED_CHARS
         bulk = 'A' * (MAX_UNSCANNED_CHARS + 1)

@@ -13,6 +13,8 @@
 :is(#model-dialog,.ds-model-dialog) .tool-button{display:inline-flex;align-items:center;gap:6px;max-width:none}
 :is(#model-dialog,.ds-model-dialog) .tool-button svg{width:15px;height:15px;fill:none;stroke:currentColor;stroke-width:1.8;stroke-linecap:round;stroke-linejoin:round}
 :is(#model-form,.ds-model-form){display:grid;gap:18px}
+:is(#model-updated,.ds-model-form > small.muted){min-width:0;overflow-wrap:anywhere;font-size:11px}
+#model-updated:empty{display:none}
 :is(#model-dialog,.ds-model-dialog) .model-field{min-width:0}
 :is(#model-dialog,.ds-model-dialog) .model-section-title{margin-bottom:9px;color:var(--muted);font-size:12px;font-weight:650;letter-spacing:.02em}
 :is(#model-dialog,.ds-model-dialog) #model-list-field{position:relative}

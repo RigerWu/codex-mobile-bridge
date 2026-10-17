@@ -64,7 +64,7 @@ class DesktopClientAccountsPanel {
   activeIds(value=this.value){return new Set(value?.activeIds||[value?.activeId].filter(Boolean));}
   accept(value,notifyChange=true){
     if(!value||!Array.isArray(value.accounts))throw Error(this.text('账号信息暂不可用'));
-    const previous=this.value,changed=this.value&&JSON.stringify([...this.activeIds()].sort())!==JSON.stringify([...this.activeIds(value)].sort());this.value=value;
+    const previous=this.value,changed=this.value&&(JSON.stringify([...this.activeIds()].sort())!==JSON.stringify([...this.activeIds(value)].sort())||(this.value.modelCatalogIdentity||'')!==(value.modelCatalogIdentity||''));this.value=value;
     if(changed){this.modelsRevision++;this.modelsLoading=false;this.models=null;this.modelsOpen=false;if(notifyChange)this.onChanged(value,previous);}this.onUpdate(value);this.render();
   }
   async refresh(force=true){
@@ -80,7 +80,7 @@ class DesktopClientAccountsPanel {
   }
   async perform(value){
     if(this.disposed||this.busy||this.loading)return false;clearTimeout(this.timer);this.busy=true;this.queryingId=this.provider==='claude'&&value.action==='details'?value.id:null;this.error='';this.render();const generation=this.generation;
-    try{const result=await this.request(value);if(generation!==this.generation)return false;this.accept(result,!['import-current','save-api','rename','remove'].includes(value.action));return true;}
+    try{const result=await this.request(value);if(generation!==this.generation)return false;if(['switch','import-current','save-api','remove'].includes(value.action)){this.modelsRevision++;this.models=null;this.modelsOpen=false;}this.accept(result,!['import-current','save-api','rename','remove'].includes(value.action));return true;}
     catch(error){if(generation===this.generation)this.error=error.message;return false;}
     finally{if(generation===this.generation){this.busy=false;this.queryingId=null;this.checkedAt=Date.now();this.render();if(this.value)this.onUpdate(this.value);this.schedule();}}
   }
@@ -135,19 +135,20 @@ class DesktopClientAccountsPanel {
     box.append(results);
   }
   async toggleModels(){
-    this.modelsOpen=!this.modelsOpen;if(!this.modelsOpen||this.models){this.render();return;}
+    this.modelsOpen=!this.modelsOpen;if(!this.modelsOpen){this.render();return;}
+    if(!this.value?.modelCatalogIdentity)this.models=null;
     return this.loadModels();
   }
   async loadModels(refresh=false){
-    const generation=this.generation,revision=++this.modelsRevision;this.modelsError='';this.modelsLoading=true;this.render();
-    try{const value=await this.readModels(refresh);if(generation!==this.generation||revision!==this.modelsRevision)return;this.models=value;}
+    const generation=this.generation,revision=++this.modelsRevision,identity=this.value?.modelCatalogIdentity||'';this.modelsError='';this.modelsLoading=true;this.render();
+    try{const value=await this.readModels(refresh);if(generation!==this.generation||revision!==this.modelsRevision)return;if(identity&&value.cache?.identity!==identity){this.models=null;throw Error(this.text('账号已切换，请重新打开模型设置'));}this.models=value;}
     catch(error){if(generation===this.generation&&revision===this.modelsRevision)this.modelsError=error.message;}
     finally{if(generation===this.generation&&revision===this.modelsRevision){this.modelsLoading=false;this.render();}}
   }
   renderModels(box){
     const controls=this.node('div',undefined,'accounts-model-controls'),refresh=this.button('刷新模型',()=>this.loadModels(true));refresh.disabled=this.modelsLoading;controls.append(refresh);
-    const updated=this.models?.cache?.updatedAt;if(Number.isFinite(updated))controls.append(this.node('small',this.text('更新于：')+new Date(updated*1000).toLocaleString(BridgeI18n.locale()),'account-muted'));box.append(controls);
-    if(this.modelsLoading)box.append(this.node('p','正在读取模型…','account-muted'));
+    const updated=this.models?.cache?.updatedAt;if(Number.isFinite(updated)&&updated>0)controls.append(this.node('small',this.text('更新于：')+new Date(updated*1000).toLocaleString(BridgeI18n.locale()),'account-muted'));box.append(controls);
+    if(this.modelsLoading&&!this.models)box.append(this.node('p','正在读取模型…','account-muted'));
     if(this.modelsError||this.models?.modelError)box.append(this.node('p',this.modelsError||this.models.modelError,'error'));
     if(!this.models&&(this.modelsLoading||this.modelsError))return;
     let count=0;const groups=this.models?.groups?.length?this.models.groups:[{models:this.models?.models||this.models?.catalog?.models||[]}];

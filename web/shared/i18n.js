@@ -1364,6 +1364,7 @@ const en={
 "无法创建切换请求，请刷新页面后重试": "Could not create a switch request. Reload and retry.",
 "正在读取额度…": "Loading usage…",
 "刷新模型": "Refresh models",
+"账号已切换，请重新打开模型设置": "The account changed. Reopen model settings.",
 "查看可用模型": "View available models",
 "收起模型": "Hide models",
 "正在读取模型…": "Loading models…",

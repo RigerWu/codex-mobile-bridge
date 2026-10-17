@@ -162,9 +162,17 @@ test('closing account panel discards a late edit response and erases typed key',
 });
 
 test('model catalog reopens from cache; only explicit refresh forces upstream and preserves old rows',async()=>{
- const ui=fixture({provider:'claude'}),calls=[];
- ui.panel.accept(snapshot([row('current')]));ui.setHandler(async body=>{calls.push(body);return {cache:{updatedAt:1000},models:[{id:'concrete-model',efforts:['low','high']}]};});
- await ui.panel.toggleModels();await ui.panel.toggleModels();await ui.panel.toggleModels();assert.equal(calls.length,1);assert.equal(calls[0].refresh,false);assert.match(ui.text(),/concrete-model/);assert.match(ui.text(),/更新于：/);
+ const ui=fixture({provider:'claude'}),calls=[],identity='a'.repeat(64);
+ ui.panel.accept({...snapshot([row('current')]),modelCatalogIdentity:identity});ui.setHandler(async body=>{calls.push(body);return {cache:{identity,updatedAt:1000},models:[{id:'concrete-model',efforts:['low','high']}]};});
+ await ui.panel.toggleModels();await ui.panel.toggleModels();await ui.panel.toggleModels();assert.equal(calls.length,2);assert.equal(calls[0].refresh,false);assert.equal(calls[1].refresh,false);assert.match(ui.text(),/concrete-model/);assert.match(ui.text(),/更新于：/);
  ui.setHandler(async body=>{calls.push(body);throw Error('upstream temporarily unavailable');});await ui.all().find(n=>n.tag==='button'&&n.textContent==='刷新模型').onclick();assert.equal(calls.at(-1).refresh,true);assert.match(ui.text(),/concrete-model/);assert.match(ui.text(),/upstream temporarily unavailable/);assert.equal(ui.calls.some(c=>c.action==='details'),false);
  ui.english();assert.match(ui.text(),/Refresh models/);
+});
+test('same saved account ID with changed model identity clears rows and rejects old reads',async()=>{
+ const ui=fixture({provider:'claude'}),a='a'.repeat(64),b='b'.repeat(64),account=s=>({...snapshot([row('current')]),modelCatalogIdentity:s});
+ ui.panel.accept(account(a));ui.setHandler(async()=>({cache:{identity:a,updatedAt:1000},models:[{id:'model-a'}]}));await ui.panel.toggleModels();assert.match(ui.text(),/model-a/);
+ let finish;ui.setHandler(()=>new Promise(resolve=>finish=resolve));const pending=ui.panel.loadModels();ui.panel.accept(account(b));assert.equal(ui.panel.models,null);assert.doesNotMatch(ui.text(),/model-a/);
+ finish({cache:{identity:a,updatedAt:1000},models:[{id:'model-a'}]});await pending;assert.equal(ui.panel.models,null);
+ ui.panel.modelsOpen=true;ui.setHandler(async()=>({cache:{identity:b,updatedAt:2000},models:[{id:'model-b'}]}));await ui.panel.loadModels();assert.match(ui.text(),/model-b/);
+ ui.setHandler(async()=>({cache:{identity:a,updatedAt:1000},models:[{id:'model-a'}]}));await ui.panel.loadModels();assert.equal(ui.panel.models,null);assert.doesNotMatch(ui.text(),/model-a|model-b/);
 });

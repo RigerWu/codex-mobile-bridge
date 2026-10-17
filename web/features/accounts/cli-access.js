@@ -55,7 +55,7 @@ class CliAccessPanel {
     if(this.busy)return;
     const generation=++this.generation;
     this.setBusy(true);this.status.textContent=this.t('正在读取…');this.error.textContent='';
-    try{const value=await this.read();if(generation===this.generation){this.value=value;this.render();}}
+    try{const value=await this.read();if(generation===this.generation){this.value=value;for(const row of value?.[this.provider]?.accounts||[])if(!row.modelCatalogIdentity)this.apiResults.delete(row.id);this.render();}}
     catch(error){if(generation===this.generation){this.error.textContent=this.t(error.message);this.status.textContent='';}}
     finally{if(generation===this.generation)this.setBusy(false);}
   }
@@ -67,19 +67,22 @@ class CliAccessPanel {
     catch(error){if(generation===this.generation){this.error.textContent=this.t(error.message);this.status.textContent='';}}
     finally{if(value.apiKey)value.apiKey='';if(generation===this.generation)this.setBusy(false);}
   }
-  async probe(row,action){
+  async probe(row,action,refresh=false){
     if(this.busy)return;
     const generation=++this.generation;
-    this.setBusy(true);this.error.textContent='';this.apiResults.set(row.id,{message:this.t('正在检查模型接口…')});this.render();
+    const scope=JSON.stringify([row.id,row.baseUrl,row.model,row.modelCatalogIdentity||'']),saved=this.apiResults.get(row.id),previous=row.modelCatalogIdentity&&saved?.scope===scope?saved:null;this.setBusy(true);this.error.textContent='';this.apiResults.set(row.id,action==='models'&&previous?.models?{...previous,loading:true}:{scope,message:this.t('正在检查模型接口…')});this.render();
     try{
-      const result=await this.request({provider:this.provider,action,id:row.id});
+      const result=await this.request({provider:this.provider,action,id:row.id,...(refresh?{refresh:true}:{})});
       if(generation!==this.generation)return;
       if(result.probe?.id!==row.id||result.probe?.provider!==this.provider||result.probe?.status!=='reachable'||result.probe?.scope!=='models')throw Error('模型接口返回了其他接入的结果');
-      this.value=result;
+      const current=result[this.provider]?.accounts?.find(account=>account.id===row.id);
+      if(current&&JSON.stringify([current.id,current.baseUrl,current.model,current.modelCatalogIdentity||''])!==scope)throw Error('模型接口返回了其他接入的结果');
       if(action==='models'&&!Array.isArray(result.probe.models))throw Error('上游未返回兼容的模型列表，请手动填写模型 ID');
-      this.apiResults.set(row.id,action==='models'?{models:result.probe.models}:{message:this.t('模型接口连接成功；未发送对话请求。')});
+      if(action==='models'&&row.modelCatalogIdentity&&result.probe.cache?.identity!==row.modelCatalogIdentity)throw Error('模型接口返回了其他接入的结果');
+      this.value=result;
+      this.apiResults.set(row.id,action==='models'?{scope,models:result.probe.models,cache:result.probe.cache,...(result.probe.modelError?{error:this.t(result.probe.modelError)}:{})}:{scope,message:this.t('模型接口连接成功；未发送对话请求。')});
       this.render();
-    }catch(error){if(generation===this.generation){this.apiResults.set(row.id,{error:this.t(error.message)});this.render();}}
+    }catch(error){if(generation===this.generation){this.apiResults.set(row.id,action==='models'&&previous?.models?{...previous,error:this.t(error.message)}:{scope,error:this.t(error.message)});this.render();}}
     finally{if(generation===this.generation)this.setBusy(false);}
   }
   render(){
@@ -102,8 +105,8 @@ class CliAccessPanel {
       }
       if(row.kind==='api'){
         actions.append(this.button('查看上游模型',()=>this.probe(row,'models')),this.button('测试模型接口',()=>this.probe(row,'test')));
-        const result=this.apiResults.get(row.id),feedback=this.node('div',null,'cli-access-probe');
-        if(result?.models)feedback.textContent=this.t('模型接口返回：')+result.models.join(' · ')+' — '+this.t('仅核对模型列表，未发送对话请求。');
+        const scope=JSON.stringify([row.id,row.baseUrl,row.model,row.modelCatalogIdentity||'']),saved=this.apiResults.get(row.id),result=saved?.scope===scope&&(!saved.models||!row.modelCatalogIdentity||saved.cache?.identity===row.modelCatalogIdentity)?saved:null,feedback=this.node('div',null,'cli-access-probe');
+        if(result?.models){actions.append(this.button('刷新模型',()=>this.probe(row,'models',true)));feedback.textContent=this.t('模型接口返回：')+result.models.join(' · ')+' — '+this.t('仅核对模型列表，未发送对话请求。');const updated=result.cache?.updatedAt;if(Number.isFinite(updated)&&updated>0){const stamp=this.node('small',null,'account-muted');stamp.textContent=this.t('更新于：')+new Date(updated*1000).toLocaleString(BridgeI18n.locale());feedback.append(stamp);}if(result.error){const error=this.node('small',null,'error');error.textContent=result.error;feedback.append(error);}}
         else if(result?.error){feedback.classList.add('error');feedback.textContent=result.error;}
         else if(result?.message)feedback.textContent=result.message;
         card.append(title,detail,actions,feedback);

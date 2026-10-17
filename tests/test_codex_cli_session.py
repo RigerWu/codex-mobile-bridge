@@ -688,8 +688,39 @@ class CliSessionTests(unittest.TestCase):
                 'bridge.features.accounts.models.build_opener') as factory:
             result = self.sessions.get_kind('thread-a', 'models')
         self.assertEqual(result['models'], [])
-        self.assertIn('API Key', result['modelError'])
+        self.assertIn('启动环境', result['modelError'])
         factory.assert_not_called()
+
+    def test_local_env_key_uses_daemon_value_and_exact_native_efforts(self):
+        self.sessions.attach('thread-a', explicit=True)
+        self.sessions.metadata['thread-a']['modelProvider'] = 'custom'
+        self.fake.thread['modelProvider'] = 'custom'
+        original = self.fake.request
+        def request(method, params, **kwargs):
+            if method == 'config/read':
+                return {'config': {'model_provider': 'custom', 'model_providers': {'custom': {
+                    'base_url': 'https://fixture.invalid/v1', 'env_key': 'CMB_FIXTURE_KEY'}}}}
+            return original(method, params, **kwargs)
+        self.fake.request = request
+        with patch.dict(os.environ, {'CMB_FIXTURE_KEY': 'gateway-key'}), patch.object(
+                self.sessions, 'model_environment', return_value=({'CMB_FIXTURE_KEY': 'daemon-key'},
+                                                                    ('fixture-process',))), patch(
+                'bridge.features.accounts.models.build_opener') as factory:
+            factory.return_value.open.return_value = io.BytesIO(json.dumps({'data': [
+                {'id': 'native-model'}, {'id': 'api-only',
+                 'supportedReasoningEfforts': [{'reasoningEffort': 'medium'}]}]}).encode())
+            result = self.sessions.get_kind('thread-a', 'models')
+        rows = {row['id']: row for row in result['models']}
+        self.assertEqual(set(rows), {'native-model', 'api-only'})
+        self.assertEqual(rows['native-model']['efforts'], ['high'])
+        self.assertEqual(rows['api-only']['efforts'], ['medium'])
+        self.assertEqual(factory.return_value.open.call_args.args[0].get_header('Authorization'),
+                         'Bearer daemon-key')
+
+    def test_openai_custom_route_reads_daemon_base_url_even_without_account(self):
+        names = CliSessions._required_model_environment(
+            {'model_providers': {'openai': {'env_key': 'CMB_FIXTURE_KEY'}}}, 'openai', {})
+        self.assertEqual(names, {'OPENAI_BASE_URL', 'CMB_FIXTURE_KEY'})
 
     def test_local_native_openai_api_key_uses_same_home_auth_file(self):
         self.sessions.attach('thread-a', explicit=True)
@@ -706,7 +737,8 @@ class CliSessionTests(unittest.TestCase):
                 raise AppServerUnavailable('native metadata unavailable')
             return original(method, params, **kwargs)
         self.fake.request = request
-        with patch.dict(os.environ, {'OPENAI_API_KEY': 'gateway-only-secret'}), patch(
+        with patch.dict(os.environ, {'OPENAI_API_KEY': 'gateway-only-secret'}), patch.object(
+                self.sessions, 'model_environment', return_value=({}, ('fixture-process',))), patch(
                 'bridge.features.accounts.models.build_opener') as factory:
             factory.return_value.open.return_value = io.BytesIO(b'{"data":[{"id":"api-model"}]}')
             result = self.sessions.get_kind('thread-a', 'models')

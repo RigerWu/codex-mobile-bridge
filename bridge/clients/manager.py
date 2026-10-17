@@ -284,6 +284,8 @@ class DesktopSessions:
                            'updatedAt': persisted[0]}
         if error:
             result['modelError'] = error
+            if error.startswith('当前 Claude Code 版本不支持刷新模型目录'):
+                result['notice'] = error
         if self._model_identity(provider, sid) != identity:
             raise BridgeUnavailable('客户端账号或配置已变化，请重试')
         return result
@@ -314,9 +316,12 @@ class DesktopSessions:
                     return self._cached_model_result(provider, sid, identity, persisted)
             try:
                 value = self._read(provider, 'catalog', sid, body)
-            except (OSError, ValueError, BridgeUnavailable):
+            except (OSError, ValueError, BridgeUnavailable) as exc:
                 if persisted:
-                    return self._cached_model_result(provider, sid, identity, persisted, error='模型目录刷新失败，已保留上次结果')
+                    error = ('当前 Claude Code 版本不支持刷新模型目录，已保留上次结果'
+                             if str(exc) == '当前 Claude Code 版本不支持刷新模型目录' else
+                             '模型目录刷新失败，已保留上次结果')
+                    return self._cached_model_result(provider, sid, identity, persisted, error=error)
                 raise
             if self._model_identity(provider, sid) != identity:
                 raise BridgeUnavailable('客户端账号或配置已变化，请重试')

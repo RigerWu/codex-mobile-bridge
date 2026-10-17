@@ -90,6 +90,8 @@ class Adapters(unittest.TestCase):
         self.assertEqual(result['models'], [{'id': 'sonnet'}])
         self.assertEqual(result['cache']['updatedAt'], updated_at)
         self.assertEqual(result['cache']['state'], 'stale')
+        self.assertEqual(result['notice'], '当前 Claude Code 版本不支持刷新模型目录，已保留上次结果')
+        self.assertEqual(result['modelError'], result['notice'])
         self.assertEqual(self.manager.model_store.read('legacy')[0], updated_at)
 
     def test_model_picker_uses_persisted_catalog_and_refresh_bypasses_it(self):

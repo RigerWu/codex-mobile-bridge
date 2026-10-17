@@ -287,8 +287,8 @@ class SideChat:
                 if not request['supported'] or request['method'] in ('item/plan/requestImplementation', 'bridge/requestUserInputAsync'):
                     request['supported'] = False
                     request['params'] = {'message': '此请求暂不支持在侧边聊天处理，请停止本次回复。'}
-            # Side-chat screenshots have no preview route, so Base64 is not sent.
-            return {**result, 'turns': public_turns(result['turns']), 'parentId': self.parent, 'error': self.error,
+            # Side-chat screenshots have no preview route; omit their descriptors.
+            return {**result, 'turns': public_turns(result['turns'], image_previews=False), 'parentId': self.parent, 'error': self.error,
                     'submissions': [{'id': k, 'status': v['status'], 'text': v['text'], 'mode': v.get('mode', 'send'), 'workMode': v.get('workMode', 'default'), 'attachments': v.get('attachments', []), 'error': v.get('error')} for k, v in self.submissions.items()]}
 
     def settings(self, model, effort, catalog):

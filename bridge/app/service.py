@@ -1754,8 +1754,8 @@ class Bridge:
         state = self.store.subagent_history(thread_id, agent_id)
         view = normalize_state(state, False, image_cache=TOOL_IMAGE_CACHE)
         # Saved logs are evidence of the last recorded state, not a live heartbeat.
-        # Subagent screenshots have no preview route, so Base64 is not sent.
-        return {'id': agent_id, 'title': view['title'], 'turns': public_turns(view['turns']),
+        # Subagent screenshots have no preview route; omit their descriptors.
+        return {'id': agent_id, 'title': view['title'], 'turns': public_turns(view['turns'], image_previews=False),
                 'historyComplete': view['historyComplete'], 'saved': True}
 
     def terminal(self, thread_id, owner, action, params):

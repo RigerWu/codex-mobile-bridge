@@ -72,8 +72,7 @@ class SideChatTests(unittest.TestCase):
         view = self.chat.view()
         self.assertNotIn(png, json.dumps(view))
         row = next(m for m in view['turns'][0]['messages'] if m['id'] == 'shot')
-        self.assertEqual(row['attachments'][0]['type'], 'toolImage')
-        self.assertNotIn('data', row['attachments'][0])
+        self.assertFalse(row.get('attachments'))
 
     def test_streaming_dedupe_stop_and_close(self):
         submission = str(uuid.uuid4())

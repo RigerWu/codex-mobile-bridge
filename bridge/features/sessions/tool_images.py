@@ -139,16 +139,19 @@ def extract_tool_images(output, *, remember=None):
     return walk(output), images
 
 
-def public_turns(turns):
-    """Copy only rows carrying tool-image Base64; normalized views may share rows."""
+def public_turns(turns, *, image_previews=True):
+    """Hide tool-image bytes, and descriptors where previews have no route."""
     def message(row):
         attachments = row.get('attachments')
         if not isinstance(attachments, list) or not any(
-                isinstance(a, dict) and a.get('type') == 'toolImage' and 'data' in a for a in attachments):
+                isinstance(a, dict) and a.get('type') == 'toolImage' and
+                ('data' in a or not image_previews) for a in attachments):
             return row
-        return {**row, 'attachments': [
+        clean = [
             {k: v for k, v in a.items() if k != 'data'}
-            if isinstance(a, dict) and a.get('type') == 'toolImage' else a for a in attachments]}
+            if isinstance(a, dict) and a.get('type') == 'toolImage' else a for a in attachments
+            if image_previews or not (isinstance(a, dict) and a.get('type') == 'toolImage')]
+        return {**row, 'attachments': clean}
 
     result = []
     for turn in turns:

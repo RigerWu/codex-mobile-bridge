@@ -202,7 +202,13 @@ def normalize_item(item, *, image_cache=None):
         row.update(role="activity", title="文件变更", text="\n\n".join(str(c.get("path", "")) + "\n" + str(c.get("diff", "")) for c in item.get("changes", [])))
     elif kind in ("mcpToolCall", "dynamicToolCall"):
         extract = image_cache.extract if image_cache is not None else extract_tool_images
-        output, images = extract(item.get("result", item.get("contentItems", item.get("error", ""))))
+        source = item.get("result", item.get("contentItems", item.get("content", item.get("error", ""))))
+        content = item.get("content")
+        if isinstance(content, list) and content is not source:
+            clean, images = extract({"result": source, "content": content})
+            output = clean["result"]
+        else:
+            output, images = extract(source)
         row.update(role="activity", title=" · ".join(str(x) for x in (item.get("server"), item.get("tool", item.get("toolName"))) if x), text=json.dumps(item.get("arguments", {}), ensure_ascii=False, indent=2), output=json.dumps(output, ensure_ascii=False, indent=2))
         if images:
             row['attachments'] = images
@@ -213,7 +219,9 @@ def normalize_item(item, *, image_cache=None):
     else:
         row.update(role="activity", title=kind, text=json.dumps(item, ensure_ascii=False, indent=2))
     # Preserve non-text attachment descriptors. They are not fetched from arbitrary URLs.
-    attachments = [x for x in item.get("content", []) if isinstance(x, dict) and x.get("type") not in ("text", "input_text", "output_text")] if isinstance(item.get("content"), list) else []
+    # Tool content is handled by bounded extraction above. Never append its raw
+    # blocks as attachments after sanitizing the tool result.
+    attachments = [x for x in item.get("content", []) if isinstance(x, dict) and x.get("type") not in ("text", "input_text", "output_text")] if kind not in ("mcpToolCall", "dynamicToolCall") and isinstance(item.get("content"), list) else []
     if attachments:
         if "attachments" not in row:
             row["attachments"] = attachments

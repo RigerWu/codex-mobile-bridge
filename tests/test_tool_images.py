@@ -12,6 +12,7 @@ from bridge.features.sessions.model import normalize_item, normalize_state
 from bridge.features.sessions.timeline import Timeline, PAGE_BYTES, encoded
 from bridge.app.service import Bridge, LiveSession
 from bridge.features.sessions import tool_images
+from bridge.features.sessions.tool_images import public_turns
 
 PNG = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jR7kAAAAASUVORK5CYII='
 
@@ -66,6 +67,31 @@ class ToolImageTests(unittest.TestCase):
         saved = state['turns'][0]['messages'][0]
         self.assertEqual(live['attachments'], saved['attachments'])
         self.assertNotIn(PNG, saved['output'])
+
+    def test_tool_content_images_follow_budgets_and_never_leak_publicly(self):
+        item = {'type': 'mcpToolCall', 'id': 'content-shot', 'result': 'ready',
+                'content': [image(), image('A' * (12 * 1024 * 1024))]}
+        row = normalize_item(item)
+        self.assertEqual(len(row['attachments']), 1)
+        self.assertEqual(row['attachments'][0]['type'], 'toolImage')
+        self.assertNotIn(PNG, row['output'])
+        turns = [{'id': 'turn', 'messages': [row]}]
+        public = public_turns(turns)
+        self.assertNotIn(PNG, json.dumps(public))
+        self.assertEqual(public[0]['messages'][0]['attachments'][0]['desktopId'], row['attachments'][0]['desktopId'])
+        timeline = Timeline()
+        timeline.update({'sequence': 1, 'turns': public})
+        self.assertNotIn(PNG, encoded(timeline.page()).decode())
+        self.assertEqual(timeline.page()['rows'][0]['attachments'][0]['type'], 'toolImage')
+        # Content-only dynamic results take the same extraction path.
+        dynamic = normalize_item({'type': 'dynamicToolCall', 'content': [image()]})
+        self.assertEqual(dynamic['attachments'][0]['desktopId'], row['attachments'][0]['desktopId'])
+        self.assertNotIn(PNG, json.dumps(public_turns([{'messages': [dynamic]}])))
+
+    def test_user_attachment_descriptors_remain_available(self):
+        attachment = {'type': 'localImage', 'path': '/tmp/attachment.png', 'name': 'attachment.png'}
+        row = normalize_item({'type': 'userMessage', 'content': [{'type': 'text', 'text': 'look'}, attachment]})
+        self.assertEqual(row['attachments'], [attachment])
 
     def test_codex_native_image_content_items_are_extracted(self):
         url = 'data:image/png;base64,' + PNG
@@ -304,7 +330,7 @@ class ToolImageCacheTests(unittest.TestCase):
             'id': agent, 'turns': [{'turnId': 'turn', 'items': [self.item]}]}})()
         view = self.bridge.subagents(thread, agent)
         self.assertNotIn(PNG, json.dumps(view))
-        self.assertEqual(view['turns'][0]['messages'][0]['attachments'][0]['desktopId'], self.identifier)
+        self.assertFalse(view['turns'][0]['messages'][0].get('attachments'))
 
     def evict_preview_bytes(self):
         self.session.view()

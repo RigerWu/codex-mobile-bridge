@@ -28,6 +28,7 @@ from bridge.features.sessions.store import SessionStore, StoreUnavailable
 from bridge.features.workspace.files import artifact_paths, referenced_model_images
 from bridge.features.workspace.workspace import operate as workspace_operation
 from bridge.clients.codex.catalog import Catalog, ModelStore, MODEL_REFRESH_SECONDS
+from bridge.platforms.codex_daemon_env import DaemonEnvironmentUnavailable
 from bridge.clients.codex.remote import AppHosts, RemoteStore, RemoteCatalog, RemoteUnavailable, ssh_read, ssh_download, payload
 from bridge.features.sessions.create import rename_thread, independent_directory, create_empty, fork_copy, open_in_desktop, CreationError, CreationUnavailable, ForkUnavailable
 from bridge.features.sessions.timeline import Timeline
@@ -1958,9 +1959,13 @@ class Bridge:
     def _native_model_identity(self, cwd, provider):
         request = self.cli_sessions.client.request
         config = request('config/read', {'includeLayers': False, 'cwd': cwd}, replay_safe=True).get('config') or {}
+        if not isinstance(config, dict):
+            config = {}
         try:
             account = request('account/read', {'refreshToken': False}, replay_safe=True).get('account') or {}
         except AppServerError:
+            account = {}
+        if not isinstance(account, dict):
             account = {}
         try:
             local_auth = hashlib.sha256((self.codex_home/'auth.json').read_bytes()).hexdigest() if self.host == 'local' else None
@@ -1968,8 +1973,23 @@ class Bridge:
             local_auth = None
         runtime_home = (self.cli_sessions.remote_home if self.cli_sessions.alias is not None
                         else self.codex_home)
-        return ModelStore.key('codex-cli-models-v2', self.host, self.cli_sessions.alias,
-                              str(runtime_home), cwd, provider, config, account, local_auth)
+        profile = (config.get('profiles') or {}).get(config.get('profile')) or {}
+        if not isinstance(profile, dict):
+            profile = {}
+        effective = {**config, **profile}
+        configured_catalog = (bool(effective.get('model_catalog_json')) and
+                              provider == (effective.get('model_provider') or 'openai'))
+        environment_identity = None
+        if (self.host == 'local' and hasattr(self.cli_sessions, 'model_environment_identity') and
+                not configured_catalog and (Catalog.custom_provider(effective, provider) or
+                                            account.get('type') == 'apiKey')):
+            try:
+                environment_identity = self.cli_sessions.model_environment_identity(config, provider, account)
+            except DaemonEnvironmentUnavailable:
+                environment_identity = 'unavailable'
+        return ModelStore.key('codex-cli-models-v3', self.host, self.cli_sessions.alias,
+                              str(runtime_home), cwd, provider, config, account, local_auth,
+                              environment_identity)
 
     def _schedule_native_model_refresh(self, key, thread_id, cwd, provider, updated_at, replace=False):
         with self.native_model_lock:

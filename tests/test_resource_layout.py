@@ -36,6 +36,7 @@ SSH_SOURCES = {
     'bridge/clients/claude/remote_worker.py': ['profile', 'command', 'resume'],
     'bridge/features/sessions/store.py': ['SessionStore'],
     'bridge/clients/codex/catalog.py': ['Catalog'],
+    'bridge/clients/codex/remote_models.py': ['remote_model_worker'],
     'bridge/features/sessions/create.py': ['create_empty', 'fork_copy', 'rename_thread'],
     'bridge/features/accounts/models.py': ['model_ids'],
     'bridge/features/auth/tls.py': ['client_context'],

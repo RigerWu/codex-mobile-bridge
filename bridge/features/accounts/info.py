@@ -162,8 +162,6 @@ class AccountInfo:
             if not row or row['id'] != value.get('id'):
                 raise ValueError('账号身份已变化，请刷新列表')
             row = dict(row)
-            if row.get('transient') and section != 'usage':
-                raise ValueError('请在聊天模型设置中查看当前接入的模型')
             if section == 'usage' and row['kind'] != 'chatgpt':
                 raise ValueError('API 接入不提供官方额度')
             info = self.entries.setdefault(row['id'], {})
@@ -173,7 +171,7 @@ class AccountInfo:
                 cached = {}
             if row.get('transient') and cached.get('accountKey') != row['accountKey']:
                 cached = {}
-            ttl = 0 if value.get('refresh') else 300
+            ttl = 0 if value.get('refresh') else (12 * 60 * 60 if section == 'models' else 300)
             if cached.get('status') == 'loading' or time.time()-cached.get('checkedAt', 0) < ttl:
                 return manager.public()
             info[section] = {**cached, 'status':'loading', 'error':None}
@@ -191,13 +189,27 @@ class AccountInfo:
             expected_route = ((pending or {}).get('_routeCacheKey') or self.route_key_for(row['id'])) if section == 'usage' else None
         if row.get('transient'):
             try:
-                result = self.manager.account({'id': CURRENT_LOGIN_ID, 'operation': 'read', 'refresh': refresh})
-                if not result.get('visible') or result.get('accountKey') != row['accountKey']:
-                    raise ValueError('账号身份已变化')
+                if section == 'models':
+                    identity = self.read_identity()
+                    login = (identity.get('login') or {}).get('context') or {}
+                    if identity.get('kind') != 'chatgpt' or login.get('accountKey') != row['accountKey']:
+                        raise ValueError('当前接入不是此 ChatGPT 账号')
+                    catalog = self.manager.bridge.catalog_reader.get_kind('models', str(self.manager.home),
+                                                                          refresh=refresh, provider='openai')
+                    current = self.read_identity()
+                    current_login = (current.get('login') or {}).get('context') or {}
+                    if (current.get('kind') != 'chatgpt' or current_login.get('accountKey') != row['accountKey']):
+                        raise ValueError('账号身份已变化')
+                    result = {'models': catalog.get('models', []), 'accountKey': row['accountKey'],
+                              **({'error': catalog['modelError']} if catalog.get('modelError') else {})}
+                else:
+                    result = self.manager.account({'id': CURRENT_LOGIN_ID, 'operation': 'read', 'refresh': refresh})
+                    if not result.get('visible') or result.get('accountKey') != row['accountKey']:
+                        raise ValueError('账号身份已变化')
                 result.update(status='error' if result.get('error') else 'ready', checkedAt=time.time())
             except Exception:
                 result = {'status': 'error', 'checkedAt': time.time(), 'accountKey': row['accountKey'],
-                          'error': '额度暂不可用，请检查登录后重试'}
+                          'error': '额度暂不可用，请检查登录后重试' if section == 'usage' else '模型列表暂不可用，请检查当前接入后重试'}
             with self.manager.lock:
                 info = self.entries.setdefault(CURRENT_LOGIN_ID, {})
                 # A replaced slot belongs to a newer query, even for the same login.

@@ -370,6 +370,7 @@ class Catalog:
                         continue
             finally:
                 messages.put(None)
+                process.stdout.close()
         reader = threading.Thread(target=read, daemon=True)
         reader.start()
         counter = 0
@@ -449,7 +450,6 @@ class Catalog:
                     process.kill()
                     process.wait()
             reader.join(timeout=1)
-            process.stdout.close()
 
     @staticmethod
     def custom_provider(effective, provider=None):

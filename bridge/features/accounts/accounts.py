@@ -447,7 +447,6 @@ class Accounts:
                 if (self.row(row['id']) != stored or
                         read_json(self.directory(row['id'])/'api.json', {}).get('key') != key):
                     raise ValueError('当前接入已变化，请重新读取模型列表')
-                self.info.entries.setdefault(row['id'], {})['models'] = {'models':copy.deepcopy(models), 'status':'ready', 'checkedAt':time.time()}
             try:
                 updated_at = self.api_model_store.write(identity, models)
                 self._schedule_api_model_refresh(row, identity, updated_at, replace=True)

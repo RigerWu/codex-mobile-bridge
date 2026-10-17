@@ -34,6 +34,36 @@ class NativeModelCacheTests(unittest.TestCase):
         self.bridge._native_models('thread', self.temp.name, 'openai', refresh=True)
         self.assertEqual(self.bridge.cli_sessions.get_kind.call_count, 2)
 
+    def test_shared_native_catalog_never_reuses_another_threads_selection(self):
+        self.bridge.cli_sessions.get_kind.return_value = {
+            'models': [{'id': 'gpt-fixture'}], 'modelSource': 'codex',
+            'currentModel': 'thread-a-model', 'currentEffort': 'high'}
+        first = self.bridge._native_models('thread-a', self.temp.name, 'openai')
+        self.assertEqual(first['currentModel'], 'thread-a-model')
+        saved = self.bridge.native_model_store.read('identity-a')[1]
+        self.assertNotIn('currentModel', saved)
+        self.assertNotIn('currentEffort', saved)
+        second = self.bridge._native_models('thread-b', self.temp.name, 'openai')
+        self.assertNotIn('currentModel', second)
+        self.assertNotIn('currentEffort', second)
+        sessions = {
+            thread: SimpleNamespace(origin='cli', runtime='cli', connected=True,
+                condition=threading.Condition(), state={
+                    'cwd': self.temp.name, 'latestModel': thread + '-model',
+                    'latestReasoningEffort': effort}, saved_cwd=None,
+                view=lambda: {'provider': 'openai'})
+            for thread, effort in (('thread-a', 'high'), ('thread-b', 'low'))}
+        self.bridge.session = Mock(side_effect=lambda thread, **kwargs: sessions[thread])
+        current = self.bridge.catalog('thread-b', kind='models')
+        self.assertEqual((current['currentModel'], current['currentEffort']),
+                         ('thread-b-model', 'low'))
+        self.bridge.cli_sessions.get_kind.assert_called_once()
+        self.bridge.native_model_store.write('identity-a', {**saved,
+            'currentModel': 'old-schema-model', 'currentEffort': 'max'})
+        old = self.bridge._native_models('thread-b', self.temp.name, 'openai')
+        self.assertNotIn('currentModel', old)
+        self.assertNotIn('currentEffort', old)
+
     def test_account_identity_change_rejects_inflight_model_result(self):
         def changed(*args, **kwargs):
             self.bridge._native_model_identity.return_value = 'identity-b'

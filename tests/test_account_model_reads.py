@@ -135,6 +135,15 @@ class ModelReadTests(unittest.TestCase):
              patch('bridge.features.accounts.accounts.model_catalog', return_value=[{'id':'fixture'}]):
             self.assertEqual(self.manager.api_models(row), [{'id':'fixture'}])
 
+    def test_first_saved_api_model_read_publishes_cache_timestamp(self):
+        row = self.active()
+        with patch('bridge.features.accounts.accounts.model_catalog', return_value=[{'id':'fixture'}]):
+            self.manager.info.read(row, 'models')
+        detail = self.manager.info.entries[row['id']]['models']
+        self.assertEqual(detail['models'], [{'id':'fixture'}])
+        self.assertEqual(detail['status'], 'ready')
+        self.assertIsInstance(detail['cache']['updatedAt'], float)
+
     def test_official_model_results_verify_connection_after_query(self):
         self.active('chatgpt')
         def query(*args, **kwargs):

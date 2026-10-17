@@ -1964,6 +1964,10 @@ class Bridge:
             timer.start()
 
     def _native_models(self, thread_id, cwd, provider, refresh=False):
+        def stable(value):
+            return {key: copy.deepcopy(item) for key, item in value.items()
+                    if key not in ('currentModel', 'currentEffort')}
+
         identity = self._native_model_identity(cwd, provider)
         try:
             persisted = self.native_model_store.read(identity)
@@ -1971,7 +1975,7 @@ class Bridge:
             persisted = None
         if persisted and not refresh:
             self._schedule_native_model_refresh(identity, thread_id, cwd, provider, persisted[0])
-            return copy.deepcopy(persisted[1])
+            return stable(persisted[1])
         with self.native_model_lock:
             lock = self.native_model_reads.setdefault(identity, threading.Lock())
         with lock:
@@ -1981,24 +1985,26 @@ class Bridge:
                 except (OSError, sqlite3.DatabaseError, ValueError):
                     persisted = None
                 if persisted:
-                    return copy.deepcopy(persisted[1])
+                    return stable(persisted[1])
             try:
                 value = self.cli_sessions.get_kind(thread_id, 'models', refresh=refresh,
                                                    query='', offset=0, limit=200, ids=None)
             except (OSError, ValueError, AppServerError):
                 if persisted:
-                    return {**copy.deepcopy(persisted[1]), 'modelError': '模型列表刷新失败，已保留上次结果'}
+                    return {**stable(persisted[1]), 'modelError': '模型列表刷新失败，已保留上次结果'}
                 raise
             if self._native_model_identity(cwd, provider) != identity:
                 raise ValueError('账号身份已变化，请重新读取模型列表')
             if not value.get('modelError'):
                 try:
-                    updated_at = self.native_model_store.write(identity, value)
+                    updated_at = self.native_model_store.write(identity, stable(value))
                     self._schedule_native_model_refresh(identity, thread_id, cwd, provider, updated_at, replace=True)
                 except (OSError, sqlite3.DatabaseError):
                     pass
             elif persisted:
-                return {**copy.deepcopy(persisted[1]), 'modelError': value['modelError']}
+                return {**stable(persisted[1]), 'modelError': value['modelError']}
+            if self._native_model_identity(cwd, provider) != identity:
+                raise ValueError('账号身份已变化，请重新读取模型列表')
             return value
 
     def catalog(self, thread_id, refresh=False, kind=None, query='', offset=0, limit=200, ids=None):

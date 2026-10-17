@@ -620,6 +620,16 @@ test('check update button locks immediately and unlocks after failed check',asyn
   assert.equal(ui.nodes.get('check-update').disabled,false);
   assert.match(ui.nodes.get('update-state').textContent,/network failed/);
 });
+test('skipped update hides the automatic prompt while manual check offers installation',async()=>{
+  const ui=await renderer();let skips=0;
+  ui.value.update={state:'available',current:'2.0.0-preview.1',version:'2.0.0-preview.2'};await ui.poll();
+  assert.equal(ui.nodes.get('skip-update').hidden,false);
+  ui.api.skipUpdate=async()=>{skips++;ui.value.update={state:'skipped',current:'2.0.0-preview.1',version:'2.0.0-preview.2'};};
+  await ui.nodes.get('skip-update').onclick();assert.equal(skips,1);assert.equal(ui.nodes.get('update-banner').hidden,true);assert.equal(ui.nodes.get('skip-update').hidden,true);
+  ui.api.checkUpdate=async()=>{ui.value.update={state:'available',current:'2.0.0-preview.1',version:'2.0.0-preview.2',skipped:true};};
+  await ui.nodes.get('check-update').onclick();assert.equal(ui.nodes.get('install-update').hidden,false);assert.match(ui.nodes.get('update-state').textContent,/已跳过/);
+  ui.run("applyLanguage('en')");assert.match(ui.nodes.get('update-state').textContent,/skipped/);
+});
 
 test('download and retry states disable updates without permanently locking settings',async()=>{
   const ui=await renderer();

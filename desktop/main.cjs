@@ -96,7 +96,7 @@ async function installUpdate(candidate){
 function setupUpdater(){
   updater=new Updater({current:app.getVersion(),key:fs.readFileSync(path.join(__dirname,'features/updates/update-public-key.pem')),
     fetch:cloudflared.electronFetch(net,allowedMirrorUrl),directory:path.join(app.getPath('userData'),'updates'),
-    supported:app.isPackaged&&['darwin','win32'].includes(process.platform),install:installUpdate});
+    skipFile:path.join(app.getPath('userData'),'skipped-update.json'),supported:app.isPackaged&&['darwin','win32'].includes(process.platform),install:installUpdate});
   setTimeout(()=>updater.check(),5000).unref();
   setInterval(()=>updater.check(),6*60*60*1000).unref();
 }
@@ -106,7 +106,8 @@ function showWindow(){
   window.show();window.focus();
 }
 function register(){
-  ipcMain.handle('bridge:check-update',event=>{authorize(event);return updater.check();});
+  ipcMain.handle('bridge:check-update',event=>{authorize(event);return updater.check({manual:true});});
+  ipcMain.handle('bridge:skip-update',event=>{authorize(event);return updater.skip();});
   ipcMain.handle('bridge:install-update',event=>{
     authorize(event);
     if(installPending||workerWrites||setupPending||updateManaged())throw Error('请等待当前操作完成后再更新。');

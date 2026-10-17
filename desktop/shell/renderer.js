@@ -265,17 +265,19 @@ BridgeI18n.apply();
 $('add-connection').onclick=addConnection;
 $('connection-kind').onchange=()=>setupGuide($('connection-guide'),$('connection-kind').value);
 
-const updateMessages={idle:'检查是否有新版本。',checking:'正在检查更新…',current:'当前已是最新可用版本。',available:'有新版本可用。',downloading:'正在下载更新…',preparing:'正在验证并准备更新…',restarting:'即将重启应用…',unsupported:'当前系统或运行方式不支持应用内更新，请从发布页面下载新版。'};
+const updateMessages={idle:'检查是否有新版本。',checking:'正在检查更新…',current:'当前已是最新可用版本。',available:'有新版本可用。',skipped:'已跳过此版本。手动检查仍可更新。',downloading:'正在下载更新…',preparing:'正在验证并准备更新…',restarting:'即将重启应用…',unsupported:'当前系统或运行方式不支持应用内更新，请从发布页面下载新版。'};
 let updateBusy=false;
 function renderUpdate(){
   const value=snapshot?.update;if(!value)return;
   const busy=['downloading','preparing','restarting'].includes(value.state)||updateBusy;
   $('update-version').textContent=t('当前版本：')+value.current+(value.version?' → '+value.version:'');
-  $('update-state').textContent=value.message?t(value.message):t(updateMessages[value.state]||'');
+  $('update-state').textContent=value.message?t(value.message):t(value.skipped?'已跳过此版本。手动检查仍可更新。':updateMessages[value.state]||'');
   $('update-badge').hidden=value.state!=='available';
   $('update-banner').hidden=value.state!=='available'||activeTab==='advanced';
   $('update-banner').textContent=t('发现新版本，点击查看：')+(value.version||'');
   $('check-update').disabled=busy||value.state==='checking'||value.state==='unsupported';
+  $('skip-update').hidden=value.state!=='available'||value.skipped===true;
+  $('skip-update').disabled=busy||value.state==='checking';
   $('install-update').hidden=!value.version||['current','unsupported'].includes(value.state);
   $('install-update').disabled=busy||value.state==='checking';
   $('update-notes').hidden=!value.notes;$('update-notes').textContent=value.notes||'';
@@ -297,6 +299,13 @@ $('check-update').onclick=async()=>{
   if(updateBusy)return;
   updateBusy=true;renderUpdate();
   try{await api.checkUpdate();await refresh();}
+  catch(error){feedback(error.message,true);}
+  finally{updateBusy=false;renderUpdate();}
+};
+$('skip-update').onclick=async()=>{
+  if(updateBusy)return;
+  updateBusy=true;renderUpdate();
+  try{await api.skipUpdate();await refresh();}
   catch(error){feedback(error.message,true);}
   finally{updateBusy=false;renderUpdate();}
 };

@@ -1770,6 +1770,8 @@ const en={
   "正在检查更新…": "Checking for updates…",
   "当前已是最新可用版本。": "You have the latest available version.",
   "有新版本可用。": "An update is available.",
+  "跳过此版本": "Skip this version",
+  "已跳过此版本。手动检查仍可更新。": "This version is skipped. You can still update after a manual check.",
   "正在下载更新…": "Downloading update…",
   "正在验证并准备更新…": "Verifying and preparing update…",
   "即将重启应用…": "Restarting the app…",

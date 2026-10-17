@@ -1618,12 +1618,12 @@ class Bridge:
                 if cached and time.monotonic() - cached[0] < 30:
                     return cached[1]
                 if key in self._draft_remote_pending:
-                    return ''
+                    return cached[1] if cached else ''
                 self._draft_remote_pending.add(key)
             threading.Thread(target=self._probe_remote_draft_identity,
                              args=(key, alias, home, provider), daemon=True,
                              name='remote-draft-identity').start()
-            return ''
+            return cached[1] if cached else ''
         try:
             if provider in ('openai', 'bridge_api') and self.accounts:
                 with self.accounts.lock:

@@ -1470,6 +1470,7 @@ const en={
   "只能忽略发送结果未确认的记录": "Only unconfirmed send records can be ignored.",
   "已忽略未确认记录": "Unconfirmed record ignored",
   "这条未确认记录已忽略，请刷新后重新编辑消息。": "This unconfirmed record was ignored. Refresh and edit the message before sending again.",
+  "上次发送结果尚未确认，请检查聊天记录或先处理未确认记录。": "The previous send is still unconfirmed. Check the chat history or resolve the unconfirmed record first.",
   "在线指引": "Online guide",
   "Skill 加载失败，请点击刷新重试": "Could not load Skills. Click Refresh to retry.",
   "Skill 链接目标已变化，请刷新列表后重新选择": "The Skill link target changed. Refresh the list and select it again.",

@@ -135,6 +135,19 @@ class DraftIdentityTests(unittest.TestCase):
                 time.sleep(0.01)
             self.assertNotEqual(second, first)
 
+    def test_remote_refresh_keeps_known_scope_until_probe_finishes(self):
+        bridge = Bridge.__new__(Bridge)
+        bridge.host = 'remote-one'
+        bridge.cli_sessions = SimpleNamespace(alias='ssh-one', remote_home=Path('/remote/codex'))
+        bridge._draft_remote_lock = threading.Lock()
+        key = ('remote-one', 'ssh-one', '/remote/codex', 'openai')
+        bridge._draft_remote_cache = {key: (time.monotonic() - 31, 'known-owner')}
+        bridge._draft_remote_pending = set()
+        with patch('bridge.app.service.threading.Thread') as worker:
+            self.assertEqual(bridge._draft_account_identity({'provider': 'openai'}), 'known-owner')
+            self.assertEqual(bridge._draft_account_identity({'provider': 'openai'}), 'known-owner')
+            worker.return_value.start.assert_called_once()
+
     def test_claude_native_metadata_survives_credential_refresh(self):
         with tempfile.TemporaryDirectory() as root:
             directory = Path(root)/'.claude'

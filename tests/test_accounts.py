@@ -98,6 +98,8 @@ class AccountsTests(unittest.TestCase):
         self.assertEqual(chat['models'],details)
         self.assertEqual(chat['models'][0]['efforts'], ['low', 'high'])
         self.assertEqual(chat['modelSource'],'api');self.assertEqual(chat['modelAccessName'],'Gemini access')
+        self.assertEqual(chat['cache']['identity'], self.manager.current_model_identity())
+        self.assertIsInstance(chat['cache']['updatedAt'], float)
         self.assertEqual(upstream.call_count,1)
         self.assertNotIn('secret-fixture',json.dumps(chat))
 
@@ -107,6 +109,7 @@ class AccountsTests(unittest.TestCase):
         with patch('bridge.features.accounts.accounts.model_catalog') as upstream:
             self.assertIsNone(self.manager.current_models(refresh=True))
         upstream.assert_not_called()
+        self.assertIsNone(self.manager.current_model_identity())
 
     def test_account_switch_invalidates_split_model_catalog(self):
         from bridge.clients.codex.catalog import Catalog

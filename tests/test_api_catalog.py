@@ -470,14 +470,19 @@ for line in sys.stdin:
         with patch.object(self.reader, '_fetch', return_value=raw) as fetch:
             first = self.reader.get_kind('models', str(self.home), provider='openai')
         self.assertEqual(fetch.call_count, 1)
+        self.assertEqual(first['cache']['identity'], self.reader.model_identity(str(self.home), 'openai'))
         restarted = Catalog(self.home, 'fixture-runtime')
         with patch.object(restarted, '_fetch', side_effect=AssertionError('cached read contacted runtime')):
-            self.assertEqual(restarted.get_kind('models', str(self.home), provider='openai')['models'], first['models'])
+            cached = restarted.get_kind('models', str(self.home), provider='openai')
+            self.assertEqual(cached['models'], first['models'])
+            self.assertEqual(cached['cache']['identity'], first['cache']['identity'])
         data = restarted.model_store.path.read_bytes()
         self.assertNotIn(b'fixture-key', data)
         (self.home/'auth.json').write_text(json.dumps({'OPENAI_API_KEY': 'changed-key'}))
         with patch.object(restarted, '_fetch', return_value={'models': [{'model': 'second'}]}) as fetch:
-            self.assertEqual(restarted.get_kind('models', str(self.home), provider='openai')['models'][0]['id'], 'second')
+            changed = restarted.get_kind('models', str(self.home), provider='openai')
+            self.assertEqual(changed['models'][0]['id'], 'second')
+            self.assertNotEqual(changed['cache']['identity'], first['cache']['identity'])
         fetch.assert_called_once()
 
     def test_model_result_is_rejected_if_account_changes_during_fetch(self):

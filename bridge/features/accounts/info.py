@@ -234,9 +234,12 @@ class AccountInfo:
         result = {}
         try:
             if row['kind'] == 'api':
+                identity = manager.api_model_identity(row)
                 models, updated_at, error = manager.api_models(row, refresh, with_timestamp=True)
+                if manager.api_model_identity(row) != identity:
+                    raise ValueError('当前接入已变化，请重新读取模型列表')
                 result = {'models': models, 'cache': {'state': 'fresh' if not error and time.time()-updated_at < 12*60*60 else 'stale',
-                                                     'updatedAt': updated_at}, **({'error': error} if error else {})}
+                                                     'updatedAt': updated_at, 'identity': identity}, **({'error': error} if error else {})}
             else:
                 with manager.bridge.account.lock:
                     with manager.lock:

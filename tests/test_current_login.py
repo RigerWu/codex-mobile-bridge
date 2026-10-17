@@ -125,7 +125,8 @@ class CurrentLoginTests(unittest.TestCase):
         row, _, _, _ = self.saved_login()
         identity = copy.deepcopy(self.manager.info.identity)
         with patch.object(self.manager.info, 'read_identity', return_value=identity), \
-                patch('bridge.features.accounts.accounts.ManagedRPC') as managed:
+                patch('bridge.features.accounts.accounts.ManagedRPC') as managed, \
+                patch('bridge.clients.codex.catalog.Catalog._fetch', return_value={'models': [{'model': 'fixture-model'}]}):
             managed.return_value.__enter__.return_value = test_account_info.InfoTests.rpc(self)
             self.manager.info.read(row, 'models')
             self.assertEqual(managed.call_args.args[0], self.manager.directory(row['id']))

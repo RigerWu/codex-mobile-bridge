@@ -784,7 +784,7 @@ class Catalog:
                     self._start_model_refresh(cwd, provider, identity)
                 else:
                     self._schedule_model_refresh(cwd, provider, identity, persisted[0])
-                return {**persisted[1], 'cache': {'state': 'stale' if stale else 'fresh', 'updatedAt': persisted[0]}}
+                return {**persisted[1], 'cache': {'state': 'stale' if stale else 'fresh', 'updatedAt': persisted[0], 'identity': identity}}
             with self.kind_locks[kind]:
                 # A second request may have completed while this one waited.
                 if not refresh:
@@ -793,13 +793,13 @@ class Catalog:
                     except (OSError, sqlite3.DatabaseError, ValueError):
                         persisted = None
                     if persisted:
-                        return {**persisted[1], 'cache': {'state': 'fresh', 'updatedAt': persisted[0]}}
+                        return {**persisted[1], 'cache': {'state': 'fresh', 'updatedAt': persisted[0], 'identity': identity}}
                 try:
                     raw = self._fetch(cwd, provider, kind)
                 except CatalogError as exc:
                     if persisted:
                         return {**persisted[1], 'modelError': str(exc),
-                                'cache': {'state': 'stale', 'updatedAt': persisted[0]}}
+                                'cache': {'state': 'stale', 'updatedAt': persisted[0], 'identity': identity}}
                     raise
                 models = [{'id': m.get('model', m.get('id')), 'name': m.get('displayName') or m.get('name') or m.get('model') or m.get('id'),
                            'description': m.get('description', ''), 'efforts': [e['reasoningEffort'] for e in m.get('supportedReasoningEfforts', [])],
@@ -813,14 +813,14 @@ class Catalog:
                     raise CatalogError('模型接入已变化，请重试')
                 if value.get('modelError'):
                     return ({**persisted[1], 'modelError': value['modelError'],
-                             'cache': {'state': 'stale', 'updatedAt': persisted[0]}} if persisted else value)
+                             'cache': {'state': 'stale', 'updatedAt': persisted[0], 'identity': identity}} if persisted else value)
                 try:
                     updated_at = self.model_store.write(identity, value)
                 except (OSError, sqlite3.DatabaseError):
                     logger.warning('Could not persist model catalog', exc_info=True)
                     updated_at = time.time()
                 self._schedule_model_refresh(cwd, provider, identity, updated_at, replace=True)
-                return {**value, 'cache': {'state': 'fresh', 'updatedAt': updated_at}}
+                return {**value, 'cache': {'state': 'fresh', 'updatedAt': updated_at, 'identity': identity}}
 
         bucket = self.skill_store.bucket(cwd)
         with self.kind_locks['skills']:

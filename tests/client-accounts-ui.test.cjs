@@ -140,6 +140,15 @@ test('account model catalog renders native provider groups and reasoning options
 test('flat model responses are preserved when the backend has no groups',async()=>{
  const ui=fixture();ui.setHandler(async()=>({groups:[],models:[{id:'flat/model',name:'Flat model'}]}));await ui.panel.toggleModels();assert.match(ui.text(),/Flat model/);
 });
+test('Claude configured and unavailable account catalogs keep source labels and identity',async()=>{
+ const ui=fixture({provider:'claude'}),identity='a'.repeat(64);
+ ui.panel.accept({...snapshot([row('current')]),modelCatalogIdentity:identity});
+ ui.setHandler(async()=>({cache:{identity,state:'unavailable',updatedAt:null},models:[],groups:[],notice:'Claude 官方账号未提供可离线读取的模型目录；连接 Desktop 后已有的缓存仍可查看'}));
+ await ui.panel.toggleModels();assert.match(ui.text(),/未提供可离线读取/);assert.doesNotMatch(ui.text(),/账号已切换/);
+ ui.setHandler(async()=>({cache:{identity,state:'unavailable',updatedAt:null},models:[{id:'configured-model'}],groups:[{name:'Provider',source:'desktop-config',models:[{id:'configured-model'}]}]}));
+ await ui.panel.loadModels(true);assert.match(ui.text(),/配置模型/);assert.match(ui.text(),/configured-model/);
+ ui.english();assert.match(ui.text(),/Configured models/);
+});
 test('model read errors are retryable and are not presented as a successful empty catalog',async()=>{
  const ui=fixture();ui.setHandler(async()=>{throw Error('model catalog unavailable');});await ui.panel.toggleModels();assert.match(ui.text(),/model catalog unavailable/);assert.doesNotMatch(ui.text(),/未返回可用模型|进入会话/);ui.setHandler(async()=>({models:[{id:'recovered-model'}]}));await ui.all().find(node=>node.tag==='button'&&node.textContent==='刷新模型').onclick();assert.match(ui.text(),/recovered-model/);assert.doesNotMatch(ui.text(),/model catalog unavailable/);
 });

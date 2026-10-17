@@ -1,4 +1,7 @@
 import json
+import io
+import threading
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import base64
 import hashlib
 import importlib.util
@@ -65,6 +68,89 @@ class ClaudeAccountSnapshots(unittest.TestCase):
                    'inferenceGatewayApiKey': secret, 'inferenceGatewayAuthScheme': 'bearer',
                    'inferenceModels': [{'name': 'actual-upstream-model'}]})
         return config_id
+
+    def test_current_desktop_api_catalog_uses_native_gateway_key_and_preserves_upstream_efforts(self):
+        config_id = self.gateway('DESKTOP-GATEWAY-SECRET')
+        config_path = self.threep/'configLibrary'/(config_id+'.json')
+        config = json.loads(config_path.read_text())
+        config['inferenceGatewayBaseUrl'] = 'https://provider.test/v1'
+        self.write(config_path, config)
+        rows = [{'id': 'provider/model', 'name': 'Provider model', 'efforts': ['high'], 'defaultEffort': 'high'}]
+        with patch(MODULE+'model_catalog', return_value=rows) as query:
+            result = self.accounts.models()
+        query.assert_called_once_with('https://provider.test/v1', 'DESKTOP-GATEWAY-SECRET', headers={
+            'Authorization': 'Bearer DESKTOP-GATEWAY-SECRET', 'anthropic-version': '2023-06-01'})
+        self.assertEqual(result['groups'][0]['models'], rows)
+        self.assertEqual(result['groups'][0]['source'], 'upstream-api')
+
+    def test_desktop_api_model_request_uses_v1_path_version_and_selected_auth_scheme(self):
+        config_id = self.gateway('DESKTOP-GATEWAY-SECRET')
+        config_path = self.threep/'configLibrary'/(config_id+'.json')
+        for base, scheme in (('https://provider.test', 'bearer'),
+                             ('https://provider.test/v1', 'x-api-key')):
+            with self.subTest(base=base, scheme=scheme):
+                config = json.loads(config_path.read_text())
+                config['inferenceGatewayBaseUrl'] = base
+                config['inferenceGatewayAuthScheme'] = scheme
+                self.write(config_path, config)
+                with patch('bridge.features.accounts.models.build_opener') as factory:
+                    factory.return_value.open.return_value = io.BytesIO(
+                        b'{"data":[{"id":"provider/model","display_name":"Provider model"}]}')
+                    result = self.accounts.models()
+                request = factory.return_value.open.call_args.args[0]
+                self.assertEqual(request.full_url, 'https://provider.test/v1/models')
+                self.assertEqual(request.get_header('Anthropic-version'), '2023-06-01')
+                self.assertEqual(request.get_header('Authorization'),
+                                 'Bearer DESKTOP-GATEWAY-SECRET' if scheme == 'bearer' else None)
+                self.assertEqual(request.get_header('X-api-key'),
+                                 'DESKTOP-GATEWAY-SECRET' if scheme == 'x-api-key' else None)
+                self.assertEqual(result['groups'][0]['models'][0]['id'], 'provider/model')
+                self.assertNotIn('DESKTOP-GATEWAY-SECRET', json.dumps(result))
+
+    def test_desktop_api_model_request_reaches_only_local_fixture_with_expected_path_and_headers(self):
+        received = []
+        class Handler(BaseHTTPRequestHandler):
+            def do_GET(self):
+                received.append((self.path, self.headers.get('Authorization'),
+                                 self.headers.get('x-api-key'), self.headers.get('anthropic-version')))
+                payload = b'{"data":[{"id":"local-model","capabilities":{"effort":{"supported":true,"low":{"supported":true},"high":{"supported":false}}}}]}'
+                self.send_response(200)
+                self.send_header('Content-Type', 'application/json')
+                self.send_header('Content-Length', str(len(payload)))
+                self.end_headers()
+                self.wfile.write(payload)
+
+            def log_message(self, *args):
+                pass
+
+        server = ThreadingHTTPServer(('127.0.0.1', 0), Handler)
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        try:
+            config_id = self.gateway('LOCAL-FIXTURE-KEY')
+            path = self.threep/'configLibrary'/(config_id+'.json')
+            for suffix, scheme in (('', 'bearer'), ('/v1', 'x-api-key')):
+                config = json.loads(path.read_text())
+                config['inferenceGatewayBaseUrl'] = f'http://127.0.0.1:{server.server_port}{suffix}'
+                config['inferenceGatewayAuthScheme'] = scheme
+                self.write(path, config)
+                result = self.accounts.models()
+                self.assertEqual(result['models'][0]['efforts'], ['low'])
+            self.assertEqual(received, [
+                ('/v1/models', 'Bearer LOCAL-FIXTURE-KEY', None, '2023-06-01'),
+                ('/v1/models', None, 'LOCAL-FIXTURE-KEY', '2023-06-01')])
+        finally:
+            server.shutdown()
+            thread.join(2)
+            server.server_close()
+
+    def test_official_desktop_catalog_has_no_invented_models_or_network_call(self):
+        with patch(MODULE+'model_catalog') as query:
+            result = self.accounts.models()
+        self.assertEqual(result['models'], [])
+        self.assertEqual(result['groups'], [])
+        self.assertIn('未提供可离线读取', result['notice'])
+        query.assert_not_called()
 
     def test_import_keeps_native_profile_and_excludes_conversations_and_cli(self):
         before = (self.home/'Cookies').read_bytes()

@@ -46,6 +46,7 @@ def model_catalog(base_url, key, *, headers=None, query_params=None):
         result = {}
         for row in rows:
             if (not isinstance(row, dict) or row.get('hidden') or row.get('visibility') == 'hide'
+                    or row.get('lifecycle') == 'retired'
                     or not isinstance(row.get(field), str)
                     or not re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9_./:@+-]{0,199}', row[field])):
                 continue
@@ -56,6 +57,12 @@ def model_catalog(base_url, key, *, headers=None, query_params=None):
                 effort = level.get('reasoningEffort', level.get('effort')) if isinstance(level, dict) else level
                 if isinstance(effort, str) and effort in ('none', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max', 'ultra') and effort not in efforts:
                     efforts.append(effort)
+            if 'supportedReasoningEfforts' not in row and 'supported_reasoning_levels' not in row:
+                capabilities = row.get('capabilities')
+                native = capabilities.get('effort') if isinstance(capabilities, dict) else None
+                if isinstance(native, dict) and native.get('supported') is True:
+                    efforts = [level for level in ('low', 'medium', 'high', 'xhigh', 'max')
+                               if isinstance(native.get(level), dict) and native[level].get('supported') is True]
             default = row.get('defaultReasoningEffort', row.get('default_reasoning_level'))
             name = row.get('displayName') or row.get('display_name') or row.get('name')
             result.setdefault(identifier, {'id': identifier, 'name': name if isinstance(name, str) else identifier,

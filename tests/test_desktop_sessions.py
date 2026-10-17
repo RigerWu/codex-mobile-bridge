@@ -6,6 +6,7 @@ from pathlib import Path
 from unittest.mock import Mock, patch
 
 from bridge.clients.manager import DesktopSessions
+from bridge.clients.claude.accounts import ClaudeAccounts
 from bridge.clients.errors import BridgeUnavailable
 from bridge.clients.deepseek.adapter import DeepSeek, MARKER
 import test_bridge
@@ -129,13 +130,13 @@ class Adapters(unittest.TestCase):
         manager._account_model_identity = Mock(return_value='account-one')
         manager._account_model_live = Mock(return_value=False)
         manager._read = Mock(return_value={'models':[{'id':'first'}], 'groups':[]})
-        first = manager.control({'action':'account', 'provider':'claude'})
+        first = manager.control({'action':'account', 'provider':'deepseek'})
         self.assertEqual(first['cache']['state'], 'fresh')
         self.assertEqual(first['cache']['identity'], 'account-one')
-        self.assertEqual(manager.call('claude', 'account')['models'], first['models'])
+        self.assertEqual(manager.call('deepseek', 'account')['models'], first['models'])
         manager._read.assert_called_once()
         manager._read.side_effect = ValueError('upstream unavailable')
-        stale = manager.call('claude', 'account', body={'refresh':True})
+        stale = manager.call('deepseek', 'account', body={'refresh':True})
         self.assertEqual(stale['models'], first['models'])
         self.assertEqual(stale['cache']['updatedAt'], first['cache']['updatedAt'])
         self.assertEqual(stale['cache']['state'], 'stale')
@@ -143,7 +144,113 @@ class Adapters(unittest.TestCase):
         manager._account_model_identity.return_value = 'account-two'
         manager._read.side_effect = None
         manager._read.return_value = {'models':[{'id':'second'}], 'groups':[]}
-        self.assertEqual(manager.call('claude', 'account')['models'][0]['id'], 'second')
+        self.assertEqual(manager.call('deepseek', 'account')['models'][0]['id'], 'second')
+
+    def test_disconnected_claude_account_models_use_native_config_without_connector(self):
+        store = ClaudeAccounts(self.root/'accounts', self.root/'Claude')
+        store.home.mkdir()
+        store._current = Mock(return_value=('api', 'fingerprint-one', {'config': {
+            'inferenceGatewayBaseUrl': 'https://provider.test/v1',
+            'inferenceGatewayApiKey': 'secret', 'inferenceGatewayAuthScheme': 'x-api-key',
+            'inferenceModels': ['configured-model']}}))
+        adapter = self.manager.adapters['claude']
+        adapter.desktop = None
+        with patch.object(self.manager, '_account_store', return_value=store), \
+             patch('bridge.clients.claude.accounts.model_catalog', return_value=[
+                 {'id': 'upstream-model', 'name': 'Upstream', 'efforts': ['high']}]) as upstream, \
+             patch.object(adapter, 'call', side_effect=AssertionError('connector used')) as connector, \
+             patch.object(adapter, 'connect', side_effect=AssertionError('connected')):
+            public = self.manager._accounts_public('claude', {'accounts': []})
+            result = self.manager.call('claude', 'account')
+            self.assertEqual(result['cache']['identity'], public['modelCatalogIdentity'])
+            self.assertEqual(result['groups'][0]['models'][0]['id'], 'upstream-model')
+            self.assertEqual(result['groups'][0]['models'][0]['efforts'], ['high'])
+            self.assertEqual(result['groups'][0]['source'], 'upstream-api')
+            self.manager.call('claude', 'account')
+            self.assertEqual(upstream.call_count, 1)
+            self.manager.call('claude', 'account', body={'refresh': True})
+            self.assertEqual(upstream.call_count, 2)
+            connector.assert_not_called()
+
+    def test_disconnected_claude_account_change_rejects_old_models(self):
+        store = ClaudeAccounts(self.root/'accounts', self.root/'Claude')
+        store.home.mkdir()
+        store._current = Mock(return_value=('api', 'fingerprint-one', {'config': {
+            'inferenceGatewayBaseUrl': 'https://provider.test/v1',
+            'inferenceGatewayApiKey': 'secret', 'inferenceGatewayAuthScheme': 'bearer'}}))
+        with patch.object(self.manager, '_account_store', return_value=store), \
+             patch('bridge.clients.claude.accounts.model_catalog') as upstream:
+            old_identity = self.manager._account_model_identity('claude')
+            def changed(*args, **kwargs):
+                store._current.return_value = ('api', 'fingerprint-two', store._current.return_value[2])
+                return [{'id': 'old-model', 'name': 'Old', 'efforts': []}]
+            upstream.side_effect = changed
+            with self.assertRaisesRegex(ValueError, '账号或配置已变化'):
+                self.manager.call('claude', 'account')
+            self.assertIsNone(self.manager.model_store.read(old_identity))
+            self.assertIsNone(self.manager.model_store.read(self.manager._account_model_identity('claude')))
+
+    def test_official_claude_without_local_catalog_returns_matching_identity_and_no_cache(self):
+        store = ClaudeAccounts(self.root/'accounts', self.root/'Claude')
+        store.home.mkdir()
+        store._current = Mock(return_value=('official', 'fingerprint-one', None))
+        with patch.object(self.manager, '_account_store', return_value=store), \
+             patch.object(self.manager.adapters['claude'], 'call', side_effect=AssertionError('connector used')):
+            identity = self.manager._accounts_public('claude', {'accounts': []})['modelCatalogIdentity']
+            result = self.manager.call('claude', 'account')
+            self.assertEqual(result['cache']['identity'], identity)
+            self.assertEqual(result['cache']['state'], 'unavailable')
+            self.assertEqual(result['models'], [])
+            self.assertIsNone(self.manager.model_store.read(identity))
+
+    def test_connected_official_claude_groups_seed_cache_for_later_disconnected_reads(self):
+        store = ClaudeAccounts(self.root/'accounts', self.root/'Claude')
+        store.home.mkdir()
+        store._current = Mock(return_value=('official', 'fingerprint-one', None))
+        adapter = self.manager.adapters['claude']
+        adapter.desktop = Mock(connected=True)
+        adapter.call = Mock(return_value={'groups': [{'surface': 'code', 'source': 'desktop-catalog',
+            'models': [{'id': 'native-model', 'name': 'Native', 'efforts': ['low', 'high']}]}]})
+        with patch.object(self.manager, '_account_store', return_value=store):
+            first = self.manager.call('claude', 'account')
+            self.assertEqual(first['models'][0]['id'], 'native-model')
+            self.assertEqual(first['groups'][0]['source'], 'desktop-catalog')
+            adapter.desktop.connected = False
+            cached = self.manager.call('claude', 'account')
+            self.assertEqual(cached['groups'], first['groups'])
+            self.assertEqual(cached['cache']['identity'], first['cache']['identity'])
+            adapter.call.assert_called_once_with('account', None, {})
+
+    def test_claude_api_refresh_failure_keeps_last_upstream_catalog(self):
+        store = ClaudeAccounts(self.root/'accounts', self.root/'Claude')
+        store.home.mkdir()
+        store._current = Mock(return_value=('api', 'fingerprint-one', {'config': {
+            'inferenceGatewayBaseUrl': 'https://provider.test/v1',
+            'inferenceGatewayApiKey': 'secret', 'inferenceModels': ['configured-model']}}))
+        with patch.object(self.manager, '_account_store', return_value=store), \
+             patch('bridge.clients.claude.accounts.model_catalog') as upstream:
+            upstream.return_value = [{'id': 'upstream-model', 'name': 'Upstream', 'efforts': ['high']}]
+            first = self.manager.call('claude', 'account')
+            upstream.side_effect = ValueError('upstream unavailable')
+            stale = self.manager.call('claude', 'account', body={'refresh': True})
+            self.assertEqual(stale['groups'], first['groups'])
+            self.assertEqual(stale['cache']['state'], 'stale')
+            self.assertEqual(stale['cache']['updatedAt'], first['cache']['updatedAt'])
+
+    def test_uncached_claude_api_failure_labels_configured_models_without_persisting(self):
+        store = ClaudeAccounts(self.root/'accounts', self.root/'Claude')
+        store.home.mkdir()
+        store._current = Mock(return_value=('api', 'fingerprint-one', {'config': {
+            'inferenceGatewayBaseUrl': 'https://provider.test/v1',
+            'inferenceGatewayApiKey': 'secret', 'inferenceModels': ['configured-model']}}))
+        with patch.object(self.manager, '_account_store', return_value=store), \
+             patch('bridge.clients.claude.accounts.model_catalog', side_effect=ValueError('upstream unavailable')):
+            identity = self.manager._accounts_public('claude', {'accounts': []})['modelCatalogIdentity']
+            result = self.manager.call('claude', 'account')
+            self.assertEqual(result['cache']['identity'], identity)
+            self.assertEqual(result['groups'][0]['source'], 'desktop-config')
+            self.assertEqual(result['groups'][0]['models'][0]['efforts'], [])
+            self.assertIsNone(self.manager.model_store.read(identity))
 
     def test_account_list_exposes_same_safe_catalog_identity(self):
         manager = self.manager

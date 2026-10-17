@@ -1,5 +1,6 @@
 """Read-only per-account metadata and actual local connection identification."""
 import hashlib
+import os
 import threading
 import time
 
@@ -21,8 +22,8 @@ class AccountInfo:
 
     def source_stamp(self):
         home = self.manager.home
-        return tuple(hashlib.sha256((home/name).read_bytes()).hexdigest() if (home/name).is_file() else None
-                     for name in ('config.toml', 'auth.json'))
+        return (tuple(hashlib.sha256((home/name).read_bytes()).hexdigest() if (home/name).is_file() else None
+                      for name in ('config.toml', 'auth.json')) + (os.environ.get('OPENAI_BASE_URL'),))
 
     def read_identity(self):
         from bridge.features.accounts.accounts import ManagedRPC, token_owner
@@ -37,7 +38,7 @@ class AccountInfo:
             auth = read_json(manager.home/'auth.json', {})
             try:
                 native_auth = rpc.request('account/read', {'refreshToken': False})
-                login = Account.login_context(rpc, auth=native_auth)
+                login = Account.login_context(rpc, auth=native_auth, config=config)
             except AccountError:
                 if not custom:
                     raise
@@ -51,13 +52,32 @@ class AccountInfo:
                             'login': login}
                 if account.get('type') != 'apiKey':
                     return {'kind':'signedOut', 'name':''}
-            import os
             key = (os.environ.get(definition['env_key'], '') if definition.get('env_key')
                    else definition.get('experimental_bearer_token') or '')
             if not key and not definition.get('env_key') and (provider == 'openai' or definition.get('requires_openai_auth')):
                 key = auth.get('OPENAI_API_KEY') or os.environ.get('OPENAI_API_KEY', '')
             return {'kind':'api', 'name':'API · '+provider, 'baseUrl':(definition.get('base_url') or ((effective.get('openai_base_url') or os.environ.get('OPENAI_BASE_URL')) if provider == 'openai' else None) or 'https://api.openai.com/v1').rstrip('/'),
                     'key':key, 'model':effective.get('model'), 'login': login}
+
+    def route_key_for(self, identifier):
+        try:
+            current_stamp = self.source_stamp()
+        except OSError:
+            return None
+        if self.stamp != current_stamp or not self.identity or not self.identity.get('login'):
+            return None
+        login = self.identity['login']
+        if identifier == CURRENT_LOGIN_ID or (login.get('owner') and
+                any(row['id'] == identifier and row.get('tokenOwner') == login['owner']
+                    for row in self.manager.index['accounts'])):
+            return login['context'].get('_routeCacheKey')
+        return None
+
+    def public_details(self, identifier):
+        route_key = self.route_key_for(identifier)
+        return {section: {key: value for key, value in detail.items() if key != '_routeCacheKey'}
+                for section, detail in self.entries.get(identifier, {}).items()
+                if not detail.get('_routeCacheKey') or detail['_routeCacheKey'] == route_key}
 
     def current_login(self):
         try:
@@ -73,11 +93,11 @@ class AccountInfo:
             return {**{k: saved[k] for k in ('id','name','kind','email','planType') if k in saved},
                     'email': context.get('email'), 'planType': context.get('planType'),
                     'accountKey': context['accountKey'],
-                    'details': self.entries.get(saved['id'], {})}
+                    'details': self.public_details(saved['id'])}
         return {'id': CURRENT_LOGIN_ID, 'kind': 'chatgpt', 'name': 'ChatGPT',
                 'email': context.get('email'), 'planType': context.get('planType'),
                 'accountKey': context['accountKey'], 'transient': True,
-                'details': {k: v for k, v in self.entries.get(CURRENT_LOGIN_ID, {}).items()
+                'details': {k: v for k, v in self.public_details(CURRENT_LOGIN_ID).items()
                             if v.get('accountKey') == context['accountKey']}}
 
     def match(self, identity):
@@ -148,12 +168,17 @@ class AccountInfo:
                 raise ValueError('API 接入不提供官方额度')
             info = self.entries.setdefault(row['id'], {})
             cached = info.get(section) or {}
+            route_key = self.route_key_for(row['id']) if section == 'usage' else None
+            if cached.get('_routeCacheKey') != route_key:
+                cached = {}
             if row.get('transient') and cached.get('accountKey') != row['accountKey']:
                 cached = {}
             ttl = 0 if value.get('refresh') else 300
             if cached.get('status') == 'loading' or time.time()-cached.get('checkedAt', 0) < ttl:
                 return manager.public()
             info[section] = {**cached, 'status':'loading', 'error':None}
+            if route_key:
+                info[section]['_routeCacheKey'] = route_key
             if row.get('transient'):
                 info[section]['accountKey'] = row['accountKey']
             threading.Thread(target=self.read, args=(row,section,value.get('refresh',False),info[section]), daemon=True).start()
@@ -163,6 +188,7 @@ class AccountInfo:
         with self.manager.lock:
             if pending is None:
                 pending = self.entries.get(row['id'], {}).get(section)
+            expected_route = ((pending or {}).get('_routeCacheKey') or self.route_key_for(row['id'])) if section == 'usage' else None
         if row.get('transient'):
             try:
                 result = self.manager.account({'id': CURRENT_LOGIN_ID, 'operation': 'read', 'refresh': refresh})
@@ -178,9 +204,12 @@ class AccountInfo:
                 if info.get(section) is not pending:
                     return
                 current = self.current_login()
-                if current and current.get('accountKey') == row['accountKey']:
+                if (current and current.get('accountKey') == row['accountKey'] and
+                        self.route_key_for(CURRENT_LOGIN_ID) == expected_route):
                     if result['status'] == 'error':
                         result = {**info.get(section, {}), **result}
+                    if expected_route:
+                        result['_routeCacheKey'] = expected_route
                     info[section] = result
                 else:
                     info.pop(section, None)
@@ -209,12 +238,20 @@ class AccountInfo:
                     with ManagedRPC(home, manager.runtime) as rpc:
                         context = Account.login_context(rpc) if native_login else Account.context(rpc)
                         if (not context or context.get('loginType') != 'chatgpt' or context.get('email') != row.get('email') or
-                                native_login and context['accountKey'] != login['context']['accountKey']):
+                                native_login and (context['accountKey'] != login['context']['accountKey'] or
+                                                  context.get('_routeCacheKey') != login['context'].get('_routeCacheKey'))):
                             raise ValueError('账号身份不匹配')
                         if section == 'usage':
+                            if native_login:
+                                expected_route = context.get('_routeCacheKey')
                             result = manager.bridge.account.limits(rpc, context, refresh=refresh)
                             result.update(planType=context.get('planType'),
                                           subscription=manager.bridge.account.subscription(home, context, refresh=refresh))
+                            if native_login:
+                                current = Account.login_context(rpc)
+                                if (not current or current.get('_routeCacheKey') != context.get('_routeCacheKey') or
+                                        current['accountKey'] != context['accountKey']):
+                                    raise ValueError('账号身份已变化')
                         else:
                             models, cursor, seen = [], None, set()
                             while True:
@@ -242,6 +279,11 @@ class AccountInfo:
             if self.entries.get(row['id'], {}).get(section) is not pending:
                 return
             if any(r['id'] == row['id'] for r in manager.index['accounts']):
+                if section == 'usage' and expected_route != self.route_key_for(row['id']):
+                    self.entries.get(row['id'], {}).pop(section, None)
+                    return
                 if result['status'] == 'error':
                     result = {**self.entries.get(row['id'], {}).get(section, {}), **result}
+                if expected_route:
+                    result['_routeCacheKey'] = expected_route
                 self.entries.setdefault(row['id'], {})[section] = result

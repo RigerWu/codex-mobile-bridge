@@ -210,7 +210,7 @@ class Accounts:
             current = self.info.current()
             verified = bool(current.get('id'))
             return {'accounts': [{**{k: row[k] for k in ('id', 'name', 'kind', 'email', 'planType', 'baseUrl', 'model') if k in row},
-                                  'details': copy.deepcopy(self.info.entries.get(row['id'], {}))}
+                                  'details': copy.deepcopy(self.info.public_details(row['id']))}
                                  for row in self.index['accounts']],
                     'activeId': current.get('id'), 'activeVerified': verified, 'current': current, 'blockers': self.blockers(),
                     'externalChange': bool(self.index.get('activeId')) and not verified,
@@ -528,9 +528,11 @@ class Accounts:
         target.usage_cache = self.bridge.account.usage_cache
         target.subscription_cache = self.bridge.account.subscription_cache
         expected_owner = self.info.identity['login']['owner']
+        expected_route = self.info.identity['login']['context'].get('_routeCacheKey')
         def checked_login(rpc):
             context = Account.login_context(rpc)
             if (not context or context['accountKey'] != row['accountKey'] or
+                    context.get('_routeCacheKey') != expected_route or
                     token_owner(read_json(self.home/'auth.json', {})) != expected_owner):
                 raise ValueError('账号身份已变化，请刷新列表')
             return context
@@ -556,7 +558,8 @@ class Accounts:
         def checked_context(rpc):
             context = Account.login_context(rpc) if native_login else Account.context(rpc)
             if (not context or context.get('loginType') != 'chatgpt' or context.get('email') != row.get('email') or
-                    native_login and context['accountKey'] != login['context']['accountKey'] or
+                    native_login and (context['accountKey'] != login['context']['accountKey'] or
+                                      context.get('_routeCacheKey') != login['context'].get('_routeCacheKey')) or
                     token_owner(read_json(home/'auth.json', {})) != row.get('tokenOwner')):
                 raise ValueError('账号身份已变化')
             return context

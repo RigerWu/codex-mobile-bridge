@@ -2,7 +2,7 @@ import base64
 import json
 import time
 import unittest
-from unittest.mock import Mock, patch
+from unittest.mock import Mock, call, patch
 
 import test_accounts
 from bridge.features.accounts.accounts import private_json
@@ -61,7 +61,7 @@ class InfoTests(unittest.TestCase):
                 with patch('bridge.features.accounts.accounts.ManagedRPC') as rpc:
                     rpc.return_value.__enter__.return_value=native
                     identity=self.manager.info.read_identity()
-                self.assertEqual(identity,{'kind':'chatgpt','name':row['email'],'owner':row['tokenOwner']})
+                self.assertEqual(identity,{'kind':'chatgpt','name':row['email'],'owner':row['tokenOwner'],'login':None})
                 self.assertEqual(self.manager.info.match(identity),row)
                 native.request.assert_any_call('account/read',{'refreshToken':False})
 
@@ -88,7 +88,9 @@ class InfoTests(unittest.TestCase):
         self.assertEqual(identity['kind'],'api')
         self.assertEqual(identity['baseUrl'],'https://api.test/v1')
         self.assertEqual(identity['key'],'fixture-key')
-        native.request.assert_called_once_with('config/read',{'includeLayers':False})
+        self.assertEqual(native.request.call_args_list, [
+            call('config/read',{'includeLayers':False}),
+            call('account/read',{'refreshToken':False})])
 
     def test_inactive_official_usage_models_are_isolated_and_sanitized(self):
         row,_=self.official();before=self.manager.snapshot_files();info=self.manager.info

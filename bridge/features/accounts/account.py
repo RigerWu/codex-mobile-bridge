@@ -165,7 +165,7 @@ class Account:
         return AccountRPC(self.home, executable)
 
     @staticmethod
-    def login_context(rpc, auth=None):
+    def login_context(rpc, auth=None, config=None):
         if auth is None:
             auth = rpc.request('account/read', {'refreshToken': False})
         account = auth.get('account') or {}
@@ -174,8 +174,20 @@ class Account:
                 (auth.get('workspaceRouting') or {}).get('backendOrigin') != 'https://chatgpt.com'):
             return None
         identity = json.dumps([account, auth.get('workspaceRouting')], sort_keys=True, separators=(',', ':'))
-        return {'loginType': 'chatgpt', 'accountKey': hashlib.sha256(identity.encode()).hexdigest(),
+        account_key = hashlib.sha256(identity.encode()).hexdigest()
+        if config is None:
+            config = rpc.request('config/read', {'includeLayers': False}).get('config', {})
+        profile = (config.get('profiles') or {}).get(config.get('profile'), {})
+        effective = {**config, **profile}
+        return {'loginType': 'chatgpt', 'accountKey': account_key,
+                '_routeCacheKey': Account.route_cache_key(account_key, effective),
                 'email': account.get('email'), 'planType': account.get('planType'), 'canReset': True}
+
+    @staticmethod
+    def route_cache_key(account_key, effective):
+        route = effective.get('openai_base_url') or os.environ.get('OPENAI_BASE_URL')
+        cache_identity = json.dumps([account_key, route], separators=(',', ':'))
+        return hashlib.sha256(cache_identity.encode()).hexdigest()
 
     @staticmethod
     def context(rpc):
@@ -195,10 +207,8 @@ class Account:
             return {'loginType': 'unknown'}
         identity = json.dumps([account, auth.get('workspaceRouting')], sort_keys=True, separators=(',', ':'))
         account_key = hashlib.sha256(identity.encode()).hexdigest()
-        route = effective.get('openai_base_url') or os.environ.get('OPENAI_BASE_URL')
-        cache_identity = json.dumps([account_key, route], separators=(',', ':'))
         return {'loginType': 'chatgpt', 'accountKey': account_key,
-                '_routeCacheKey': hashlib.sha256(cache_identity.encode()).hexdigest(),
+                '_routeCacheKey': Account.route_cache_key(account_key, effective),
                 'email': account.get('email'), 'planType': account.get('planType'),
                 'canReset': True}
 
@@ -243,6 +253,10 @@ class Account:
                                       if row['accountKey'] == context['accountKey'] and not row.get('outcome')), None)
         result.setdefault('updatedAt', None)
         result['subscription'] = self.subscription(self.home, context, refresh=refresh)
+        current = self.context(rpc)
+        if (current.get('accountKey') != context['accountKey'] or
+                current.get('_routeCacheKey') != context.get('_routeCacheKey')):
+            return {'visible': False, 'loginType': current['loginType'] if not current.get('accountKey') else 'unknown'}
         return result
 
     def read(self, refresh=True):

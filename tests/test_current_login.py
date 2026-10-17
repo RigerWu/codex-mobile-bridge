@@ -8,7 +8,7 @@ from unittest.mock import Mock, patch
 
 import test_account
 import test_account_info
-from bridge.features.accounts.account import Account
+from bridge.features.accounts.account import Account, AccountError
 from bridge.features.accounts.info import CURRENT_LOGIN_ID
 from bridge.features.accounts.monitor import AccountMonitor
 from bridge.features.accounts.accounts import operation, private_json
@@ -141,6 +141,70 @@ class CurrentLoginTests(unittest.TestCase):
         self.assertEqual(value['loginAccount']['accountKey'], context['accountKey'])
         self.assertFalse(self.manager.directory('a' * 32).exists())
         self.assertNotIn('owner', json.dumps(value))
+
+    def test_native_login_route_change_uses_separate_usage_cache_and_stable_reset_identity(self):
+        rpc, _ = self.login()
+        rpc.config['openai_base_url'] = 'https://route-a.test/backend-api/codex'
+        first_context = Account.login_context(rpc)
+        self.manager.info.identity['login']['context'] = first_context
+        with patch('bridge.features.accounts.account.Account.rpc', return_value=rpc), \
+                patch('bridge.features.accounts.account.subscription_period', return_value={'observedAt': time.time()}):
+            first = self.manager.account({'id': CURRENT_LOGIN_ID, 'operation': 'read', 'refresh': False})
+            rpc.config['openai_base_url'] = 'https://route-b.test/backend-api/codex'
+            rpc.limits['rateLimits']['primary']['usedPercent'] = 80
+            second_context = Account.login_context(rpc)
+            self.manager.info.identity['login']['context'] = second_context
+            second = self.manager.account({'id': CURRENT_LOGIN_ID, 'operation': 'read', 'refresh': False})
+        self.assertEqual(first['accountKey'], second['accountKey'])
+        self.assertNotEqual(first_context['_routeCacheKey'], second_context['_routeCacheKey'])
+        self.assertEqual(first['limits'][0]['windows'][0]['remainingPercent'], 75)
+        self.assertEqual(second['limits'][0]['windows'][0]['remainingPercent'], 20)
+        self.assertEqual(sum(method == 'account/rateLimits/read' for method, _ in rpc.calls), 2)
+        self.assertNotIn('_routeCacheKey', second)
+
+    def test_native_login_route_change_during_card_check_blocks_reset(self):
+        rpc, context = self.login()
+        rpc.config['openai_base_url'] = 'https://route-a.test/backend-api/codex'
+        context = Account.login_context(rpc)
+        self.manager.info.identity['login']['context'] = context
+        rpc.on_limits = lambda: rpc.config.update(openai_base_url='https://route-b.test/backend-api/codex')
+        with patch('bridge.features.accounts.account.Account.rpc', return_value=rpc):
+            with self.assertRaises(ValueError):
+                self.manager.account({'id': CURRENT_LOGIN_ID, 'operation': 'consume', 'confirmed': True,
+                                      'requestId': str(uuid.uuid4()), 'accountKey': context['accountKey'],
+                                      'creditId': 'card-1'})
+        self.assertFalse(any(method.endswith('/consume') for method, _ in rpc.calls))
+
+    def test_native_login_unknown_reset_remains_pending_after_route_change(self):
+        rpc, context = self.login()
+        request_id = str(uuid.uuid4())
+        rpc.fail_consume = True
+        body = {'id': CURRENT_LOGIN_ID, 'operation': 'consume', 'confirmed': True,
+                'requestId': request_id, 'accountKey': context['accountKey'], 'creditId': 'card-1'}
+        with patch('bridge.features.accounts.account.Account.rpc', return_value=rpc), \
+                patch('bridge.features.accounts.account.subscription_period', return_value={'observedAt': time.time()}):
+            with self.assertRaises(AccountError):
+                self.manager.account(body)
+            rpc.config['openai_base_url'] = 'https://route-b.test/backend-api/codex'
+            self.manager.info.identity['login']['context'] = Account.login_context(rpc)
+            current = self.manager.account({'id': CURRENT_LOGIN_ID, 'operation': 'read'})
+            self.assertEqual(current['pendingReset']['requestId'], request_id)
+            with self.assertRaises(AccountError):
+                self.manager.account({**body, 'requestId': str(uuid.uuid4())})
+        self.assertEqual(sum(method.endswith('/consume') for method, _ in rpc.calls), 1)
+
+    def test_native_login_details_hide_old_route_and_private_cache_key(self):
+        rpc, context = self.login()
+        self.manager.info.entries[CURRENT_LOGIN_ID] = {'usage': {'status': 'ready', 'accountKey': context['accountKey'],
+            '_routeCacheKey': context['_routeCacheKey'], 'checkedAt': time.time(), 'limits': ['route-a']}}
+        self.assertEqual(self.manager.public()['loginAccount']['details']['usage']['limits'], ['route-a'])
+        self.assertNotIn('_routeCacheKey', json.dumps(self.manager.public()))
+        rpc.config['openai_base_url'] = 'https://route-b.test/backend-api/codex'
+        self.manager.info.identity['login']['context'] = Account.login_context(rpc)
+        self.assertEqual(self.manager.public()['loginAccount']['details'], {})
+        with patch('bridge.features.accounts.info.threading.Thread') as worker:
+            self.manager.info.request({'id': CURRENT_LOGIN_ID, 'section': 'usage'})
+            worker.assert_called_once()
 
     def check_native_reminders(self, saved_api=False, imported=False):
         if imported:

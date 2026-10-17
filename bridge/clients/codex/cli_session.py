@@ -14,8 +14,8 @@ from pathlib import Path
 
 from bridge.clients.codex.app_server import (
     AppServerError, AppServerUnavailable, AppServerUnknownResult, AppServerUnsupported, CodexAppServer)
-from bridge.clients.codex.catalog import Catalog, ModelStore
-from bridge.clients.codex.remote import RemoteStore, RemoteUnavailable
+from bridge.clients.codex.catalog import Catalog, CatalogError, ModelStore
+from bridge.clients.codex.remote import RemoteStore, RemoteUnavailable, remote_model_catalog, remote_model_identity
 from bridge.platforms.codex_daemon_env import read_daemon_environment, DaemonEnvironmentUnavailable
 from bridge.features.sessions.goal import GoalError, GoalUnavailable, GoalUnsupported, normalize_goal_result
 from bridge.features.sessions import linux_permissions
@@ -606,7 +606,9 @@ class CliSessions:
             raise DaemonEnvironmentUnavailable('Codex daemon executable is unavailable') from exc
         return read_daemon_environment(self.home, executable, names)
 
-    def model_environment_identity(self, config, provider, account=None):
+    def model_environment_identity(self, config, provider, account=None, cwd=None):
+        if self.alias is not None:
+            return remote_model_identity(self.alias, self.remote_home, cwd, provider, config, account)
         environment, process = self.model_environment(config, provider, account)
         return ModelStore.key('native-cli-environment-v1', process, environment)
 
@@ -637,11 +639,17 @@ class CliSessions:
                 custom = account.get('type') == 'apiKey'
             if custom and not configured_catalog:
                 if self.alias is not None:
-                    return {'kind': 'models', 'models': [], 'modelSource': 'api',
-                        'fastMode': {'allowed': False},
-                        'modelError': '无法核验 SSH 原生 CLI 的 API 凭据环境，请手动填写模型 ID',
-                        'currentModel': state.get('latestModel'),
-                        'currentEffort': state.get('latestReasoningEffort')}
+                    try:
+                        metadata = self._optional_model_metadata('model/list', {
+                            'cursor': None, 'limit': 100, 'includeHidden': False})
+                        catalog = remote_model_catalog(self.alias, self.remote_home, cwd, provider,
+                                                       config, account, metadata.get('data') or [])
+                    except CatalogError as exc:
+                        catalog = {'models': [], 'modelError': str(exc)}
+                    return {'kind': 'models', 'models': catalog['models'], 'modelSource': 'api',
+                            'fastMode': {'allowed': False}, 'modelError': catalog.get('modelError'),
+                            'currentModel': state.get('latestModel'),
+                            'currentEffort': state.get('latestReasoningEffort')}
                 reader = Catalog(self.home, self.configured_cli, allow_background_refresh=False)
                 try:
                     environment, _ = self.model_environment(config, provider, account)

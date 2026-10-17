@@ -101,6 +101,14 @@ class RemoteCliModelsTests(unittest.TestCase):
                                 config={'model_provider': 'openai', 'model_catalog_json': '/native/models.json'})
         self.assertEqual(result, {'error': '当前原生 CLI 接入不是 API 模型目录，请手动填写模型 ID'})
 
+    def test_openai_custom_query_auth_reads_target_key_and_base_without_account(self):
+        daemon = "def read_daemon_environment(home, executable, names):\n assert names == {'OPENAI_API_KEY', 'OPENAI_BASE_URL'}\n return ({'OPENAI_API_KEY':'target-key', 'OPENAI_BASE_URL':'https://target.invalid/v1'}, (7,42,executable))"
+        catalog = "def model_catalog(base, key, **options):\n assert base == 'https://target.invalid/v1' and key == 'target-key'\n return [{'id':'target/model', 'name':'Target', 'efforts':['low','high']}]"
+        result, output = self.worker('models', daemon, catalog, provider='openai', account={},
+                                     config={'model_providers': {'openai': {'query_params': {'version': 'fixture'}}}})
+        self.assertEqual(result['models'][0]['efforts'], ['low', 'high'])
+        self.assertNotIn('target-key', output)
+
     def test_non_posix_ssh_target_is_explicitly_unsupported(self):
         daemon = "sys.platform = 'win32'\ndef read_daemon_environment(*args): raise AssertionError('unsupported target read')"
         catalog = "def model_catalog(*args, **kwargs): raise AssertionError('unsupported target HTTP')"
@@ -111,7 +119,7 @@ class RemoteCliModelsTests(unittest.TestCase):
         identity = 'a' * 64
         with patch.object(RemoteCliModels, '_source', return_value='import json\n'), \
              patch('bridge.clients.codex.remote.ssh_read', return_value={'identity': identity}) as read:
-            self.assertEqual(remote_model_identity('fixture-host', str(self.home), str(self.cwd),
+            self.assertEqual(remote_model_identity('fixture-host', self.home, self.cwd,
                                                    'fixture', self.config, {'type': 'apiKey'}), identity)
         source = read.call_args.args[1]
         self.assertNotIn('fixture.invalid', source)

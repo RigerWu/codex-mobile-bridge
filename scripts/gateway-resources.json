@@ -5,6 +5,7 @@
   "bridge/platforms/codex_daemon_env.py",
   "bridge/platforms/linux/codex_daemon_env.py",
   "bridge/platforms/macos/codex_daemon_env.py",
+  "bridge/platforms/macos/force_exit.py",
   "bridge/platforms/windows/codex_daemon_env.py",
   "bridge/features/sessions/create.py",
   "bridge/features/accounts/models.py",

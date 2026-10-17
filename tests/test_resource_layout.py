@@ -8,7 +8,7 @@ import unittest
 from pathlib import Path, PurePosixPath
 
 from bridge.api.assets import FONT_ROUTE, PDF_CMAP_ROUTE, PDF_FONT_ROUTE, STATIC
-from bridge.clients.codex.remote import RemoteCatalog
+from bridge.clients.codex.remote import RemoteCatalog, RemoteCliModels
 from bridge.features.auth import tls
 from bridge.resources import project_root, source_text
 
@@ -48,6 +48,7 @@ PLATFORM_SOURCES = {
     'bridge/platforms/codex_daemon_env.py',
     'bridge/platforms/linux/codex_daemon_env.py',
     'bridge/platforms/macos/codex_daemon_env.py',
+    'bridge/platforms/macos/force_exit.py',
     'bridge/platforms/windows/codex_daemon_env.py',
 }
 CONNECTORS = {'bridge/clients/claude/connector.js', 'bridge/clients/deepseek/host.mjs'}
@@ -152,6 +153,9 @@ class ResourceLayoutTests(unittest.TestCase):
                 self.assertFalse(any(name.name.startswith('bridge') for name in node.names))
         cases = [{'name': 'catalog-with-models-and-tls', 'source': source,
                   'symbols': [symbol for name in sorted(combined) for symbol in SSH_SOURCES[name]]}]
+        cases.append({'name': 'native-cli-models-with-platform-readers',
+                      'source': RemoteCliModels._source(),
+                      'symbols': ['remote_model_worker', 'read_daemon_environment']})
         for relative, symbols in SSH_SOURCES.items():
             if relative not in combined:
                 cases.append({'name': relative, 'source': source_text(relative.removeprefix('bridge/')),

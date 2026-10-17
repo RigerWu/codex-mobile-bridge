@@ -48,11 +48,11 @@ def _environment_snapshot(home, cwd, provider, config, account):
     definition = (effective.get('model_providers') or {}).get(provider) or {}
     names = {name for name in (definition.get('env_key'), *(definition.get('env_http_headers') or {}).values())
              if isinstance(name, str) and name}
-    if (provider == 'openai' and account.get('type') == 'apiKey' and
+    if (provider == 'openai' and
             not effective.get('openai_base_url') and not definition.get('base_url')):
         names.add('OPENAI_BASE_URL')
     if (not definition.get('env_key') and not definition.get('experimental_bearer_token') and
-            (definition.get('requires_openai_auth') or provider == 'openai' and account.get('type') == 'apiKey' and
+            (definition.get('requires_openai_auth') or provider == 'openai' and
              not definition.get('http_headers') and not definition.get('env_http_headers'))):
         names.add('OPENAI_API_KEY')
     try:

@@ -658,6 +658,7 @@ $('composer').onsubmit=async event=>{
     if(!usedDurable)sessionStorage.removeItem(legacyKey);
     if(confirmed)attachments.clear(chatKey(target,targetHost),attachmentIds);
     if(confirmed&&sameRevision){
+      if(!usedDurable)sessionStorage.removeItem('draft:'+chatKey(target,targetHost));
       workModes.submitted(chatKey(target,targetHost),workMode);
       if(currentId===target&&currentHost===targetHost&&composerDrafts.key(codexDraftScope)===composerDrafts.key(scope)){
         restoringComposer=true;$('message').value='';selectedSkills.clear();renderSkillPills();restoringComposer=false;

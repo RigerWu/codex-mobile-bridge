@@ -323,6 +323,7 @@ class DesktopSessionsView {
       const confirmed=pending?this.composerDrafts.confirm(scope,pending.id,revision):true;
       if(confirmed)this.attachments.clear(key,ids);
       if(confirmed&&sameRevision){for(const id of skills)selected.delete(id);
+        if(!pending)this.drafts.delete(provider+':'+sid);
         if(sid===this.sid&&provider===this.provider&&(!this.composerDrafts||this.composerDrafts.key(scope)===this.composerDrafts.key(this.draftScope))){
           this.restoringDraft=true;this.input.value='';this.restoringDraft=false;this.resizeInput();
         }

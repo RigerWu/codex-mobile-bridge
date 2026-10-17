@@ -2913,6 +2913,7 @@ const en={
   "允许本次": "Allow once",
   "模型设置": "Model settings",
   "思考强度": "Reasoning effort",
+  "自动（模型默认）": "Auto (model default)",
   "聚合": "Routed",
   "无": "None",
   "最低": "Minimal",

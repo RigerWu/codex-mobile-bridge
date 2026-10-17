@@ -440,21 +440,83 @@ for line in sys.stdin:
                 self.assertEqual(third, second)
                 self.assertEqual(fetch.call_count, 2)
 
-    def test_a_failed_explicit_refresh_discards_the_old_model_cache(self):
+    def test_a_failed_explicit_refresh_keeps_the_last_successful_model_catalog(self):
         for kind in ('models', 'catalog'):
             with self.subTest(kind=kind):
                 self.reader.invalidate_models()
-                read = (lambda **kw: self.reader.get_kind('models', str(self.home), **kw)) if kind == 'models' else (
+                read = (lambda **kw: self.reader.get_kind('models', str(self.home), provider='model-test', **kw)) if kind == 'models' else (
                     lambda **kw: self.reader.get(str(self.home), **kw))
                 with patch.object(self.reader, '_fetch', side_effect=[
                         {'models': [{'model': 'old'}], 'skillEntries': []}, CatalogError('Temporary failure'),
                         {'models': [{'model': 'new'}], 'skillEntries': []}]) as fetch:
                     read()
-                    with self.assertRaises(CatalogError):
-                        read(refresh=True)
-                    result = read()
+                    if kind == 'models':
+                        failed = read(refresh=True)
+                        self.assertEqual(failed['models'][0]['id'], 'old')
+                        self.assertIn('Temporary failure', failed['modelError'])
+                        self.assertEqual(read()['models'][0]['id'], 'old')
+                        result = read(refresh=True)
+                        self.assertEqual(fetch.call_count, 3)
+                    else:
+                        with self.assertRaises(CatalogError):
+                            read(refresh=True)
+                        result = read()
+                        self.assertEqual(fetch.call_count, 3)
                 self.assertEqual(result['models'][0]['id'], 'new')
-                self.assertEqual(fetch.call_count, 3)
+
+    def test_model_cache_survives_reader_restart_and_separates_credentials(self):
+        raw = {'models': [{'model': 'first', 'supportedReasoningEfforts': [{'reasoningEffort': 'high'}]}],
+               'modelSource': 'codex'}
+        with patch.object(self.reader, '_fetch', return_value=raw) as fetch:
+            first = self.reader.get_kind('models', str(self.home), provider='openai')
+        self.assertEqual(fetch.call_count, 1)
+        restarted = Catalog(self.home, 'fixture-runtime')
+        with patch.object(restarted, '_fetch', side_effect=AssertionError('cached read contacted runtime')):
+            self.assertEqual(restarted.get_kind('models', str(self.home), provider='openai')['models'], first['models'])
+        data = restarted.model_store.path.read_bytes()
+        self.assertNotIn(b'fixture-key', data)
+        (self.home/'auth.json').write_text(json.dumps({'OPENAI_API_KEY': 'changed-key'}))
+        with patch.object(restarted, '_fetch', return_value={'models': [{'model': 'second'}]}) as fetch:
+            self.assertEqual(restarted.get_kind('models', str(self.home), provider='openai')['models'][0]['id'], 'second')
+        fetch.assert_called_once()
+
+    def test_model_result_is_rejected_if_account_changes_during_fetch(self):
+        old_identity = self.reader.model_identity(str(self.home), 'openai')
+        def switched(*args):
+            (self.home/'auth.json').write_text(json.dumps({'OPENAI_API_KEY': 'new-key'}))
+            return {'models': [{'model': 'old-account'}]}
+        with patch.object(self.reader, '_fetch', side_effect=switched):
+            with self.assertRaisesRegex(CatalogError, '接入已变化'):
+                self.reader.get_kind('models', str(self.home), provider='openai')
+        self.assertIsNone(self.reader.model_store.read(old_identity))
+
+    def test_expired_model_cache_returns_before_background_refresh(self):
+        with patch.object(self.reader, '_fetch', return_value={'models': [{'model': 'old'}]}):
+            self.reader.get_kind('models', str(self.home), provider='openai')
+        db = self.reader.model_store._connect()
+        try:
+            db.execute('UPDATE catalogs SET updated_at=0')
+            db.commit()
+        finally:
+            db.close()
+        entered, release = threading.Event(), threading.Event()
+        def slow(*args):
+            entered.set()
+            self.assertTrue(release.wait(2))
+            return {'models': [{'model': 'new'}]}
+        with patch.object(self.reader, '_fetch', side_effect=slow) as fetch:
+            first = self.reader.get_kind('models', str(self.home), provider='openai')
+            second = self.reader.get_kind('models', str(self.home), provider='openai')
+            self.assertEqual([m['id'] for m in first['models']], ['old'])
+            self.assertEqual(second['cache']['state'], 'stale')
+            self.assertTrue(entered.wait(2))
+            release.set()
+            for _ in range(100):
+                if not self.reader.model_refreshing:
+                    break
+                time.sleep(.01)
+            self.assertEqual(fetch.call_count, 1)
+        self.assertEqual(self.reader.get_kind('models', str(self.home), provider='openai')['models'][0]['id'], 'new')
 
 
 class RemoteCatalogTests(unittest.TestCase):

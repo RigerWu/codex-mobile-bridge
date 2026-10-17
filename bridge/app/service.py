@@ -6,6 +6,7 @@ import json
 import logging
 import os
 import re
+import sqlite3
 import subprocess
 import threading
 import time
@@ -26,7 +27,7 @@ from bridge.features.sessions.model import apply_patches, attachment_prompt, com
 from bridge.features.sessions.store import SessionStore, StoreUnavailable
 from bridge.features.workspace.files import artifact_paths, referenced_model_images
 from bridge.features.workspace.workspace import operate as workspace_operation
-from bridge.clients.codex.catalog import Catalog
+from bridge.clients.codex.catalog import Catalog, ModelStore, MODEL_REFRESH_SECONDS
 from bridge.clients.codex.remote import AppHosts, RemoteStore, RemoteCatalog, RemoteUnavailable, ssh_read, ssh_download, payload
 from bridge.features.sessions.create import rename_thread, independent_directory, create_empty, fork_copy, open_in_desktop, CreationError, CreationUnavailable, ForkUnavailable
 from bridge.features.sessions.timeline import Timeline
@@ -161,6 +162,11 @@ class Bridge:
         self.side_chats = SideChats(codex_bin, self.codex_home, self.data_dir, host,
                                    executable_getter=executable_getter)
         self.closed = threading.Event()
+        self.native_model_store = ModelStore(self.data_dir)
+        self.native_model_lock = threading.Lock()
+        self.native_model_reads = {}
+        self.native_model_timers = {}
+        self.native_model_refreshing = set()
         Path(data_dir).mkdir(parents=True, exist_ok=True, mode=0o700)
         self.ledger_path = Path(data_dir) / "submissions.json"
         self.submit_lock = threading.Lock()
@@ -1907,6 +1913,94 @@ class Bridge:
             result['meta']['forkedFrom'] = self._fork_origin(thread_id)
         return result
 
+    def _native_model_identity(self, cwd, provider):
+        request = self.cli_sessions.client.request
+        config = request('config/read', {'includeLayers': False, 'cwd': cwd}, replay_safe=True).get('config') or {}
+        try:
+            account = request('account/read', {'refreshToken': False}, replay_safe=True).get('account') or {}
+        except AppServerError:
+            account = {}
+        try:
+            local_auth = hashlib.sha256((self.codex_home/'auth.json').read_bytes()).hexdigest() if self.host == 'local' else None
+        except OSError:
+            local_auth = None
+        environment = {key: hashlib.sha256(value.encode()).hexdigest() for key, value in os.environ.items()
+                       if key in ('OPENAI_API_KEY', 'OPENAI_BASE_URL') or key.endswith(('_API_KEY', '_AUTH_TOKEN', '_BEARER_TOKEN'))}
+        return ModelStore.key('codex-cli', self.host, self.cli_sessions.alias, str(self.codex_home), cwd,
+                              provider, config, account, local_auth, environment)
+
+    def _schedule_native_model_refresh(self, key, thread_id, cwd, provider, updated_at, replace=False):
+        with self.native_model_lock:
+            if replace and key in self.native_model_timers:
+                self.native_model_timers.pop(key).cancel()
+            if self.closed.is_set() or key in self.native_model_timers:
+                return
+            delay = max(1, updated_at + MODEL_REFRESH_SECONDS - time.time())
+            def due():
+                with self.native_model_lock:
+                    self.native_model_timers.pop(key, None)
+                    if key in self.native_model_refreshing or self.closed.is_set():
+                        return
+                    self.native_model_refreshing.add(key)
+                try:
+                    if self._native_model_identity(cwd, provider) == key:
+                        self._native_models(thread_id, cwd, provider, refresh=True)
+                except (OSError, ValueError, AppServerError):
+                    pass
+                finally:
+                    with self.native_model_lock:
+                        self.native_model_refreshing.discard(key)
+                    if not self.closed.is_set():
+                        try:
+                            record = self.native_model_store.read(key)
+                        except (OSError, sqlite3.DatabaseError, ValueError):
+                            record = None
+                        if record:
+                            self._schedule_native_model_refresh(key, thread_id, cwd, provider,
+                                                                max(record[0], time.time()-MODEL_REFRESH_SECONDS+300))
+            timer = threading.Timer(delay, due)
+            timer.daemon = True
+            self.native_model_timers[key] = timer
+            timer.start()
+
+    def _native_models(self, thread_id, cwd, provider, refresh=False):
+        identity = self._native_model_identity(cwd, provider)
+        try:
+            persisted = self.native_model_store.read(identity)
+        except (OSError, sqlite3.DatabaseError, ValueError):
+            persisted = None
+        if persisted and not refresh:
+            self._schedule_native_model_refresh(identity, thread_id, cwd, provider, persisted[0])
+            return copy.deepcopy(persisted[1])
+        with self.native_model_lock:
+            lock = self.native_model_reads.setdefault(identity, threading.Lock())
+        with lock:
+            if not refresh:
+                try:
+                    persisted = self.native_model_store.read(identity)
+                except (OSError, sqlite3.DatabaseError, ValueError):
+                    persisted = None
+                if persisted:
+                    return copy.deepcopy(persisted[1])
+            try:
+                value = self.cli_sessions.get_kind(thread_id, 'models', refresh=refresh,
+                                                   query='', offset=0, limit=200, ids=None)
+            except (OSError, ValueError, AppServerError):
+                if persisted:
+                    return {**copy.deepcopy(persisted[1]), 'modelError': '模型列表刷新失败，已保留上次结果'}
+                raise
+            if self._native_model_identity(cwd, provider) != identity:
+                raise ValueError('账号身份已变化，请重新读取模型列表')
+            if not value.get('modelError'):
+                try:
+                    updated_at = self.native_model_store.write(identity, value)
+                    self._schedule_native_model_refresh(identity, thread_id, cwd, provider, updated_at, replace=True)
+                except (OSError, sqlite3.DatabaseError):
+                    pass
+            elif persisted:
+                return {**copy.deepcopy(persisted[1]), 'modelError': value['modelError']}
+            return value
+
     def catalog(self, thread_id, refresh=False, kind=None, query='', offset=0, limit=200, ids=None):
         session = self.session(thread_id, attach=False, background=True)
         if session.origin != 'cli':
@@ -1922,11 +2016,12 @@ class Bridge:
             provider = session.view().get('provider')
         if native:
             if kind in ('models', 'skills'):
-                value = self.cli_sessions.get_kind(thread_id, kind, refresh=refresh, query=query,
-                                                   offset=offset, limit=limit, ids=ids)
+                value = (self._native_models(thread_id, cwd, provider, refresh=refresh) if kind == 'models' else
+                         self.cli_sessions.get_kind(thread_id, kind, refresh=refresh, query=query,
+                                                    offset=offset, limit=limit, ids=ids))
                 return {**value, 'kind': kind, **({'currentModel': model or value.get('currentModel'),
                         'currentEffort': effort or value.get('currentEffort')} if kind == 'models' else {})}
-            models = self.cli_sessions.get_kind(thread_id, 'models', refresh=refresh)
+            models = self._native_models(thread_id, cwd, provider, refresh=refresh)
             skills = self.cli_sessions.get_kind(thread_id, 'skills', refresh=refresh)
             return {**models, **skills, 'currentModel': model or models.get('currentModel'),
                     'currentEffort': effort or models.get('currentEffort')}
@@ -2541,6 +2636,10 @@ class Bridge:
         self.terminals.close()
         self.side_chats.close()
         self.closed.set()
+        with self.native_model_lock:
+            for timer in self.native_model_timers.values():
+                timer.cancel()
+            self.native_model_timers.clear()
         if self.host == "local" and self.accounts:
             self.accounts.login_cancel.set()
         for bridge in list(self.remote_bridges.values()):

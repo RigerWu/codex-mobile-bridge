@@ -472,7 +472,9 @@ class Handler(BaseHTTPRequestHandler):
                 if len(parts) != 4 or parts[2] not in ('deepseek', 'claude') or parts[3] not in (WRITES if write else READS):
                     return self.output(404, {'error': '接口不存在'})
                 manager.require_enabled(parts[2])
-                body = self.read_json() if write else {}
+                body = self.read_json() if write else ({'section': query.get('section', ['all'])[0],
+                                                         'refresh': query.get('refresh') == ['true']}
+                                                        if parts[3] == 'catalog' else {})
                 sid = body.pop('sessionId', None) if write else query.get('sessionId', [None])[0]
                 if write and any(key in body for key in ('resolvedImages', 'resolvedFiles')):
                     raise ValueError('附件格式无效')

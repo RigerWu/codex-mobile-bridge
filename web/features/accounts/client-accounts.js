@@ -17,7 +17,7 @@ class DesktopClientAccountsPanel {
     const toolbar=this.toolbar||this.node('div',undefined,'accounts-toolbar');if(!this.toolbar)toolbar.append(this.node('h3','已保存的接入'));
     this.refreshButton=this.button(this.toolbar?'刷新':'重新加载',()=>this.refresh());if(this.toolbar)this.refreshButton.className='accounts-refresh';toolbar.append(this.refreshButton);if(!this.toolbar)this.root.append(toolbar);
     this.status=this.node('p',undefined,'account-muted');this.status.setAttribute('role','status');this.errorNode=this.node('p',undefined,'error');this.errorNode.setAttribute('role','alert');
-    this.current=this.node('p',undefined,'accounts-current');this.modelsButton=this.button('查看可用模型',()=>this.toggleModels());this.modelsBox=this.node('div',undefined,'accounts-models');this.rows=this.node('div',undefined,'accounts-list');this.root.append(this.status,this.errorNode,this.current,this.rows,this.modelsButton,this.modelsBox);
+    this.current=this.node('p',undefined,'accounts-current');this.modelsButton=this.button('查看可用模型',()=>this.toggleModels());this.modelsBox=this.node('div',undefined,'accounts-models');this.rows=this.node('div',undefined,'accounts-list');this.modelFallback=this.node('div',undefined,'accounts-model-fallback');this.modelFallback.append(this.modelsButton,this.modelsBox);this.root.append(this.status,this.errorNode,this.current,this.rows,this.modelFallback);
     this.hint=this.node('p',undefined,'account-muted');this.root.append(this.hint);
     if(this.desktop){const name=this.node('label',undefined,'accounts-import-name');this.nameInput=this.node('input');this.nameInput.type='text';this.nameInput.maxLength=80;name.append(this.node('span','接入名称（可选）'),this.nameInput);this.root.append(name);this.importButton=this.button(this.provider==='deepseek'?'保存当前账号':'保存当前接入',()=>this.importCurrent());this.root.append(this.importButton);if(this.provider==='deepseek'){this.importApiButton=this.button('保存当前 API',()=>this.importCurrent('api'));this.root.append(this.importApiButton);}}
     if(this.desktop)this.buildEditor();
@@ -170,7 +170,8 @@ class DesktopClientAccountsPanel {
       for(const control of [this.addApiButton,this.editSubmit,this.editCancel,this.editName.input,this.editUrl.input,this.editKey.input,this.editAuth,this.editModels.input])control.disabled=this.busy||this.loading;
       this.editHint.textContent=this.text(this.editing?.api?(this.provider==='claude'?'上游需兼容 Anthropic Messages API，填写其支持的 Claude 模型 ID。凭据仅保存于此电脑；保存不会立即切换。':'仅配置 DeepSeek 官方 API Key；自定义上游请在 Harness 中配置。保存不会立即切换。'):'此处修改已保存接入的名称；登录凭据请在原桌面应用中更新后重新保存。');
     }
-    this.rows.replaceChildren();
+    this.modelFallback.append(this.modelsButton,this.modelsBox);this.rows.replaceChildren();
+    let modelsPlaced=false;
     const activeIds=this.activeIds(),accounts=[...(value?.accounts||[])].sort((a,b)=>Number(activeIds.has(b.id))-Number(activeIds.has(a.id)));
     if(value&&!accounts.length)this.rows.append(this.node('p','尚未保存此客户端的接入。','account-muted'));
     for(const row of accounts){
@@ -182,7 +183,7 @@ class DesktopClientAccountsPanel {
       const actions=this.node('div',undefined,'accounts-actions'),switcher=this.button(active?'当前接入':'切换到此接入',()=>this.choose(row));switcher.disabled=active||this.busy||this.loading||value.canSwitch!==true;actions.append(switcher);
       if(this.provider==='claude'&&!active){const label=this.node('label',undefined,'account-reminder'),checkbox=this.node('input');checkbox.type='checkbox';checkbox.checked=row.kind==='api'&&this.syncLocalCliIds.has(row.id);checkbox.disabled=row.kind!=='api'||this.busy||this.loading;checkbox.onchange=()=>{if(checkbox.checked)this.syncLocalCliIds.add(row.id);else this.syncLocalCliIds.delete(row.id);};label.append(checkbox,this.node('span','同时应用到本机 CLI'));actions.append(label);if(row.kind!=='api')actions.append(this.node('small','官方 Claude Desktop 登录不能直接同步到 Claude Code CLI','account-muted'));}
       if(this.desktop&&row.saved!==false){for(const [label,fn] of [['编辑',()=>this.editAccount(row)],['删除',()=>this.removeAccount(row)]]){const button=this.button(label,fn);button.disabled=this.busy||this.loading;actions.append(button);}}
-      card.append(actions);if(row.kind!=='api'||(row.usage||row.quota)?.balance){const footer=this.node('div',undefined,'accounts-card-footer');footer.append(this.usageControls(row));card.append(footer);}this.rows.append(card);
+      card.append(actions);const footer=this.node('div',undefined,'accounts-card-footer');if(active&&!modelsPlaced&&this.readModels){footer.append(this.modelsButton);modelsPlaced=true;}if(row.kind!=='api'||(row.usage||row.quota)?.balance)footer.append(this.usageControls(row));if(footer.children.length)card.append(footer);if(footer.contains?.(this.modelsButton)||footer.children[0]===this.modelsButton)card.append(this.modelsBox);this.rows.append(card);
     }
   }
 }

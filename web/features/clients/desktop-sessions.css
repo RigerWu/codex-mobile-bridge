@@ -2,3 +2,11 @@
 .app.desktop-mode{display:block}.app.desktop-mode>#sidebar,.app.desktop-mode>main{display:none!important}
 .session.ds-session-row{display:grid;grid-template-columns:minmax(0,1fr) max-content;column-gap:10px;align-items:center}
 .ds-session-row>strong{min-width:0}.ds-session-row>.ds-session-type{font-size:10px;line-height:1.6;color:var(--muted);white-space:nowrap}.ds-session-row>small{grid-column:1/-1}
+.ds-model-dialog{width:min(94vw,460px)}
+.ds-model-dialog .picker-head{margin-bottom:20px}.ds-model-dialog .picker-head-actions{display:flex;align-items:center;gap:8px}
+.ds-model-dialog .ds-model-refresh{display:inline-flex;align-items:center;max-width:none}
+.ds-model-form{display:grid;gap:18px}.ds-model-form .model-field{min-width:0}
+.ds-model-form .model-section-title{margin-bottom:9px;color:var(--muted);font-size:12px;font-weight:650;letter-spacing:.02em}
+.ds-model-form .ds-model-actions{display:flex;justify-content:flex-end;gap:8px}.ds-model-form .ds-model-actions button{min-height:44px;border-radius:11px}
+.ds-model-form .error:empty,.ds-model-form .muted:empty{display:none}
+@media(max-height:700px){.ds-model-dialog .picker-head{margin-bottom:12px}.ds-model-form{gap:14px}.ds-model-form .model-options{max-height:min(173px,24dvh)}}

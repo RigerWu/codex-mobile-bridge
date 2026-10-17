@@ -31,13 +31,13 @@ class ModelReadTests(unittest.TestCase):
                     entered.set()
                     if not release.wait(3):
                         raise AssertionError('query release timeout')
-                    return ['fixture'] if kind == 'api' else {'models': [{'id': 'fixture'}]}
+                    return [{'id': 'fixture', 'name': 'Fixture', 'efforts': []}] if kind == 'api' else {'models': [{'id': 'fixture'}]}
                 def run():
                     try:
                         results.append(self.manager.current_models())
                     except Exception as error:
                         errors.append(error)
-                target = (patch('bridge.features.accounts.accounts.model_ids', side_effect=query) if kind == 'api'
+                target = (patch('bridge.features.accounts.accounts.model_catalog', side_effect=query) if kind == 'api'
                           else patch.object(self.bridge.catalog_reader, 'get_kind', create=True, side_effect=query))
                 with target:
                     worker = threading.Thread(target=run)
@@ -66,13 +66,13 @@ class ModelReadTests(unittest.TestCase):
             entered.set()
             if not release.wait(3):
                 raise AssertionError('query release timeout')
-            return ['fixture']
+            return [{'id': 'fixture', 'name': 'Fixture', 'efforts': []}]
         def run():
             try:
                 results.append(self.manager.current_models())
             except Exception as error:
                 errors.append(error)
-        with patch('bridge.features.accounts.accounts.model_ids', side_effect=query) as upstream:
+        with patch('bridge.features.accounts.accounts.model_catalog', side_effect=query) as upstream:
             workers = [threading.Thread(target=run) for _ in range(2)]
             workers[0].start()
             try:
@@ -104,8 +104,8 @@ class ModelReadTests(unittest.TestCase):
                         self.manager.state['phase'] = 'preparing'
                     else:
                         self.manager.row(row['id'])['model'] = 'changed'
-                    return ['fixture']
-                with patch('bridge.features.accounts.accounts.model_ids', side_effect=query):
+                    return [{'id': 'fixture', 'name': 'Fixture', 'efforts': []}]
+                with patch('bridge.features.accounts.accounts.model_catalog', side_effect=query):
                     with self.assertRaises(ValueError):
                         self.manager.current_models(refresh=True)
 
@@ -121,8 +121,8 @@ class ModelReadTests(unittest.TestCase):
                         self.manager.index['accounts'] = []
                     else:
                         private_json(self.manager.directory(row['id'])/'api.json', {'key': 'new-key'})
-                    return ['fixture']
-                with patch('bridge.features.accounts.accounts.model_ids', side_effect=query):
+                    return [{'id': 'fixture', 'name': 'Fixture', 'efforts': []}]
+                with patch('bridge.features.accounts.accounts.model_catalog', side_effect=query):
                     with self.assertRaises(ValueError):
                         self.manager.api_models(row)
                 self.assertNotIn(row['id'], self.manager.info.entries)
@@ -149,13 +149,13 @@ class ModelReadTests(unittest.TestCase):
                     raise AssertionError('query release timeout')
             else:
                 other_entered.set()
-            return ['fixture']
+            return [{'id': 'fixture', 'name': 'Fixture', 'efforts': []}]
         def read_other():
             try:
                 self.manager.api_models(second)
             except Exception as error:
                 errors.append(error)
-        with patch('bridge.features.accounts.accounts.model_ids', side_effect=query):
+        with patch('bridge.features.accounts.accounts.model_catalog', side_effect=query):
             first_worker = threading.Thread(target=self.manager.info.read, args=(first, 'models'))
             other_worker = threading.Thread(target=read_other)
             first_worker.start()

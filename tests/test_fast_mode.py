@@ -141,6 +141,8 @@ class FastSettingsTests(unittest.TestCase):
 
     def prepare(self, tier='priority'):
         self.fixture.state.update(modelProvider='openai', latestModel='official-model', latestThreadSettings={'serviceTier': tier})
+        # Catalog reads are passive; establish the live owner state first.
+        self.bridge.session(THREAD)
         self.catalog = {'models': [copy.deepcopy(MODEL)], 'skills': [], 'fastMode': {'allowed': True, 'defaultServiceTier': 'priority'}}
         self.reads = []
         def get(cwd, refresh=False, provider=None):

@@ -457,7 +457,7 @@ class Catalog:
         # native account still decides whether that route uses ChatGPT or a key.
         return provider != 'openai' or any(definition.get(key) for key in
             ('base_url', 'env_key', 'experimental_bearer_token', 'http_headers',
-             'env_http_headers', 'auth', 'gateway_oauth'))
+             'env_http_headers', 'auth', 'gateway_oauth', 'query_params', 'aws'))
 
     def read_models(self, request, cwd, provider=None):
         config = request('config/read', {'includeLayers': False, 'cwd': cwd}).get('config', {})

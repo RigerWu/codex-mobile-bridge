@@ -169,6 +169,22 @@ class ApiCatalogTests(unittest.TestCase):
         upstream.assert_called_once_with('https://proxy.test/v1','gateway-key')
         self.assertEqual(result['modelSource'],'api')
 
+    def test_extra_auth_openai_definitions_never_use_native_catalog_or_default_endpoint(self):
+        for field,value in (('aws',{'region':'fixture'}),('query_params',{'key':'fixture'})):
+            with self.subTest(field=field):
+                self.config={'model_providers':{'openai':{field:value}}}
+                self.calls.clear()
+                def request(method,params):
+                    if method=='account/read' or method=='model/list':
+                        raise AssertionError('explicit API configuration must not use native account or catalog')
+                    return self.request(method,params)
+                with patch('bridge.clients.codex.catalog.model_ids') as upstream:
+                    result=self.reader.read_models(request,str(self.home))
+                upstream.assert_not_called()
+                self.assertEqual(result['modelSource'],'api')
+                self.assertEqual(result['models'],[])
+                self.assertIn('额外认证',result['modelError'])
+
     def test_missing_env_key_and_extra_auth_do_not_send_partial_credentials(self):
         for definition in ({'env_key':'CMB_ABSENT_FIXTURE_KEY'}, {'http_headers':{'private':'fixture'}}):
             self.config['model_providers']['bridge_api'].update(definition)

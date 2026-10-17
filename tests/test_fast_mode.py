@@ -34,6 +34,8 @@ class FastCapabilityTests(unittest.TestCase):
 
     def test_api_custom_providers_signed_out_policy_and_old_runtime_cannot_enable(self):
         for config in [{'model_provider': 'proxy'}, {'model_providers': {'openai': {'base_url': 'https://custom.test'}}},
+                       {'model_providers': {'openai': {'aws': {'region': 'fixture'}}}},
+                       {'model_providers': {'openai': {'query_params': {'key': 'fixture'}}}},
                        {'profile': 'custom', 'profiles': {'custom': {'model_provider': 'local'}}}]:
             result, calls = self.capability(config)
             self.assertFalse(result['allowed']);self.assertEqual(len(calls), 1)

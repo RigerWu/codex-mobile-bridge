@@ -1966,10 +1966,10 @@ class Bridge:
             local_auth = hashlib.sha256((self.codex_home/'auth.json').read_bytes()).hexdigest() if self.host == 'local' else None
         except OSError:
             local_auth = None
-        environment = {key: hashlib.sha256(value.encode()).hexdigest() for key, value in os.environ.items()
-                       if key in ('OPENAI_API_KEY', 'OPENAI_BASE_URL') or key.endswith(('_API_KEY', '_AUTH_TOKEN', '_BEARER_TOKEN'))}
-        return ModelStore.key('codex-cli', self.host, self.cli_sessions.alias, str(self.codex_home), cwd,
-                              provider, config, account, local_auth, environment)
+        runtime_home = (self.cli_sessions.remote_home if self.cli_sessions.alias is not None
+                        else self.codex_home)
+        return ModelStore.key('codex-cli-models-v2', self.host, self.cli_sessions.alias,
+                              str(runtime_home), cwd, provider, config, account, local_auth)
 
     def _schedule_native_model_refresh(self, key, thread_id, cwd, provider, updated_at, replace=False):
         with self.native_model_lock:

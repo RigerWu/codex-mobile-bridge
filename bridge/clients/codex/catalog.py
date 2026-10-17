@@ -587,13 +587,14 @@ class Catalog:
             ('base_url', 'env_key', 'experimental_bearer_token', 'http_headers',
              'env_http_headers', 'auth', 'gateway_oauth', 'query_params', 'aws'))
 
-    def read_models(self, request, cwd, provider=None, metadata_request=None):
+    def read_models(self, request, cwd, provider=None, metadata_request=None, environment=None):
+        environment = os.environ if environment is None else environment
         config = request('config/read', {'includeLayers': False, 'cwd': cwd}).get('config', {})
         profile = (config.get('profiles') or {}).get(config.get('profile')) or {}
         effective = {**config, **profile}
         provider = provider or effective.get('model_provider') or 'openai'
         definition = (effective.get('model_providers') or {}).get(provider) or {}
-        base = definition.get('base_url') or (effective.get('openai_base_url') or os.environ.get('OPENAI_BASE_URL') if provider == 'openai' else None)
+        base = definition.get('base_url') or (effective.get('openai_base_url') or environment.get('OPENAI_BASE_URL') if provider == 'openai' else None)
         custom = self.custom_provider(effective, provider)
         # The runtime resolves explicit catalog paths and applies model visibility rules.
         configured_catalog = bool(effective.get('model_catalog_json')) and provider == (effective.get('model_provider') or 'openai')
@@ -607,11 +608,11 @@ class Catalog:
                     raise ValueError('未找到当前 API 地址，请检查接入配置')
                 headers = {name.lower(): value for name, value in (definition.get('http_headers') or {}).items()}
                 for name, variable in (definition.get('env_http_headers') or {}).items():
-                    value = os.environ.get(variable)
+                    value = environment.get(variable)
                     if not value:
                         raise ValueError('未找到当前 API 认证请求头，请检查接入环境变量')
                     headers[name.lower()] = value
-                key = (os.environ.get(definition['env_key'], '') if definition.get('env_key')
+                key = (environment.get(definition['env_key'], '') if definition.get('env_key')
                        else definition.get('experimental_bearer_token') or '')
                 if definition.get('env_key') and not key:
                     raise ValueError('未找到当前 API Key，请检查接入配置')
@@ -620,7 +621,7 @@ class Catalog:
                         saved = json.loads((self.home/'auth.json').read_text(encoding='utf-8'))
                     except (OSError, ValueError):
                         saved = {}
-                    key = saved.get('OPENAI_API_KEY') or os.environ.get('OPENAI_API_KEY', '')
+                    key = saved.get('OPENAI_API_KEY') or environment.get('OPENAI_API_KEY', '')
                     if not key:
                         raise ValueError('未找到当前 API Key，请检查接入配置')
                 base = base or 'https://api.openai.com/v1'

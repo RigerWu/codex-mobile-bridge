@@ -166,7 +166,7 @@ class AccountInfo:
                 raise ValueError('API 接入不提供官方额度')
             info = self.entries.setdefault(row['id'], {})
             cached = info.get(section) or {}
-            route_key = self.route_key_for(row['id']) if section == 'usage' else None
+            route_key = self.route_key_for(row['id']) if section == 'usage' or row.get('transient') else None
             if cached.get('_routeCacheKey') != route_key:
                 cached = {}
             if row.get('transient') and cached.get('accountKey') != row['accountKey']:
@@ -186,19 +186,21 @@ class AccountInfo:
         with self.manager.lock:
             if pending is None:
                 pending = self.entries.get(row['id'], {}).get(section)
-            expected_route = ((pending or {}).get('_routeCacheKey') or self.route_key_for(row['id'])) if section == 'usage' else None
+            expected_route = ((pending or {}).get('_routeCacheKey') or self.route_key_for(row['id'])) if section == 'usage' or row.get('transient') else None
         if row.get('transient'):
             try:
                 if section == 'models':
                     identity = self.read_identity()
                     login = (identity.get('login') or {}).get('context') or {}
-                    if identity.get('kind') != 'chatgpt' or login.get('accountKey') != row['accountKey']:
+                    if (identity.get('kind') != 'chatgpt' or login.get('accountKey') != row['accountKey'] or
+                            login.get('_routeCacheKey') != expected_route):
                         raise ValueError('当前接入不是此 ChatGPT 账号')
                     catalog = self.manager.bridge.catalog_reader.get_kind('models', str(self.manager.home),
                                                                           refresh=refresh, provider='openai')
                     current = self.read_identity()
                     current_login = (current.get('login') or {}).get('context') or {}
-                    if (current.get('kind') != 'chatgpt' or current_login.get('accountKey') != row['accountKey']):
+                    if (current.get('kind') != 'chatgpt' or current_login.get('accountKey') != row['accountKey'] or
+                            current_login.get('_routeCacheKey') != expected_route):
                         raise ValueError('账号身份已变化')
                     result = {'models': catalog.get('models', []), 'accountKey': row['accountKey'],
                               'cache': catalog.get('cache'),

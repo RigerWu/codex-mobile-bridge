@@ -16,9 +16,11 @@ from concurrent.futures import Future
 
 from bridge.clients.claude.adapter import Claude
 from bridge.clients.claude.cli_session import ResumePreflightBlocked
+from bridge.clients.claude.remote_worker import draft_account_identity as claude_draft_account_identity
 from bridge.clients.deepseek.adapter import DeepSeek, BRIDGE_REVISION, LIFECYCLE_REVISIONS, UPDATE_REASON
 from bridge.clients.errors import BridgeUnavailable
 from bridge.clients.codex.catalog import ModelStore, MODEL_REFRESH_SECONDS
+from bridge.features.accounts.draft_identity import draft_identity
 from bridge.app.lifecycle import private_json
 from bridge.platforms.windows import session as windows_session
 
@@ -222,6 +224,63 @@ class DesktopSessions:
             except OSError:
                 stamps.append(None)
         return ModelStore.key('desktop', provider, scope, stamps)
+
+    def _draft_account_identity(self, provider, sid, detail):
+        """Use verified account ownership only; unknown routes stay transient."""
+        adapter = self.adapters[provider]
+        if provider == 'claude':
+            with adapter.cli.lock, adapter.remote_cli.lock:
+                local = adapter.cli.index.get(sid)
+                remote = adapter.remote_cli.index.get(sid)
+            if remote:
+                owner = (detail.get('session') or {}).get('draftAccountIdentity')
+                return draft_identity('claude', 'ssh-cli', remote['host'], owner) if owner else ''
+            if local:
+                profile = adapter.cli.profile_resolver()
+                if not profile or local['origin'] != profile['origin']:
+                    return ''
+                access = getattr(self.bridge, 'cli_access', None) if self.bridge else None
+                if access:
+                    with access.lock:
+                        identifier = access.index.get('activeClaude')
+                        row = next((item for item in access.index['claude'] if item['id'] == identifier), None)
+                    if (row and row['kind'] == 'api' and
+                            profile['origin'].startswith(row['originBase']+':')):
+                        return draft_identity('claude', 'local-cli', row['id'])
+                owner = claude_draft_account_identity(profile['directory'])
+                if owner:
+                    return draft_identity('claude', 'local-cli', owner)
+                return ''
+            if sid not in adapter.index:
+                return ''
+            store = self._account_store('claude')
+            with store.lock:
+                kind, fingerprint, gateway = store._current()
+                if kind == 'api' and gateway:
+                    owner = ('api', gateway['id'])
+                else:
+                    row = next((item for item in store._index()['accounts']
+                                if item['kind'] == kind and item.get('fingerprint') == fingerprint), None)
+                    owner = ('saved', row['id']) if row else None
+            return draft_identity('claude', 'desktop', *owner) if owner else ''
+
+        session = detail.get('session') or {}
+        model = session.get('model') or ''
+        source = model.split('/', 1)[0]
+        kind = {'deepseek-account': 'official', 'deepseek-official': 'api'}.get(source)
+        if not kind:
+            return ''
+        store = self._account_store('deepseek')
+        with store.lock:
+            snapshot = store.public()
+        active = [row for row in snapshot['accounts']
+                  if row['id'] in snapshot['activeIds'] and row['kind'] == kind]
+        if len(active) != 1:
+            return ''
+        row = active[0]
+        owner = row.get('accountId') if kind == 'official' else None
+        owner = owner or row['id'] if row.get('saved') else owner
+        return draft_identity('deepseek', 'desktop', kind, owner) if owner else ''
 
     def _model_live(self, provider, sid):
         adapter = self.adapters[provider]
@@ -550,6 +609,10 @@ class DesktopSessions:
             result = self._read(provider, action, sid, body)
             if action == 'detail' and result.get('session'):
                 result['modelCatalogIdentity'] = self._model_identity(provider, sid)
+                try:
+                    result['draftAccountIdentity'] = self._draft_account_identity(provider, sid, result)
+                except (OSError, ValueError, KeyError, TypeError, AttributeError, BridgeUnavailable):
+                    result['draftAccountIdentity'] = ''
             return result
         rid = str(uuid.UUID(body.get('id', '')))
         if action == 'send' and (not isinstance(body.get('text'), str) or

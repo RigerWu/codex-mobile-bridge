@@ -14,6 +14,36 @@ from pathlib import Path
 MODES = {'default', 'acceptEdits', 'plan', 'dontAsk', 'auto', 'bypassPermissions'}
 
 
+def draft_account_identity(directory):
+    """Use stable local account metadata without starting or querying Claude."""
+    directory = Path(directory)
+    key = os.environ.get('ANTHROPIC_API_KEY')
+    if key:
+        value = ['claude-code-api', str(directory.resolve()), os.environ.get('ANTHROPIC_BASE_URL') or '', key]
+        return hashlib.sha256(json.dumps(value, separators=(',', ':')).encode()).hexdigest()
+    metadata_paths = [directory/'.claude.json']
+    if directory.resolve() == Path.home()/'.claude':
+        metadata_paths.insert(0, directory.parent/'.claude.json')
+    for path in metadata_paths:
+        try:
+            metadata = json.loads(path.read_text(encoding='utf-8'))
+        except (OSError, ValueError, TypeError):
+            continue
+        account = metadata.get('oauthAccount') if isinstance(metadata, dict) else None
+        if not isinstance(account, dict):
+            continue
+        user = account.get('accountUuid') or account.get('emailAddress')
+        organization = account.get('organizationUuid') or account.get('organizationId') or ''
+        if isinstance(user, str) and user:
+            value = ['claude-code', str(directory.resolve()), user, organization]
+            return hashlib.sha256(json.dumps(value, separators=(',', ':')).encode()).hexdigest()
+    key = os.environ.get('ANTHROPIC_AUTH_TOKEN')
+    if key:
+        value = ['claude-code-api', str(directory.resolve()), os.environ.get('ANTHROPIC_BASE_URL') or '', key]
+        return hashlib.sha256(json.dumps(value, separators=(',', ':')).encode()).hexdigest()
+    return ''
+
+
 def auth_status(binary, directory):
     env = os.environ.copy()
     env['CLAUDE_CONFIG_DIR'] = str(directory)
@@ -274,6 +304,7 @@ def command(request):
         raise ValueError('原 Claude Code 配置已变化或不可用')
     if operation == 'detail':
         row = session(found, request['native'])
+        row['draftAccountIdentity'] = draft_account_identity(found['directory'])
         if request.get('events') is not True:
             row.pop('events', None)
         return row

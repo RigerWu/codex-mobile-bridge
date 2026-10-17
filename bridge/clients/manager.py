@@ -325,6 +325,8 @@ class DesktopSessions:
                     value['cache'] = {'state': 'fresh', 'updatedAt': updated_at}
                 except (OSError, sqlite3.DatabaseError):
                     pass
+            if self._model_identity(provider, sid) != identity:
+                raise BridgeUnavailable('客户端账号或配置已变化，请重试')
             return value
 
     def _start_model_refresh(self, provider, sid, identity):

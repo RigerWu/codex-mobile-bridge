@@ -139,6 +139,13 @@ class Adapters(unittest.TestCase):
         self.assertEqual(cached['currentEffort'], 'high')
         manager._read.assert_called_once()
 
+    def test_session_account_change_after_catalog_write_rejects_old_response(self):
+        manager = self.manager
+        manager._model_identity = Mock(side_effect=['old-account', 'old-account', 'new-account'])
+        manager._read = Mock(return_value={'models':[{'id':'old-model'}], 'capabilities':{'models':True}})
+        with self.assertRaisesRegex(ValueError, '账号或配置已变化'):
+            manager.call('deepseek', 'catalog', 'session-one', {'section':'models'})
+
     def test_client_switch_requires_configuration_and_persists(self):
         self.manager.adapters['claude'].cli.status = Mock(return_value={
             'cliAvailable': False, 'cliAuthReady': False})

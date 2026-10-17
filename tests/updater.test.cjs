@@ -123,7 +123,7 @@ test('checking never installs and installation only receives verified bytes',asy
 test('skipping an exact signed release survives restart while manual checks and newer releases remain available',async t=>{
   const f=await fixture(t),skipFile=path.join(f.directory,'skipped-update.json');f.updater.skipFile=skipFile;
   assert.equal((await f.updater.check()).state,'available');assert.equal((await f.updater.skip()).state,'skipped');
-  assert.deepEqual(JSON.parse(await fs.readFile(skipFile,'utf8')),{identity:f.updater.skipIdentity,version:next});
+  assert.deepEqual(JSON.parse(await fs.readFile(skipFile,'utf8')),{[f.updater.skipIdentity]:next});
   const again=new Updater({current,platform,arch,key:keys.publicKey,fetch:f.updater.fetch,directory:f.directory,skipFile,install:async()=>{}});
   assert.equal((await again.check()).state,'skipped');assert.equal(again.candidate.version,next);
   assert.equal((await again.check({manual:true})).state,'available');assert.equal(again.status().skipped,true);

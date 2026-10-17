@@ -97,15 +97,19 @@ class Updater{
   status(){return {...this.state};}
   get busy(){return ['downloading','preparing','restarting'].includes(this.state.state);}
   set(state,extra={}){this.state={current:this.current,...extra,state};return this.status();}
+  async skippedVersions(){
+    if(!this.skipFile)return this.skipped||{};
+    try{const value=JSON.parse(await fs.readFile(this.skipFile,'utf8'));return value&&typeof value==='object'&&!Array.isArray(value)?value:{};}catch{return {};}
+  }
   async skippedVersion(){
-    if(!this.skipFile)return this.skipped||'';
-    try{const value=JSON.parse(await fs.readFile(this.skipFile,'utf8'));return value.identity===this.skipIdentity?value.version||'':'';}catch{return '';}
+    const value=(await this.skippedVersions())[this.skipIdentity];return typeof value==='string'?value:'';
   }
   async skip(){
     if(this.checking||this.busy||!this.candidate||this.state.state!=='available')throw Error('请先检查更新。');
     const version=this.candidate.version;
-    if(this.skipFile){await fs.mkdir(path.dirname(this.skipFile),{recursive:true,mode:0o700});await fs.writeFile(this.skipFile,JSON.stringify({identity:this.skipIdentity,version}),{mode:0o600});}
-    else this.skipped=version;
+    const skipped={...await this.skippedVersions(),[this.skipIdentity]:version};
+    if(this.skipFile){await fs.mkdir(path.dirname(this.skipFile),{recursive:true,mode:0o700});await fs.writeFile(this.skipFile,JSON.stringify(skipped),{mode:0o600});}
+    else this.skipped=skipped;
     return this.set('skipped',{version,notes:this.candidate.notes});
   }
   async check({manual=false}={}){

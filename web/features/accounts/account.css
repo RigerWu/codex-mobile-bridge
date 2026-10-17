@@ -39,13 +39,13 @@
 .accounts-panel .account-bucket.is-current{border-color:var(--accent,#4664ed);background:var(--soft,#f3f6ff)}
 .accounts-actions{display:flex;align-items:center;gap:6px;flex-wrap:wrap;border-top:1px solid var(--line,#dfe3eb);padding-top:10px;margin-top:12px}
 .accounts-panel .accounts-actions button{font-size:12px;margin:0}.accounts-actions .accounts-models{flex-basis:100%}
-.accounts-usage-controls{display:flex;flex-direction:column;align-items:flex-end;gap:3px;min-width:0;max-width:min(155px,52vw);margin-left:auto}
+.accounts-usage-controls{display:flex;flex-direction:column;align-items:flex-end;gap:3px;min-width:0;max-width:100%;margin-left:auto}
 .accounts-panel .accounts-usage-controls .accounts-usage-refresh{display:grid;place-items:center;flex:none;width:32px;height:32px;margin:0;padding:0;border:0;border-radius:8px;cursor:pointer}
 .accounts-usage-refresh svg{display:block;width:18px;height:18px}
 .accounts-usage-refresh:hover{background:var(--line,#e3e6df)}
 .accounts-usage-refresh:disabled{opacity:.4;cursor:default}
 .accounts-panel .accounts-reset{color:var(--accent,#4664ed);border-color:var(--accent,#4664ed);font-size:12px}
-.accounts-identity.accounts-official{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:8px 12px}
+.accounts-identity.accounts-official{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,40%);gap:8px 12px}
 .accounts-official .accounts-name{min-width:0;overflow-wrap:anywhere}
 .accounts-official .accounts-usage{display:grid;grid-column:1/-1;grid-template-columns:minmax(0,1fr);align-items:start;gap:12px;min-width:0;margin:12px 0 0}
 .accounts-official .accounts-window{grid-template-columns:minmax(0,1fr) auto;min-width:0;max-width:none;width:100%}
@@ -62,7 +62,7 @@
 .accounts-panel .account-bucket .account-subscription-note{margin:4px 0 0;font-size:12px}
 .accounts-panel .account-updated{min-width:0;flex-basis:auto;margin:0;font-size:12px}
 .accounts-usage-controls .account-updated{max-width:100%;text-align:right;overflow-wrap:anywhere;line-height:1.4}
-@media(pointer:coarse){.accounts-panel .accounts-reset-summary .accounts-reset,.accounts-panel .account-subscription-info,.accounts-panel .accounts-client-usage-refresh{min-height:44px}.accounts-panel .accounts-usage-controls .accounts-usage-refresh{width:44px;height:44px}}
+@media(pointer:coarse){.accounts-panel .accounts-reset-summary .accounts-reset,.accounts-panel .account-subscription-info{min-height:44px}.accounts-panel .accounts-usage-controls .accounts-usage-refresh{width:44px;height:44px}}
 .accounts-management{border-top:1px solid var(--line,#dfe3eb);padding-top:4px}
 .accounts-management>details{border-bottom:1px solid var(--line,#dfe3eb);padding:0 0 16px}
 .accounts-management summary{font-size:14px}.accounts-management .account-reminder{display:flex}
@@ -81,13 +81,12 @@
 @media(pointer:coarse){.account-reset-dialog .account-card>button,.account-reset-dialog .account-heading button{min-height:44px}}
 
 .accounts-panel .accounts-import-name{max-width:320px}
-.accounts-panel .accounts-client-card .accounts-identity{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:8px 12px}
+.accounts-panel .accounts-client-card .accounts-identity{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,40%);gap:8px 12px}
 .accounts-client-card .accounts-name{min-width:0;overflow-wrap:anywhere}
 .accounts-panel .accounts-client-card .accounts-name>p{margin:2px 0 0}
 .accounts-client-card .accounts-usage-controls{align-self:start}
 .accounts-panel .accounts-client-usage{display:block;margin:14px 0 0}
 .accounts-client-usage-heading{margin-bottom:10px;font-size:13px}
-.accounts-panel .accounts-client-usage-refresh{flex:none;max-width:100%;margin:0;padding:6px 10px;font-size:12px;text-align:center;white-space:normal}
 .accounts-client-usage-results{display:grid;gap:10px;min-width:0}
 .accounts-client-usage-results .accounts-window{width:100%;max-width:none;min-width:0}
 .accounts-client-usage-results .accounts-window strong{text-align:right;white-space:nowrap}

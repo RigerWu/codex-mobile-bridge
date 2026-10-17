@@ -1037,7 +1037,7 @@ final class BridgeController: UIViewController, WKNavigationDelegate, WKUIDelega
         request.setValue("application/vnd.github+json", forHTTPHeaderField: "Accept")
         request.setValue("Codex-Mobile-Bridge/" + current, forHTTPHeaderField: "User-Agent")
         let session = URLSession(configuration: .ephemeral)
-        session.dataTask(with: request) { [weak sheet, weak check, weak status] data, response, error in
+        session.dataTask(with: request) { [weak self, weak sheet, weak check, weak status] data, response, error in
             defer { session.finishTasksAndInvalidate() }
             var candidate: MobileRelease?; var failed = false
             do {
@@ -1045,13 +1045,19 @@ final class BridgeController: UIViewController, WKNavigationDelegate, WKUIDelega
                 candidate = try MobileRelease.select(data, current: current)
             } catch { failed = true }
             DispatchQueue.main.async {
-                guard let sheet, sheet.presentingViewController != nil, let check, let status else { return }
+                guard let self, let sheet, sheet.presentingViewController != nil, let check, let status else { return }
                 check.isEnabled = true
                 let url = candidate?.page ?? URL(string: MobileRelease.repository + "/releases")!
                 if !failed && candidate == nil { status.text = MobileStrings.text("当前已是此通道最新版本。"); return }
-                status.text = MobileStrings.text(failed ? "检查失败，请检查网络后重试。也可以打开版本页面。" : "发现新版本") + (candidate.map { " · " + $0.version } ?? "")
+                let skipKey = "skip-mobile-update:" + MobileRelease.channel(current)
+                let skipped = candidate?.version == self.defaults.string(forKey: skipKey)
+                status.text = MobileStrings.text(failed ? "检查失败，请检查网络后重试。也可以打开版本页面。" : skipped ? "已跳过此版本，仍可手动更新" : "发现新版本") + (candidate.map { " · " + $0.version } ?? "")
                 let alert = UIAlertController(title: status.text, message: candidate.map { MobileStrings.text("iOS App 需要使用自己的 Apple 账号重新签名安装，暂不支持 App 内直接覆盖更新。") + "\n\n" + $0.notes }, preferredStyle: .alert)
                 alert.addAction(UIAlertAction(title: MobileStrings.text("稍后"), style: .cancel))
+                if let candidate { alert.addAction(UIAlertAction(title: MobileStrings.text("跳过此版本"), style: .default) { _ in
+                    self.defaults.set(candidate.version, forKey: skipKey)
+                    status.text = MobileStrings.text("已跳过此版本，仍可手动更新") + " · " + candidate.version
+                }) }
                 alert.addAction(UIAlertAction(title: MobileStrings.text(failed ? "版本页面" : "查看新版与安装指引"), style: .default) { _ in UIApplication.shared.open(url) })
                 sheet.present(alert, animated: true)
             }
@@ -1302,6 +1308,8 @@ enum MobileStrings {
 "版本页面": "Releases",
 "当前已是此通道最新版本。": "You are up to date on this channel.",
 "发现新版本": "Update available",
+"跳过此版本": "Skip this version",
+"已跳过此版本，仍可手动更新": "This version is skipped; you can still update manually",
 "下载后按系统提示覆盖安装，不要先卸载。已保存的电脑与登录状态会保留。": "After downloading, follow the system prompts to update without uninstalling. Saved computers and sign-ins will be retained.",
 "稍后": "Later",
 "更新说明": "Release notes",

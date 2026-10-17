@@ -348,8 +348,9 @@ public final class MainActivity extends Activity {
    runOnUiThread(()->{if(isFinishing()||isDestroyed()||!dialog.isShowing())return;check.setEnabled(true);if(ticket!=generation){updateStatus.setText(L("电脑连接已变化，请重新检查更新"));return;}
     if(error!=null){updateStatus.setText(error);new AlertDialog.Builder(this).setMessage(error).setNegativeButton(L("关闭"),null).setPositiveButton(L("打开 GitHub 版本页"),(d,w)->openUpdateUrl(MobileRelease.REPO+"/releases")).show();return;}
     if(result==null){updateStatus.setText(L("当前已是此通道最新版本。"));return;}
-    updateStatus.setText(L("发现新版本")+" · "+result.version);
-    new AlertDialog.Builder(this).setTitle(L("发现新版本")+" · "+result.version).setMessage(L("App 会在本机下载并打开系统安装器，已保存的电脑与登录状态会保留。")+"\n\n"+result.notes).setNegativeButton(L("稍后"),null).setNeutralButton(L("打开 GitHub 版本页"),(d,w)->openUpdateUrl(result.page())).setPositiveButton(L("下载并安装"),(d,w)->chooseUpdateDownload(result,dialog)).show();
+    final String skipKey="skip-mobile-update:"+MobileRelease.channel(current),title=L(result.version.equals(prefs.getString(skipKey,""))?"已跳过此版本，仍可手动更新":"发现新版本")+" · "+result.version;
+    updateStatus.setText(title);
+    new AlertDialog.Builder(this).setTitle(title).setMessage(L("App 会在本机下载并打开系统安装器，已保存的电脑与登录状态会保留。")+"\n\n"+result.notes).setNegativeButton(L("跳过此版本"),(d,w)->{prefs.edit().putString(skipKey,result.version).apply();updateStatus.setText(L("已跳过此版本，仍可手动更新")+" · "+result.version);}).setNeutralButton(L("打开 GitHub 版本页"),(d,w)->openUpdateUrl(result.page())).setPositiveButton(L("下载并安装"),(d,w)->chooseUpdateDownload(result,dialog)).show();
    });
   });
  }

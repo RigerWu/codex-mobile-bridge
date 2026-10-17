@@ -6,6 +6,7 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 from bridge.app.desktop import Desktop
+from bridge.features.auth.auth import Auth, LoginRejected
 from bridge.features.notifications.channels import settings
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -74,6 +75,67 @@ class DesktopTests(unittest.TestCase):
         self.desktop.save(value)
         self.assertFalse((self.directory/'首次登录.txt').exists())
         self.assertNotEqual(self.desktop.config()['auth']['hash'], old_hash)
+
+    def test_password_change_can_keep_only_current_phone_bindings(self):
+        value = self.value()
+        old_config = self.desktop.config()['auth']
+        old_password = next(line[3:] for line in (self.directory/'首次登录.txt').read_text().splitlines()
+                            if line.startswith('密码：'))
+        auth = Auth(old_config, self.directory)
+        kept, _ = auth.new_session('192.0.2.1', 'BridgeMobile/0.1-iOS')
+        revoked, _ = auth.new_session('192.0.2.2', 'BridgeMobile/0.1-Android')
+        browser, _ = auth.new_session('192.0.2.3', 'Safari')
+        auth.manage({'action': 'revoke', 'id': auth.key(revoked)})
+        value['auth'].update(password='new-password-for-testing', revokeBoundDevices=False)
+        self.desktop.save(value)
+        with self.assertRaises(ValueError):
+            auth.new_session('192.0.2.5', 'BridgeMobile/0.1-iOS')
+        restarted = Auth(self.desktop.config()['auth'], self.directory)
+        self.assertIsNotNone(restarted.get(kept))
+        self.assertIsNone(restarted.get(revoked))
+        self.assertIsNone(restarted.get(browser))
+        with self.assertRaises(LoginRejected):
+            restarted.login('admin', old_password, '192.0.2.4')
+        self.assertIsNotNone(Auth(self.desktop.config()['auth'], self.directory).get(kept))
+
+    def test_password_change_revokes_by_default_and_rejects_invalid_option(self):
+        value = self.value()
+        auth = Auth(self.desktop.config()['auth'], self.directory)
+        phone, _ = auth.new_session('192.0.2.1', 'BridgeMobile/0.1-iOS')
+        value['auth'].update(password='new-password-for-testing', revokeBoundDevices='false')
+        with self.assertRaises(ValueError):
+            self.desktop.save(value)
+        self.assertIsNotNone(Auth(self.desktop.config()['auth'], self.directory).get(phone))
+        value['auth'].pop('revokeBoundDevices')
+        self.desktop.save(value)
+        self.assertIsNone(Auth(self.desktop.config()['auth'], self.directory).get(phone))
+
+    def test_keep_binding_requires_stopped_gateway_before_any_write(self):
+        value = self.value()
+        value['auth'].update(password='new-password-for-testing', revokeBoundDevices=False)
+        before = self.desktop.config_path.read_bytes()
+        self.desktop.status = lambda: {'running': True, 'portOccupied': False}
+        with self.assertRaises(ValueError):
+            self.desktop.save(value)
+        self.assertEqual(self.desktop.config_path.read_bytes(), before)
+
+    def test_account_change_cannot_keep_phone_binding(self):
+        value = self.value()
+        auth = Auth(self.desktop.config()['auth'], self.directory)
+        phone, _ = auth.new_session('192.0.2.1', 'BridgeMobile/0.1-iOS')
+        value['auth'].update(password='new-password-for-testing', username='other', revokeBoundDevices=False)
+        self.desktop.save(value)
+        self.assertIsNone(Auth(self.desktop.config()['auth'], self.directory).get(phone))
+
+    def test_no_password_save_keeps_binding_and_mode_change_revokes_it(self):
+        value = self.value()
+        phone, _ = Auth(self.desktop.config()['auth'], self.directory).new_session('192.0.2.1', 'BridgeMobile/0.1-iOS')
+        value['auth']['revokeBoundDevices'] = True
+        self.desktop.save(value)
+        self.assertIsNotNone(Auth(self.desktop.config()['auth'], self.directory).get(phone))
+        value['auth'].update(mode='none', password='new-password-for-testing', revokeBoundDevices=False)
+        self.desktop.save(value)
+        self.assertIsNone(Auth(self.desktop.config()['auth'], self.directory).get(phone))
 
     def test_login_duration_roundtrip_and_invalid_save_is_atomic(self):
         value = self.value()

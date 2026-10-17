@@ -645,6 +645,17 @@ test('login validity is collected as zero and survives polling and language edit
   assert.equal(field.value,'0');assert.equal(ui.run('collect().auth.sessionHours'),0);
 });
 
+test('password edit defaults to revoking phones and can keep bindings explicitly',async()=>{
+  const ui=await renderer();
+  const password=ui.nodes.get('password'),option=ui.nodes.get('revoke-bound-devices-option'),box=ui.nodes.get('revoke-bound-devices');
+  assert.equal(option.hidden,true);assert.equal(box.checked,true);
+  password.value='a new password';ui.nodes.get('settings').oninput();
+  assert.equal(option.hidden,false);assert.equal(ui.run('collect().auth.revokeBoundDevices'),true);
+  box.checked=false;ui.nodes.get('settings').onchange();
+  assert.equal(ui.run('collect().auth.revokeBoundDevices'),false);
+  password.value='';ui.nodes.get('settings').oninput();assert.equal(option.hidden,true);
+});
+
 test('device policy drafts survive list refresh and language changes and use local IPC',async()=>{
   const ui=await renderer();const calls=[];
   const state={policy:{allowlistEnabled:false,allowlist:[],blocklist:[],trustedProxies:[]},sessions:[]};

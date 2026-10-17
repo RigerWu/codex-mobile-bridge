@@ -137,11 +137,17 @@ class RemoteCatalog:
         self.alias = alias
         self.kind_caches = {}
         self.lock = threading.RLock()
+        self.model_refreshing = set()
+        self.model_timers = {}
+        self.model_retry_at = {}
 
     def invalidate_models(self):
         with self.lock:
             for kind in ('catalog', 'models'):
                 self.kind_caches.pop(kind, None)
+            for timer in self.model_timers.values():
+                timer.cancel()
+            self.model_timers.clear()
 
     def _source(self):
         source = source_text('features/auth/tls.py') + '\n'
@@ -151,6 +157,39 @@ class RemoteCatalog:
         source += 'runtime=shutil.which("codex") or str(Path.home()/".local/bin/codex")\n'
         source += 'reader=Catalog(home, runtime, allow_background_refresh=False)\n'
         return source
+
+    def _start_model_refresh(self, key, cwd, provider):
+        if key in self.model_refreshing or time.time() < self.model_retry_at.get(key, 0):
+            return
+        self.model_refreshing.add(key)
+        def update():
+            try:
+                self.get_kind('models', cwd, refresh=True, provider=provider)
+            except (OSError, ValueError, CatalogError):
+                pass
+            finally:
+                with self.lock:
+                    self.model_retry_at[key] = time.time() + 60
+                    self.model_refreshing.discard(key)
+                    result = self.kind_caches.get('models', {}).get(key)
+                    updated_at = (result[1].get('cache') or {}).get('updatedAt') if result else None
+                    self._schedule_model_refresh(key, cwd, provider, updated_at or time.time(), retry=True)
+        threading.Thread(target=update, daemon=True, name='ssh-model-refresh').start()
+
+    def _schedule_model_refresh(self, key, cwd, provider, updated_at, retry=False, replace=False):
+        if replace and key in self.model_timers:
+            self.model_timers.pop(key).cancel()
+        if key in self.model_timers:
+            return
+        delay = max(60 if retry else 1, updated_at + 12 * 60 * 60 - time.time())
+        def due():
+            with self.lock:
+                self.model_timers.pop(key, None)
+                self._start_model_refresh(key, cwd, provider)
+        timer = threading.Timer(delay, due)
+        timer.daemon = True
+        self.model_timers[key] = timer
+        timer.start()
 
     def get(self, cwd, refresh=False, provider=None):
         with self.lock:
@@ -178,7 +217,7 @@ class RemoteCatalog:
                 key = (kind, cwd, provider)
             cache = self.kind_caches.setdefault(kind, {})
             previous = cache.get(key)
-            if previous and not refresh and time.monotonic() - previous[0] < 300:
+            if kind == 'skills' and previous and not refresh and time.monotonic() - previous[0] < 300:
                 return previous[1]
             source = self._source()
             source += ('print(json.dumps(reader.get_kind(' + payload(kind) + ', ' + payload(cwd) +
@@ -191,6 +230,12 @@ class RemoteCatalog:
             except RemoteUnavailable as exc:
                 raise CatalogError(str(exc)) from exc
             cache[key] = (time.monotonic(), result)
+            if kind == 'models':
+                metadata = result.get('cache') or {}
+                if metadata.get('state') == 'stale' and not refresh:
+                    self._start_model_refresh(key, cwd, provider)
+                elif metadata.get('state') == 'fresh' and metadata.get('updatedAt'):
+                    self._schedule_model_refresh(key, cwd, provider, metadata['updatedAt'], replace=refresh)
             if kind == 'skills' and not refresh and result.get('cache', {}).get('state') in ('stale', 'legacy'):
                 return self.get_kind(kind, cwd, refresh=True, provider=provider, query=query,
                                       offset=offset, limit=limit, ids=list(identifiers))

@@ -22,6 +22,7 @@ from urllib.parse import urlsplit
 from bridge.features.accounts.account import AccountRPC, AccountError, Account
 from bridge.clients.desktop_app import DesktopApp
 from bridge.features.accounts.models import model_catalog, model_ids
+from bridge.clients.codex.catalog import ModelStore, MODEL_REFRESH_SECONDS
 from bridge.features.accounts.info import AccountInfo
 from bridge.clients.codex.transport import connect_stream
 from bridge.features.notifications.channels import read_json
@@ -129,6 +130,10 @@ class Accounts:
         self.lock = threading.RLock()
         self.gate = threading.RLock()
         self.api_models_locks = {}
+        self.api_model_store = ModelStore(bridge.data_dir)
+        self.api_model_refreshing = set()
+        self.api_model_timers = {}
+        self.api_model_retry_at = {}
         self.index = read_json(self.root/'index.json', {'accounts': [], 'activeId': None, 'desktopExecutable': ''})
         self.state = read_json(self.root/'switch.json', {'phase': 'idle'})
         if self.state.get('phase') in ('preparing', 'stopping', 'applying', 'migrating', 'starting', 'verifying', 'restoring'):
@@ -389,18 +394,74 @@ class Accounts:
                 stored = dict(self.row(row['id']))
                 if any(stored.get(key) != row.get(key) for key in ('kind', 'baseUrl', 'model')):
                     raise ValueError('当前接入已变化，请重新读取模型列表')
-                cached = self.info.entries.get(row['id'], {}).get('models') or {}
-                if not refresh and cached.get('status') == 'ready' and time.time()-cached.get('checkedAt', 0) < 300:
-                    return copy.deepcopy(cached['models'])
                 key = read_json(self.directory(row['id'])/'api.json', {})['key']
-            models = model_catalog(row['baseUrl'], key)
+                identity = ModelStore.key('saved-api', str(self.home), row['id'], row['baseUrl'], key)
+                try:
+                    persisted = self.api_model_store.read(identity)
+                except (OSError, ValueError):
+                    persisted = None
+                if persisted and not refresh:
+                    if (time.time()-persisted[0] >= MODEL_REFRESH_SECONDS and identity not in self.api_model_refreshing
+                            and time.time() >= self.api_model_retry_at.get(identity, 0)):
+                        self.api_model_refreshing.add(identity)
+                        def update():
+                            try:
+                                self.api_models(row, refresh=True)
+                            except ValueError:
+                                pass
+                            finally:
+                                with self.lock:
+                                    self.api_model_retry_at[identity] = time.time() + 60
+                                    self.api_model_refreshing.discard(identity)
+                        threading.Thread(target=update, daemon=True, name='saved-api-model-refresh').start()
+                    elif time.time()-persisted[0] < MODEL_REFRESH_SECONDS:
+                        self._schedule_api_model_refresh(row, identity, persisted[0])
+                    return copy.deepcopy(persisted[1])
+            try:
+                models = model_catalog(row['baseUrl'], key)
+            except ValueError:
+                if persisted:
+                    return copy.deepcopy(persisted[1])
+                raise
             with self.lock:
                 self.check_ready()
                 if (self.row(row['id']) != stored or
                         read_json(self.directory(row['id'])/'api.json', {}).get('key') != key):
                     raise ValueError('当前接入已变化，请重新读取模型列表')
                 self.info.entries.setdefault(row['id'], {})['models'] = {'models':copy.deepcopy(models), 'status':'ready', 'checkedAt':time.time()}
+            try:
+                updated_at = self.api_model_store.write(identity, models)
+                self._schedule_api_model_refresh(row, identity, updated_at, replace=True)
+            except OSError:
+                pass
             return models
+
+    def _schedule_api_model_refresh(self, row, identity, updated_at, replace=False):
+        with self.lock:
+            if replace and identity in self.api_model_timers:
+                self.api_model_timers.pop(identity).cancel()
+            if identity in self.api_model_timers:
+                return
+            delay = max(1, updated_at + MODEL_REFRESH_SECONDS - time.time())
+            def due():
+                with self.lock:
+                    self.api_model_timers.pop(identity, None)
+                try:
+                    self.api_models(row, refresh=True)
+                except ValueError:
+                    pass
+                finally:
+                    with self.lock:
+                        try:
+                            record = self.api_model_store.read(identity)
+                        except (OSError, ValueError):
+                            record = None
+                        if record and any(saved['id'] == row['id'] for saved in self.index['accounts']):
+                            self._schedule_api_model_refresh(row, identity, max(record[0], time.time() - MODEL_REFRESH_SECONDS + 300))
+            timer = threading.Timer(delay, due)
+            timer.daemon = True
+            self.api_model_timers[identity] = timer
+            timer.start()
 
     def current_models(self, refresh=False):
         with self.lock:

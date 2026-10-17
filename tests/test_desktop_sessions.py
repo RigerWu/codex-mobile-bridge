@@ -61,6 +61,36 @@ class Adapters(unittest.TestCase):
         with self.assertRaises(ValueError): self.manager.call('deepseek', 'eval', 'session-one')
         with self.assertRaises(ValueError): self.manager.call('deepseek', 'send', 'session-one', {'id':str(uuid.uuid4()),'text':''})
 
+    def test_model_picker_uses_persisted_catalog_and_refresh_bypasses_it(self):
+        adapter = self.manager.adapters['deepseek']
+        adapter.call = Mock(return_value={'models': [{'id': 'provider/first', 'efforts': ['high']}],
+                                          'currentModel': 'provider/first', 'capabilities': {'models': True}})
+        body = {'section': 'models', 'refresh': False}
+        first = self.manager.call('deepseek', 'catalog', 'session-one', body)
+        self.assertEqual(first['models'][0]['id'], 'provider/first')
+        self.assertEqual(self.manager.call('deepseek', 'catalog', 'session-one', body)['models'], first['models'])
+        adapter.call.assert_called_once()
+        second = DesktopSessions(self.root)
+        try:
+            second_adapter = second.adapters['deepseek']
+            second_adapter.call = Mock(side_effect=AssertionError('opened picker queried desktop'))
+            self.assertEqual(second.call('deepseek', 'catalog', 'session-one', body)['models'], first['models'])
+            second_adapter.call.assert_not_called()
+            second_adapter.call.side_effect = None
+            second_adapter.call.return_value = {'models': [{'id': 'provider/second'}], 'capabilities': {'models': True}}
+            refreshed = second.call('deepseek', 'catalog', 'session-one', {'section': 'models', 'refresh': True})
+            self.assertEqual(refreshed['models'][0]['id'], 'provider/second')
+            second_adapter.call.assert_called_once()
+            second_adapter.call.side_effect = ValueError('temporary upstream failure')
+            self.assertEqual(second.call('deepseek', 'catalog', 'session-one', {'section': 'models', 'refresh': True})['models'], refreshed['models'])
+            second_adapter.call.side_effect = None
+            second_adapter.directory.mkdir(parents=True, exist_ok=True)
+            (second_adapter.directory/'connection.json').write_text('{"token":"different"}')
+            second_adapter.call.return_value = {'models': [{'id': 'provider/new-account'}], 'capabilities': {'models': True}}
+            self.assertEqual(second.call('deepseek', 'catalog', 'session-one', body)['models'][0]['id'], 'provider/new-account')
+        finally:
+            second.close()
+
     def test_client_switch_requires_configuration_and_persists(self):
         self.manager.adapters['claude'].cli.status = Mock(return_value={
             'cliAvailable': False, 'cliAuthReady': False})

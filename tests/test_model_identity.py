@@ -1,4 +1,6 @@
 import tempfile
+import threading
+import time
 import unittest
 import uuid
 from pathlib import Path
@@ -34,6 +36,7 @@ class ModelIdentityViews(unittest.TestCase):
         bridge.session = Mock(return_value=self.session)
         bridge._refresh_session_goal = Mock(return_value=False)
         bridge._access = Mock(return_value={})
+        bridge._draft_account_identity = Mock(return_value='')
         bridge.goal_transport = 'owner'
         bridge._goal_activation_ids = Mock(return_value=[])
         bridge._overlay_native_goal = Mock(side_effect=lambda session, sid, view: view)
@@ -48,6 +51,36 @@ class ModelIdentityViews(unittest.TestCase):
             view = bridge.view(self.sid)
         self.assertEqual(view['host'], 'ssh-host')
         self.assertNotIn('modelCatalogIdentity', view)
+
+    def test_remote_view_does_not_wait_for_draft_identity_ssh(self):
+        bridge = self.bridge('ssh-host', RemoteCatalog('ssh-host'))
+        bridge._draft_account_identity = Bridge._draft_account_identity.__get__(bridge)
+        bridge.cli_sessions = SimpleNamespace(alias='ssh-alias', remote_home=Path('/remote/codex'))
+        bridge._draft_remote_lock = threading.Lock()
+        bridge._draft_remote_cache = {}
+        bridge._draft_remote_pending = set()
+        started, release = threading.Event(), threading.Event()
+        def slow_read(*args, **kwargs):
+            started.set()
+            release.wait(2)
+            return {'identity': 'remote-owner'}
+        try:
+            with patch('bridge.app.service.ssh_read', side_effect=slow_read) as read:
+                begin = time.monotonic()
+                self.assertEqual(bridge.view(self.sid)['draftAccountIdentity'], '')
+                self.assertLess(time.monotonic()-begin, 0.2)
+                self.assertTrue(started.wait(1))
+                self.assertEqual(bridge.view(self.sid)['draftAccountIdentity'], '')
+                read.assert_called_once()
+                release.set()
+                for _ in range(100):
+                    value = bridge.view(self.sid)['draftAccountIdentity']
+                    if value:
+                        break
+                    time.sleep(0.01)
+                self.assertEqual(len(value), 64)
+        finally:
+            release.set()
 
     def test_local_view_uses_verified_account_catalog_identity(self):
         reader = Catalog(self.home, 'fixture-runtime')

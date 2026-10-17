@@ -155,6 +155,7 @@ class Bridge:
         self.codex_home = Path(codex_home)
         self._draft_remote_lock = threading.Lock()
         self._draft_remote_cache = {}
+        self._draft_remote_pending = set()
         self.data_dir = Path(data_dir)
         self.hosts = AppHosts(codex_home)
         self.remote_bridges = {}
@@ -1616,19 +1617,13 @@ class Bridge:
                 cached = self._draft_remote_cache.get(key)
                 if cached and time.monotonic() - cached[0] < 30:
                     return cached[1]
-            source = source_text('features/accounts/draft_identity.py')
-            source += '\nimport json, os\nfrom pathlib import Path\n'
-            source += 'request = ' + payload({'home': home, 'provider': provider}) + '\n'
-            source += 'home = request["home"] or os.environ.get("CODEX_HOME") or str(Path.home()/".codex")\n'
-            source += 'print(json.dumps({"identity": codex_account_identity(home, request["provider"])}))\n'
-            try:
-                owner = ssh_read(alias, source, timeout=12).get('identity')
-            except (OSError, ValueError, RemoteUnavailable):
-                owner = ''
-            identity = draft_identity('codex', self.host, provider, owner) if owner else ''
-            with self._draft_remote_lock:
-                self._draft_remote_cache[key] = (time.monotonic(), identity)
-            return identity
+                if key in self._draft_remote_pending:
+                    return ''
+                self._draft_remote_pending.add(key)
+            threading.Thread(target=self._probe_remote_draft_identity,
+                             args=(key, alias, home, provider), daemon=True,
+                             name='remote-draft-identity').start()
+            return ''
         try:
             if provider in ('openai', 'bridge_api') and self.accounts:
                 with self.accounts.lock:
@@ -1643,6 +1638,21 @@ class Bridge:
         except (OSError, ValueError, KeyError, TypeError, AttributeError):
             pass
         return ''
+
+    def _probe_remote_draft_identity(self, key, alias, home, provider):
+        try:
+            source = source_text('features/accounts/draft_identity.py')
+            source += '\nimport json, os\nfrom pathlib import Path\n'
+            source += 'request = ' + payload({'home': home, 'provider': provider}) + '\n'
+            source += 'home = request["home"] or os.environ.get("CODEX_HOME") or str(Path.home()/".codex")\n'
+            source += 'print(json.dumps({"identity": codex_account_identity(home, request["provider"])}))\n'
+            owner = ssh_read(alias, source, timeout=12).get('identity')
+            identity = draft_identity('codex', key[0], provider, owner) if owner else ''
+        except (OSError, ValueError, RemoteUnavailable, KeyError, TypeError):
+            identity = ''
+        with self._draft_remote_lock:
+            self._draft_remote_cache[key] = (time.monotonic(), identity)
+            self._draft_remote_pending.discard(key)
 
     def view(self, thread_id, attach=True, background=False, force=False):
         session = self.session(thread_id, attach=attach, background=background, force=force)

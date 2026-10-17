@@ -3,6 +3,7 @@
 import json
 import tempfile
 import threading
+import time
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
@@ -100,15 +101,39 @@ class DraftIdentityTests(unittest.TestCase):
         bridge.cli_sessions = SimpleNamespace(alias='ssh-one', remote_home=Path('/remote/codex'))
         bridge._draft_remote_lock = threading.Lock()
         bridge._draft_remote_cache = {}
-        with patch('bridge.app.service.ssh_read', return_value={'identity': 'remote-account'}) as read:
-            first = bridge._draft_account_identity({'provider': 'openai'})
-            self.assertEqual(bridge._draft_account_identity({'provider': 'openai'}), first)
+        bridge._draft_remote_pending = set()
+        started = threading.Event()
+        release = threading.Event()
+        def slow_remote(alias, source, timeout):
+            started.set()
+            release.wait(2)
+            return {'identity': 'remote-account'}
+        with patch('bridge.app.service.ssh_read', side_effect=slow_remote) as read:
+            begin = time.monotonic()
+            self.assertEqual(bridge._draft_account_identity({'provider': 'openai'}), '')
+            self.assertLess(time.monotonic() - begin, 0.2)
+            self.assertTrue(started.wait(1))
+            self.assertEqual(bridge._draft_account_identity({'provider': 'openai'}), '')
+            read.assert_called_once()
+            release.set()
+            for _ in range(100):
+                first = bridge._draft_account_identity({'provider': 'openai'})
+                if first:
+                    break
+                time.sleep(0.01)
+            self.assertEqual(len(first), 64)
             read.assert_called_once()
         self.assertEqual(read.call_args.args[0], 'ssh-one')
         self.assertIn('request["home"]', read.call_args.args[1])
         bridge.host = 'remote-two'
         with patch('bridge.app.service.ssh_read', return_value={'identity': 'remote-account'}):
-            self.assertNotEqual(bridge._draft_account_identity({'provider': 'openai'}), first)
+            self.assertEqual(bridge._draft_account_identity({'provider': 'openai'}), '')
+            for _ in range(100):
+                second = bridge._draft_account_identity({'provider': 'openai'})
+                if second:
+                    break
+                time.sleep(0.01)
+            self.assertNotEqual(second, first)
 
     def test_claude_native_metadata_survives_credential_refresh(self):
         with tempfile.TemporaryDirectory() as root:

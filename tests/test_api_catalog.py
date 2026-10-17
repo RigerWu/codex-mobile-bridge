@@ -3,7 +3,10 @@ import os
 import json
 import io
 import stat
+import subprocess
+import sys
 import tempfile
+import threading
 import time
 import unittest
 from pathlib import Path
@@ -275,6 +278,56 @@ class ApiCatalogTests(unittest.TestCase):
         self.assertEqual(self.reader.get(self.home,provider='first')['models'][0]['id'],'first')
         self.assertEqual(self.reader.get(self.home,provider='second')['models'][0]['id'],'second')
         self.reader.get(self.home,provider='first');self.assertEqual(calls,['first','second'])
+
+    def test_model_read_does_not_wait_for_inherited_stdout_writer(self):
+        release = self.home/'release-writer'
+        server = self.home/'fixture-app-server.py'
+        child = (f'from pathlib import Path\nimport time\n'
+                 f'while not Path({str(release)!r}).exists():\n    time.sleep(0.02)\n')
+        server.write_text('''import json, subprocess, sys
+subprocess.Popen([sys.executable, '-c', ''' + repr(child) + '''],
+                 stdout=sys.stdout, stderr=subprocess.DEVNULL)
+config = {'model_provider': 'bridge_api', 'model_providers': {'bridge_api': {
+    'base_url': 'https://fixture.invalid/v1', 'experimental_bearer_token': 'fixture-key'}}}
+for line in sys.stdin:
+    message = json.loads(line)
+    if 'id' in message:
+        result = {'config': config} if message['method'] == 'config/read' else {}
+        print(json.dumps({'id': message['id'], 'result': result}), flush=True)
+''', encoding='utf-8')
+        original_popen = subprocess.Popen
+        processes, results, errors = [], [], []
+        def launch(argv, **kwargs):
+            process = original_popen([sys.executable, '-u', str(server)], **kwargs)
+            processes.append(process)
+            return process
+        def read():
+            try:
+                results.append(self.reader.get_kind('models', self.home, provider='bridge_api'))
+            except Exception as error:
+                errors.append(error)
+        worker = threading.Thread(target=read)
+        with patch('bridge.clients.codex.catalog.subprocess.Popen', side_effect=launch), \
+                patch('bridge.clients.codex.catalog.model_catalog', return_value=[
+                    {'id': 'fixture-model', 'name': 'Fixture model', 'efforts': ['high']}]) as upstream:
+            worker.start()
+            try:
+                worker.join(timeout=5)
+                completed_before_release = not worker.is_alive()
+            finally:
+                release.touch()
+                worker.join(timeout=5)
+            self.assertTrue(completed_before_release, 'model read waited for inherited stdout writer')
+            self.assertFalse(worker.is_alive())
+            self.assertEqual(errors, [])
+            self.assertEqual(results[0]['models'][0]['id'], 'fixture-model')
+            upstream.assert_called_once_with('https://fixture.invalid/v1', 'fixture-key')
+            self.assertEqual(len(processes), 1)
+            for _ in range(100):
+                if processes[0].stdout.closed:
+                    break
+                time.sleep(.02)
+            self.assertTrue(processes[0].stdout.closed, 'reader did not release stdout after writer exit')
 
     def test_sqlite_skill_buckets_search_pagination_and_provider_independence(self):
         calls=[]

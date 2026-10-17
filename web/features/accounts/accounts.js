@@ -176,7 +176,7 @@ class AccountsPanel {
     {const show=this.button(opened?'收起模型':'查看可用模型',()=>{if(opened){this.expandedModels.delete(row.id);this.render();}else{this.expandedModels.add(row.id);this.perform({action:'details',id:row.id,section:'models'});}});show.disabled=this.busy;footer.append(show);}
     if(opened){const box=this.node('div',undefined,'accounts-models');
       const controls=this.node('div',undefined,'accounts-model-controls'),refresh=this.button('刷新模型',()=>this.perform({action:'details',id:row.id,section:'models',refresh:true}));refresh.disabled=this.busy||models?.status==='loading';controls.append(refresh);
-      const updated=models?.updatedAt||models?.checkedAt;if(Number.isFinite(updated))controls.append(this.node('small',this.text('更新于：')+this.shortTime(updated),'account-muted'));box.append(controls);
+      const updated=models?.cache?.updatedAt||models?.updatedAt||models?.checkedAt;if(Number.isFinite(updated))controls.append(this.node('small',this.text('更新于：')+this.shortTime(updated),'account-muted'));box.append(controls);
       if(!models||models.status==='loading')box.append(this.node('p','正在读取模型…'));
       else if(models.status==='error'){box.append(this.node('p',models.error));box.append(this.button('重试',()=>this.perform({action:'details',id:row.id,section:'models',refresh:true})));}
       else if(!models.models?.length)box.append(this.node('p','暂未提供可用模型'));

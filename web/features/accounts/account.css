@@ -94,3 +94,5 @@
 
 .picker .cli-access-panel>h2,.account-compact .cli-access-panel>h2{display:none}
 .cli-access-model-hint{grid-column:1/-1;margin:0}.cli-access-probe{font-size:12px;max-height:220px;overflow:auto;overflow-wrap:anywhere}
+
+.accounts-model-controls{display:flex;align-items:center;gap:12px;flex-wrap:wrap}.accounts-model-controls>small{flex:1;min-width:0}.accounts-model-controls>button{flex:none}

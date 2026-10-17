@@ -3,7 +3,7 @@ const test=require('node:test'),assert=require('node:assert/strict');
 const fs=require('node:fs'),path=require('node:path'),vm=require('node:vm');
 
 // Run the actual phone handlers with an isolated DOM and notification API.
-async function fixture({sessionStore=new Map(),skipStartup=false}={}){
+async function fixture({sessionStore=new Map(),localStore=new Map(),skipStartup=false}={}){
   const nodes=new Map(),saved=new Map(),writes=[],listRequests=[],acknowledgements=[];
   const node=(tag='')=>({tagName:tag.toUpperCase(),children:[],value:'',checked:false,disabled:false,hidden:false,open:false,textContent:'',dataset:{},options:[],style:{setProperty(k,v){this[k]=v;}},scrollTop:0,parentElement:{},listeners:{},
     setAttribute(k,v){this[k]=v;},after(child){this.nextSibling=child;},getBoundingClientRect(){return {width:390,height:844};},classList:{add(){},remove(){},toggle(){},contains(){return false;}},addEventListener(type,listener){(this.listeners[type]??=[]).push(listener);},dispatchEvent(event){for(const listener of this.listeners[event.type]||[])listener(event);},replaceChildren(...values){this.children=values;},append(...values){this.children.push(...values);},querySelectorAll(){return [];},querySelector(){return {disabled:false};},
@@ -11,7 +11,7 @@ async function fixture({sessionStore=new Map(),skipStartup=false}={}){
   const html=fs.readFileSync(path.join(__dirname,'../web/index.html'),'utf8');
   for(const match of html.matchAll(/\bid="([^"]+)"/g))nodes.set(match[1],node());
   const channelButtons=['bark','ntfy','pushplus'].map(channel=>Object.assign(node('button'),{dataset:{notificationChannel:channel}}));
-  const storage=()=>({getItem(){return null;},setItem(){},removeItem(){}});
+  const localStorage={get length(){return localStore.size;},key(index){return [...localStore.keys()][index]??null;},getItem(key){return localStore.get(key)??null;},setItem(key,value){localStore.set(key,String(value));},removeItem(key){localStore.delete(key);}};
   const scopedStorage={get length(){return sessionStore.size;},key(index){return [...sessionStore.keys()][index]??null;},getItem(key){return sessionStore.get(key)??null;},setItem(key,value){sessionStore.set(key,String(value));},removeItem(key){sessionStore.delete(key);},clear(){sessionStore.clear();}};
   const archiveToggles=[];
   const archiveFilter={classList:{toggle:(name,enabled)=>archiveToggles.push([name,enabled])}};
@@ -19,7 +19,7 @@ async function fixture({sessionStore=new Map(),skipStartup=false}={}){
   const response=(data,status=200)=>({ok:status===200,status,json:async()=>data});
   let listResponse=()=>response({sessions:[],unavailableHosts:[]}),knownRows=[];
   const context=vm.createContext({ClientNavigation:class{constructor(){this.provider="codex";}async refresh(){}acknowledgeList(provider,value){acknowledgements.push({provider,value});}},DesktopSessionsView:class{bindListCache(){}previewCachedList(){return false;}clear(){}},Workbench:class{constructor(){this.current={};}open(){}reset(){}setThumbnails(){}relabel(){}},navigator:{userAgent:'test'},document:{addEventListener(){},documentElement:{},getElementById:id=>nodes.get(id),querySelector:selector=>selector==='.archive-filter'?archiveFilter:{disabled:false},querySelectorAll:selector=>selector==='[data-notification-channel]'?channelButtons:[],createElement:node},
-    renderMarkdown(){},window:{addEventListener(){}},localStorage:storage(),sessionStorage:scopedStorage,
+    renderMarkdown(){},window:{addEventListener(){}},localStorage,sessionStorage:scopedStorage,
     location:{hash:'',pathname:'/',search:''},history:{replaceState(){}},setTimeout(){},clearTimeout(){},setInterval(){},
     ChatTimeline:class{constructor(){this.abort=new AbortController();}async start(){}dispose(){this.abort.abort();}relabel(){}refreshActions(){}},
     fetch:async(url,options={})=>{
@@ -66,7 +66,7 @@ async function fixture({sessionStore=new Map(),skipStartup=false}={}){
   }
   await new Promise(setImmediate);
   const run=code=>vm.runInContext(code,context);
-  return {nodes,channelButtons,writes,saved,run,html,response,archiveToggles,listRequests,sessionStore,acknowledgements,setList:handle=>{listResponse=handle;},setPost:handle=>{nextPost=handle;},setGet:handle=>{nextGet=handle;},
+  return {nodes,channelButtons,writes,saved,run,html,response,archiveToggles,listRequests,sessionStore,localStore,acknowledgements,setList:handle=>{listResponse=handle;},setPost:handle=>{nextPost=handle;},setGet:handle=>{nextGet=handle;},
     async open(id='11111111-1111-4111-8111-111111111111',host='local'){
       await run(`openChat(${JSON.stringify(id)},${JSON.stringify(host)})`);await new Promise(setImmediate);
     },
@@ -483,6 +483,8 @@ test('LAN HTTP list snapshots use the server identity without Web Crypto',async(
 
 test('logout cache cleanup removes desktop provider snapshots with Codex snapshots',async()=>{
   const sessionStore=new Map([['desktop-list-v1:secret:gateway:claude','private'],['codex-list-v1:secret:all','private'],['unrelated','keep']]);
-  const ui=await fixture({sessionStore,skipStartup:true});ui.run('clearListSnapshot()');
+  const localStore=new Map([['desktop-list-v1:secret:gateway:claude','private'],['desktop-list-v1:secret:gateway:deepseek','private'],['unrelated','keep']]);
+  const ui=await fixture({sessionStore,localStore,skipStartup:true});ui.run('clearListSnapshot()');
   assert.deepEqual([...sessionStore], [['unrelated','keep']]);
+  assert.deepEqual([...localStore], [['unrelated','keep']]);
 });

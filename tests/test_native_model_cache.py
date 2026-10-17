@@ -102,3 +102,23 @@ class NativeModelCacheTests(unittest.TestCase):
             {'config': {'model_provider': 'openai'}} if method == 'config/read' else
             {'account': {'type': 'chatgpt', 'email': 'two@example.test'}})
         self.assertNotEqual(first, Bridge._native_model_identity(bridge, self.temp.name, 'openai'))
+
+    def test_ssh_identity_tracks_target_credentials_and_host_without_local_auth(self):
+        bridge = self.bridge
+        bridge.host = 'ssh:host-a'
+        bridge.cli_sessions.alias = 'host-a'
+        bridge.cli_sessions.remote_home = '/remote/codex'
+        bridge.cli_sessions.client = SimpleNamespace(request=Mock(side_effect=lambda method, params, **kwargs:
+            {'config': {'model_provider': 'fixture'}} if method == 'config/read' else
+            {'account': {'type': 'apiKey'}}))
+        bridge.cli_sessions.model_environment_identity = Mock(return_value='remote-key-a')
+        first = Bridge._native_model_identity(bridge, '/remote/project', 'fixture')
+        bridge.cli_sessions.model_environment_identity.assert_called_once_with(
+            {'model_provider': 'fixture'}, 'fixture', {'type': 'apiKey'}, cwd='/remote/project')
+        (bridge.codex_home/'auth.json').write_text('{"OPENAI_API_KEY":"local-only"}')
+        self.assertEqual(first, Bridge._native_model_identity(bridge, '/remote/project', 'fixture'))
+        bridge.cli_sessions.model_environment_identity.return_value = 'remote-key-b'
+        self.assertNotEqual(first, Bridge._native_model_identity(bridge, '/remote/project', 'fixture'))
+        bridge.cli_sessions.model_environment_identity.return_value = 'remote-key-a'
+        bridge.host, bridge.cli_sessions.alias = 'ssh:host-b', 'host-b'
+        self.assertNotEqual(first, Bridge._native_model_identity(bridge, '/remote/project', 'fixture'))

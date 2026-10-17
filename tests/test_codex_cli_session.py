@@ -722,6 +722,15 @@ class CliSessionTests(unittest.TestCase):
             {'model_providers': {'openai': {'env_key': 'CMB_FIXTURE_KEY'}}}, 'openai', {})
         self.assertEqual(names, {'OPENAI_BASE_URL', 'CMB_FIXTURE_KEY'})
 
+    def test_openai_custom_route_reads_daemon_key_even_without_account(self):
+        config = {'model_providers': {'openai': {'query_params': {'fixture': '1'}}}}
+        with patch('bridge.clients.codex.cli_session._local_cli', return_value='/fixture/codex'), patch(
+                'bridge.clients.codex.cli_session.read_daemon_environment',
+                return_value=({'OPENAI_API_KEY': 'daemon-key'}, ('fixture-process',))) as reader:
+            values, _ = self.sessions.model_environment(config, 'openai', {})
+        self.assertEqual(values['OPENAI_API_KEY'], 'daemon-key')
+        self.assertEqual(reader.call_args.args[2], {'OPENAI_BASE_URL', 'OPENAI_API_KEY'})
+
     def test_local_native_openai_api_key_uses_same_home_auth_file(self):
         self.sessions.attach('thread-a', explicit=True)
         self.sessions.metadata['thread-a']['modelProvider'] = 'openai'
@@ -750,12 +759,31 @@ class CliSessionTests(unittest.TestCase):
     def test_ssh_native_api_catalog_does_not_use_local_auth(self):
         self.sessions.attach('thread-a', explicit=True)
         self.sessions.alias = 'fixture-host'
+        self.sessions.remote_home = '/remote/codex-home'
         self.sessions.metadata['thread-a']['modelProvider'] = 'custom'
         self.fake.thread['modelProvider'] = 'custom'
         (self.home / 'auth.json').write_text('{"OPENAI_API_KEY":"gateway-secret"}')
-        result = self.sessions.get_kind('thread-a', 'models')
-        self.assertEqual(result['models'], [])
-        self.assertIn('SSH 原生 CLI', result['modelError'])
+        with patch.object(self.sessions, 'model_environment', side_effect=AssertionError('local environment read')), \
+             patch('bridge.clients.codex.cli_session.Catalog.read_models', side_effect=AssertionError('local API read')), \
+             patch('bridge.clients.codex.cli_session.remote_model_catalog', return_value={
+                 'models': [{'id': 'remote-model', 'efforts': ['high']}], 'modelSource': 'api'}) as catalog:
+            result = self.sessions.get_kind('thread-a', 'models')
+        self.assertEqual(result['models'], [{'id': 'remote-model', 'efforts': ['high']}])
+        self.assertEqual(catalog.call_args.args[:4],
+                         ('fixture-host', '/remote/codex-home', '/original/project', 'custom'))
+        self.assertNotIn('gateway-secret', json.dumps(catalog.call_args.args))
+        self.assertEqual(catalog.call_args.args[-1][0]['model'], 'native-model')
+
+    def test_ssh_environment_identity_is_read_on_target(self):
+        self.sessions.alias = 'fixture-host'
+        self.sessions.remote_home = '/remote/codex-home'
+        with patch('bridge.clients.codex.cli_session.remote_model_identity', return_value='target-digest') as read, \
+             patch.object(self.sessions, 'model_environment', side_effect=AssertionError('local environment read')):
+            identity = self.sessions.model_environment_identity({'model_provider': 'custom'},
+                                                                'custom', {}, cwd='/remote/project')
+        self.assertEqual(identity, 'target-digest')
+        read.assert_called_once_with('fixture-host', '/remote/codex-home', '/remote/project',
+                                     'custom', {'model_provider': 'custom'}, {})
 
     def test_chatgpt_gateway_models_come_from_joined_daemon(self):
         self.sessions.attach('thread-a', explicit=True)

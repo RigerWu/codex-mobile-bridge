@@ -27,7 +27,7 @@ from bridge.features.sessions.model import apply_patches, attachment_prompt, com
 from bridge.features.sessions.store import SessionStore, StoreUnavailable
 from bridge.features.workspace.files import artifact_paths, referenced_model_images
 from bridge.features.workspace.workspace import operate as workspace_operation
-from bridge.clients.codex.catalog import Catalog, ModelStore, MODEL_REFRESH_SECONDS
+from bridge.clients.codex.catalog import Catalog, CatalogError, ModelStore, MODEL_REFRESH_SECONDS
 from bridge.platforms.codex_daemon_env import DaemonEnvironmentUnavailable
 from bridge.clients.codex.remote import AppHosts, RemoteStore, RemoteCatalog, RemoteUnavailable, ssh_read, ssh_download, payload
 from bridge.features.sessions.create import rename_thread, independent_directory, create_empty, fork_copy, open_in_desktop, CreationError, CreationUnavailable, ForkUnavailable
@@ -1980,12 +1980,12 @@ class Bridge:
         configured_catalog = (bool(effective.get('model_catalog_json')) and
                               provider == (effective.get('model_provider') or 'openai'))
         environment_identity = None
-        if (self.host == 'local' and hasattr(self.cli_sessions, 'model_environment_identity') and
+        if (hasattr(self.cli_sessions, 'model_environment_identity') and
                 not configured_catalog and (Catalog.custom_provider(effective, provider) or
                                             account.get('type') == 'apiKey')):
             try:
-                environment_identity = self.cli_sessions.model_environment_identity(config, provider, account)
-            except DaemonEnvironmentUnavailable:
+                environment_identity = self.cli_sessions.model_environment_identity(config, provider, account, cwd=cwd)
+            except (DaemonEnvironmentUnavailable, CatalogError):
                 environment_identity = 'unavailable'
         return ModelStore.key('codex-cli-models-v3', self.host, self.cli_sessions.alias,
                               str(runtime_home), cwd, provider, config, account, local_auth,

@@ -262,6 +262,71 @@ class RemoteCatalog:
         return result
 
 
+class RemoteCliModels:
+    """Read a joined CLI's API catalog on its SSH host without returning secrets."""
+
+    def __init__(self, alias):
+        self.alias = alias
+
+    @staticmethod
+    def _source():
+        source = source_text('features/auth/tls.py') + '\n'
+        source += source_text('features/accounts/models.py').replace(
+            'from bridge.features.auth.tls import client_context', '') + '\n'
+        source += source_text('clients/codex/catalog.py').replace(
+            'from bridge.features.accounts.models import model_catalog', '') + '\n'
+        source += source_text('platforms/linux/codex_daemon_env.py') + '\n'
+        source += '_linux_read_process_environment = read_process_environment\n'
+        source += source_text('platforms/macos/force_exit.py') + '\n'
+        source += source_text('platforms/macos/codex_daemon_env.py').replace(
+            'from bridge.platforms.macos.force_exit import Native', '') + '\n'
+        source += '_macos_read_process_environment = read_process_environment\n'
+        dispatcher = source_text('platforms/codex_daemon_env.py')
+        dispatcher = dispatcher.replace(
+            'from bridge.platforms.macos.codex_daemon_env import read_process_environment',
+            'read_process_environment = _macos_read_process_environment').replace(
+            'from bridge.platforms.linux.codex_daemon_env import read_process_environment',
+            'read_process_environment = _linux_read_process_environment').replace(
+            'from bridge.platforms.windows.codex_daemon_env import read_process_environment',
+            "raise DaemonEnvironmentUnavailable('SSH Windows model catalog is unsupported')")
+        source += dispatcher + '\n'
+        source += source_text('clients/codex/remote_models.py') + '\n'
+        return source
+
+    def _call(self, operation, home, cwd, provider, config, account=None, native_models=None):
+        home = str(home) if isinstance(home, Path) else home
+        cwd = str(cwd) if isinstance(cwd, Path) else cwd
+        value = {'operation': operation, 'home': home, 'cwd': cwd, 'provider': provider,
+                 'config': config, 'account': account or {}, 'nativeModels': native_models or []}
+        source = self._source() + '\nprint(json.dumps(remote_model_worker(' + payload(value) + '), ensure_ascii=False))\n'
+        try:
+            result = ssh_read(self.alias, source, timeout=120 if operation == 'models' else 20)
+        except RemoteUnavailable as exc:
+            raise CatalogError(str(exc)) from exc
+        if not isinstance(result, dict):
+            raise CatalogError('SSH 模型目录格式无效')
+        if result.get('error'):
+            raise CatalogError(result['error'])
+        identity = result.get('identity')
+        if not isinstance(identity, str) or len(identity) != 64 or any(char not in '0123456789abcdef' for char in identity):
+            raise CatalogError('SSH 模型目录身份无效')
+        return result
+
+    def identity(self, home, cwd, provider, config, account=None):
+        return self._call('identity', home, cwd, provider, config, account)['identity']
+
+    def read_models(self, home, cwd, provider, config, account=None, native_models=None):
+        return self._call('models', home, cwd, provider, config, account, native_models)
+
+
+def remote_model_identity(alias, home, cwd, provider, config, account=None):
+    return RemoteCliModels(alias).identity(home, cwd, provider, config, account)
+
+
+def remote_model_catalog(alias, home, cwd, provider, config, account=None, native_models=None):
+    return RemoteCliModels(alias).read_models(home, cwd, provider, config, account, native_models)
+
+
 class AppHosts:
     def __init__(self, home):
         self.home = Path(home)

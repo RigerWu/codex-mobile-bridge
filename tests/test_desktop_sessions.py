@@ -172,6 +172,26 @@ class Adapters(unittest.TestCase):
         self.assertEqual(cached['currentEffort'], 'high')
         manager._read.assert_called_once()
 
+    def test_cached_deepseek_catalog_reads_selection_from_existing_list(self):
+        manager = self.manager
+        manager._model_identity = Mock(return_value='shared-access')
+        manager._model_live = Mock(return_value=True)
+        calls = []
+        def native(action, sid, body):
+            calls.append(action)
+            if action == 'catalog':
+                return {'models': [{'id': 'provider/first'}, {'id': 'provider/second'}],
+                        'capabilities': {'models': True}}
+            if action == 'list':
+                return {'sessions': [{'id': 'other', 'model': 'wrong'},
+                                     {'id': 'session-one', 'model': 'provider/second', 'effort': 'high'}]}
+            raise AssertionError(action)
+        manager.adapters['deepseek'].call = Mock(side_effect=native)
+        manager.call('deepseek', 'catalog', 'session-one', {'section': 'models'})
+        cached = manager.call('deepseek', 'catalog', 'session-one', {'section': 'models'})
+        self.assertEqual((cached['currentModel'], cached['currentEffort']), ('provider/second', 'high'))
+        self.assertEqual(calls, ['catalog', 'list'])
+
     def test_session_account_change_after_catalog_write_rejects_old_response(self):
         manager = self.manager
         manager._model_identity = Mock(side_effect=['old-account', 'old-account', 'new-account'])

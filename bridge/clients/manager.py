@@ -251,6 +251,12 @@ class DesktopSessions:
 
     def _model_selection(self, provider, sid):
         adapter = self.adapters[provider]
+        if provider == 'deepseek':
+            listing = self._read(provider, 'list')
+            row = next((row for row in listing.get('sessions', []) if row.get('id') == sid), None)
+            if row is None:
+                raise BridgeUnavailable('DeepSeek 会话已关闭，请重新打开')
+            return {'currentModel': row.get('model') or '', 'currentEffort': row.get('effort') or ''}
         if provider == 'claude':
             with adapter.cli.lock, adapter.remote_cli.lock:
                 local = adapter.cli.index.get(sid)

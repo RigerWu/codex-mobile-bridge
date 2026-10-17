@@ -178,9 +178,9 @@ class AccountsPanel {
       const controls=this.node('div',undefined,'accounts-model-controls'),refresh=this.button('刷新模型',()=>this.perform({action:'details',id:row.id,section:'models',refresh:true}));refresh.disabled=this.busy||models?.status==='loading';controls.append(refresh);
       const updated=models?.cache?.updatedAt||models?.updatedAt||models?.checkedAt;if(Number.isFinite(updated))controls.append(this.node('small',this.text('更新于：')+this.shortTime(updated),'account-muted'));box.append(controls);
       if(!models||models.status==='loading')box.append(this.node('p','正在读取模型…'));
-      else if(models.status==='error'){box.append(this.node('p',models.error));box.append(this.button('重试',()=>this.perform({action:'details',id:row.id,section:'models',refresh:true})));}
-      else if(!models.models?.length)box.append(this.node('p','暂未提供可用模型'));
-      else for(const model of models.models){const line=this.node('div');line.textContent=model.name===model.id?model.id:model.name+' · '+model.id;box.append(line);}card.append(box);
+      if(models?.status==='error')box.append(this.node('p',models.error,'error'));
+      if(models?.models?.length)for(const model of models.models){const line=this.node('div');line.textContent=!model.name||model.name===model.id?model.id:model.name+' · '+model.id;if(model.efforts?.length)line.append(this.node('small',' · '+model.efforts.map(effort=>this.text(effort)).join(' / '),'account-muted'));box.append(line);}
+      else if(models?.status==='ready')box.append(this.node('p','暂未提供可用模型'));card.append(box);
     }
   }
   accountUsageControls(row){

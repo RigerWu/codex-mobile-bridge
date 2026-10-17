@@ -92,10 +92,11 @@ class AccountsTests(unittest.TestCase):
     def test_chat_catalog_and_account_details_use_the_same_selected_upstream(self):
         row=self.api(name='Gemini access');self.manager.mark_active(row['id'])
         self.manager.info.entries={}
-        with patch('bridge.features.accounts.accounts.model_ids', return_value=['gemini-flash','gemini-pro']) as upstream:
+        with patch('bridge.features.accounts.accounts.model_catalog', return_value=[{'id': 'gemini-flash', 'name': 'Flash', 'efforts': ['low', 'high'], 'defaultEffort': 'low'}, {'id': 'gemini-pro', 'name': 'Pro', 'efforts': []}]) as upstream:
             details=self.manager.api_models(row, refresh=True)
             chat=self.manager.current_models()
         self.assertEqual(chat['models'],details)
+        self.assertEqual(chat['models'][0]['efforts'], ['low', 'high'])
         self.assertEqual(chat['modelSource'],'api');self.assertEqual(chat['modelAccessName'],'Gemini access')
         self.assertEqual(upstream.call_count,1)
         self.assertNotIn('secret-fixture',json.dumps(chat))
@@ -103,7 +104,7 @@ class AccountsTests(unittest.TestCase):
     def test_changed_live_api_credentials_do_not_query_saved_account_models(self):
         row=self.api();self.manager.mark_active(row['id'])
         private_json(self.home/'auth.json',{'OPENAI_API_KEY':'changed-fixture-key'})
-        with patch('bridge.features.accounts.accounts.model_ids') as upstream:
+        with patch('bridge.features.accounts.accounts.model_catalog') as upstream:
             self.assertIsNone(self.manager.current_models(refresh=True))
         upstream.assert_not_called()
 

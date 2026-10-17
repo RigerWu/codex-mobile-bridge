@@ -17,7 +17,7 @@ import time
 from pathlib import Path
 from urllib.parse import urlsplit
 
-from bridge.features.accounts.models import model_ids
+from bridge.features.accounts.models import model_catalog
 
 logger = logging.getLogger(__name__)
 SKILL_CACHE = 'skill-cache.json'
@@ -407,7 +407,8 @@ class Catalog:
             if kind == 'linux-permissions':
                 return permission_reader(request, cwd)
             if kind == 'models':
-                phase = time.monotonic();catalog = self.read_models(request, cwd, provider)
+                phase = time.monotonic();catalog = self.read_models(request, cwd, provider,
+                    metadata_request=lambda method, params: request(method, params, timeout=2))
                 logger.info('catalog models elapsed=%.3fs source=%s count=%d error=%r',
                             time.monotonic()-phase, catalog.get('modelSource'), len(catalog.get('models', [])), catalog.get('modelError'))
                 logger.info('catalog fetch complete elapsed=%.3fs', time.monotonic()-started)
@@ -423,7 +424,8 @@ class Catalog:
                 logger.info('catalog fetch complete elapsed=%.3fs', time.monotonic()-started)
                 return {'models': [], 'kind': 'skills', 'skillEntries': skills.get('data', []), 'fastMode': {'allowed': False},
                         'modelSource': 'codex'}
-            phase = time.monotonic();catalog = self.read_models(request, cwd, provider)
+            phase = time.monotonic();catalog = self.read_models(request, cwd, provider,
+                metadata_request=lambda method, params: request(method, params, timeout=2))
             logger.info('catalog models elapsed=%.3fs source=%s count=%d error=%r',
                         time.monotonic()-phase, catalog.get('modelSource'), len(catalog.get('models', [])), catalog.get('modelError'))
             phase = time.monotonic();skills = request('skills/list', {'cwds': [cwd], 'forceReload': False}, timeout=request_timeout)
@@ -459,7 +461,7 @@ class Catalog:
             ('base_url', 'env_key', 'experimental_bearer_token', 'http_headers',
              'env_http_headers', 'auth', 'gateway_oauth', 'query_params', 'aws'))
 
-    def read_models(self, request, cwd, provider=None):
+    def read_models(self, request, cwd, provider=None, metadata_request=None):
         config = request('config/read', {'includeLayers': False, 'cwd': cwd}).get('config', {})
         profile = (config.get('profiles') or {}).get(config.get('profile')) or {}
         effective = {**config, **profile}
@@ -473,15 +475,21 @@ class Catalog:
         if not configured_catalog and (custom or auth.get('type') == 'apiKey'):
             result = {'models': [], 'modelSource': 'api', 'currentEffort': effective.get('model_reasoning_effort')}
             try:
-                if any(definition.get(k) for k in ('http_headers', 'env_http_headers', 'auth', 'gateway_oauth', 'query_params', 'aws')):
+                if any(definition.get(k) for k in ('auth', 'gateway_oauth', 'aws')):
                     raise ValueError('此 API 接入使用额外认证配置，请手动填写模型 ID')
-                if not base and provider != 'openai':
+                if not base and custom:
                     raise ValueError('未找到当前 API 地址，请检查接入配置')
+                headers = {name.lower(): value for name, value in (definition.get('http_headers') or {}).items()}
+                for name, variable in (definition.get('env_http_headers') or {}).items():
+                    value = os.environ.get(variable)
+                    if not value:
+                        raise ValueError('未找到当前 API 认证请求头，请检查接入环境变量')
+                    headers[name.lower()] = value
                 key = (os.environ.get(definition['env_key'], '') if definition.get('env_key')
                        else definition.get('experimental_bearer_token') or '')
                 if definition.get('env_key') and not key:
                     raise ValueError('未找到当前 API Key，请检查接入配置')
-                if not key and (provider == 'openai' or definition.get('requires_openai_auth')):
+                if not key and (definition.get('requires_openai_auth') or (provider == 'openai' and not headers)):
                     try:
                         saved = json.loads((self.home/'auth.json').read_text(encoding='utf-8'))
                     except (OSError, ValueError):
@@ -494,8 +502,32 @@ class Catalog:
                 if (endpoint.scheme not in ('https', 'http') or not endpoint.hostname or
                         endpoint.username or endpoint.password or endpoint.query or endpoint.fragment):
                     raise ValueError('未找到当前 API 地址，请检查接入配置')
-                ids = model_ids(base, key)
-                result['models'] = [{'model': identifier, 'displayName': identifier} for identifier in ids]
+                if key and headers:
+                    headers['authorization'] = 'Bearer ' + key
+                options = {}
+                if headers:
+                    options['headers'] = headers
+                if definition.get('query_params'):
+                    options['query_params'] = definition['query_params']
+                models = model_catalog(base, key, **options)
+                # The upstream remains the authority for availability. Native
+                # capabilities may fill missing metadata only for exact IDs;
+                # never replace a failed upstream list with bundled models.
+                if any(not row['efforts'] for row in models):
+                    try:
+                        response = (metadata_request or request)('model/list', {
+                            'cursor': None, 'limit': 100, 'includeHidden': False})
+                        native = {row.get('model', row.get('id')): row for row in response.get('data', [])}
+                        for row in models:
+                            info = native.get(row['id'], {})
+                            if not row['efforts']:
+                                row['efforts'] = [level['reasoningEffort'] for level in info.get('supportedReasoningEfforts', [])]
+                                row['defaultEffort'] = info.get('defaultReasoningEffort')
+                    except CatalogError:
+                        pass  # Optional metadata must not discard a valid upstream list.
+                result['models'] = [{'model': row['id'], 'displayName': row['name'],
+                    'supportedReasoningEfforts': [{'reasoningEffort': effort} for effort in row['efforts']],
+                    'defaultReasoningEffort': row.get('defaultEffort')} for row in models]
             except ValueError as exc:
                 result['modelError'] = str(exc)
             return result

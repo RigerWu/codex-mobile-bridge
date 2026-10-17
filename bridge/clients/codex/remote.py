@@ -146,7 +146,7 @@ class RemoteCatalog:
     def _source(self):
         source = source_text('features/auth/tls.py') + '\n'
         source += source_text('features/accounts/models.py').replace('from bridge.features.auth.tls import client_context', '') + '\n'
-        source += source_text('clients/codex/catalog.py').replace('from bridge.features.accounts.models import model_ids', '')
+        source += source_text('clients/codex/catalog.py').replace('from bridge.features.accounts.models import model_catalog', '')
         source += '\nimport shutil\nhome=Path(os.environ.get("CODEX_HOME", str(Path.home()/".codex")))\n'
         source += 'runtime=shutil.which("codex") or str(Path.home()/".local/bin/codex")\n'
         source += 'reader=Catalog(home, runtime, allow_background_refresh=False)\n'

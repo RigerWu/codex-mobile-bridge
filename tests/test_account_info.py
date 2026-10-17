@@ -124,7 +124,7 @@ class InfoTests(unittest.TestCase):
         self.assertNotIn('raw private',json.dumps(self.manager.public()))
         api=self.manager.add_api({'name':'API','baseUrl':'https://fixture.test/v1','apiKey':'key','model':'m'})['accounts'][-1]
         with self.assertRaises(ValueError):info.request({'id':api['id'],'section':'usage'})
-        with patch('bridge.features.accounts.accounts.model_ids',return_value=['m1','m2']):info.read(api,'models')
+        with patch('bridge.features.accounts.accounts.model_catalog',return_value=[{'id':'m1'},{'id':'m2'}]):info.read(api,'models')
         self.assertEqual(len(info.entries[api['id']]['models']['models']),2)
 
     def test_detail_cache_suppresses_duplicate_queries(self):

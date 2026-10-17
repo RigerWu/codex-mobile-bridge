@@ -175,6 +175,16 @@ class HttpAdapters(unittest.TestCase):
         manager.clients_status.assert_called_once_with()
         manager.clients.assert_not_called()
 
+    def test_model_catalog_http_distinguishes_open_from_explicit_refresh(self):
+        manager = self.server.desktop_sessions = Mock()
+        manager.call.return_value = {'models': [{'id': 'fixture'}]}
+        headers = self.login()
+        route = '/api/desktop-sessions/claude/catalog?sessionId=native-id&section=models'
+        self.assertEqual(self.request('GET', route, headers=headers)[0], 200)
+        manager.call.assert_called_with('claude', 'catalog', 'native-id', {'section': 'models', 'refresh': False})
+        self.assertEqual(self.request('GET', route + '&refresh=true', headers=headers)[0], 200)
+        manager.call.assert_called_with('claude', 'catalog', 'native-id', {'section': 'models', 'refresh': True})
+
     def test_force_desktop_choice_requires_auth_csrf_and_exact_payload(self):
         manager = self.server.desktop_sessions = Mock()
         manager.toggle_client.return_value = {'clients': []}

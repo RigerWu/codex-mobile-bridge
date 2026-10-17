@@ -1147,7 +1147,11 @@ class Bridge:
                 if policy['type'] not in modes:
                     raise ValueError('当前权限配置暂不支持临时侧边聊天')
                 settings['sandbox'] = modes[policy['type']]
-        return self.side_chats.operate(thread_id, action, body, snapshot, settings, self.catalog_reader)
+        result = self.side_chats.operate(thread_id, action, body, snapshot, settings, self.catalog_reader)
+        if (self.host == 'local' and isinstance(result, dict) and result.get('id') and
+                result.get('cwd') and result.get('provider')):
+            result['modelCatalogIdentity'] = self.catalog_reader.model_identity(result['cwd'], result['provider'])
+        return result
 
     def side_attachment(self, thread_id, child, operation, *args):
         self.store.get(thread_id)
@@ -1586,7 +1590,7 @@ class Bridge:
                 view["permissionMode"] = linux_permissions.current_mode(session.state)
         view["host"] = self.host
         view["hostLabel"] = "此电脑" if self.host == "local" else self.hosts.hosts().get(self.host, {}).get("displayName", self.host)
-        if session.origin != 'cli':
+        if self.host == 'local' and session.origin != 'cli':
             cwd = view.get('cwd')
             provider = view.get('provider')
             if cwd:
@@ -2653,6 +2657,8 @@ class Bridge:
     def close(self):
         self.terminals.close()
         self.side_chats.close()
+        if self.cli_access:
+            self.cli_access.close()
         self.closed.set()
         if hasattr(self.catalog_reader, 'stop_model_refresh'):
             self.catalog_reader.stop_model_refresh()

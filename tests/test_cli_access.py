@@ -1,4 +1,5 @@
 import json
+import sqlite3
 import sys
 import tempfile
 import threading
@@ -32,6 +33,7 @@ class CliAccessTests(unittest.TestCase):
         self.profile_patch.start()
         self.addCleanup(self.profile_patch.stop)
         self.manager = CliAccess(self.bridge)
+        self.addCleanup(self.manager.close)
 
     def save_api(self, **changes):
         request = {'provider': 'claude', 'action': 'saveApi', 'name': 'Claude API',
@@ -72,6 +74,9 @@ class CliAccessTests(unittest.TestCase):
             result = self.manager.change({'provider': 'claude', 'action': 'models', 'id': identifier})
         models.assert_called_once_with('https://fixture.invalid/v1', 'private-fixture-key', headers={
             'Authorization': 'Bearer private-fixture-key', 'anthropic-version': '2023-06-01'})
+        cache = result['probe'].pop('cache')
+        self.assertIsInstance(cache['updatedAt'], float)
+        self.assertEqual(cache['identity'], result['claude']['accounts'][0]['modelCatalogIdentity'])
         self.assertEqual(result['probe'], {'provider': 'claude', 'id': identifier,
                          'status': 'reachable', 'scope': 'models', 'models': ['claude-a'], 'modelCount': 1})
         self.assertIsNone(result['claude']['activeId'])
@@ -79,6 +84,7 @@ class CliAccessTests(unittest.TestCase):
         with patch('bridge.features.accounts.cli_access.model_ids', return_value=['claude-a']) as models:
             result = self.manager.change({'provider': 'claude', 'action': 'test', 'id': identifier})
         self.assertIsNone(result['probe']['models'])
+        self.assertNotIn('cache', result['probe'])
         self.assertEqual(result['probe']['modelCount'], 1)
         models.assert_called_once()
 
@@ -88,11 +94,105 @@ class CliAccessTests(unittest.TestCase):
         self.accounts.api_credentials = Mock(return_value=(row['baseUrl'], 'saved-private-key'))
         with patch('bridge.features.accounts.cli_access.model_ids', return_value=['codex-a']) as models:
             result = self.manager.change({'provider': 'codex', 'action': 'models', 'id': row['id']})
-        self.accounts.api_credentials.assert_called_once()
+        self.assertGreaterEqual(self.accounts.api_credentials.call_count, 1)
         models.assert_called_once_with(row['baseUrl'], 'saved-private-key')
         self.assertEqual(result['probe']['models'], ['codex-a'])
+        self.assertIsInstance(result['probe']['cache']['updatedAt'], float)
         self.assertNotIn('saved-private-key', json.dumps(result))
         self.assertFalse(self.manager.codex_switch)
+
+    def test_models_probe_persists_and_explicit_refresh_retains_last_success(self):
+        identifier = self.save_api()
+        request = {'provider': 'claude', 'action': 'models', 'id': identifier}
+        with patch('bridge.features.accounts.cli_access.model_ids', return_value=['first']) as upstream:
+            first = self.manager.change(request)['probe']
+            self.assertEqual(self.manager.change(request)['probe']['models'], ['first'])
+        upstream.assert_called_once()
+        restarted = CliAccess(self.bridge)
+        self.addCleanup(restarted.close)
+        with patch('bridge.features.accounts.cli_access.model_ids', side_effect=AssertionError('cached read queried upstream')):
+            cached = restarted.change(request)['probe']
+        self.assertEqual(cached['cache']['identity'], first['cache']['identity'])
+        self.assertEqual(cached['cache']['updatedAt'], first['cache']['updatedAt'])
+        with patch('bridge.features.accounts.cli_access.model_ids', side_effect=ValueError('upstream unavailable')):
+            failed = restarted.change({**request, 'refresh': True})['probe']
+        self.assertEqual(failed['models'], ['first'])
+        self.assertEqual(failed['cache']['updatedAt'], first['cache']['updatedAt'])
+        self.assertEqual(failed['cache']['state'], 'stale')
+        self.assertTrue(failed['modelError'])
+        with patch('bridge.features.accounts.cli_access.model_ids', return_value=['second']):
+            refreshed = restarted.change({**request, 'refresh': True})['probe']
+        self.assertEqual(refreshed['models'], ['second'])
+        self.assertGreater(refreshed['cache']['updatedAt'], first['cache']['updatedAt'])
+
+    def test_models_probe_rotates_identity_on_saved_key_and_refreshes_after_twelve_hours(self):
+        identifier = self.save_api()
+        request = {'provider': 'claude', 'action': 'models', 'id': identifier}
+        with patch('bridge.features.accounts.cli_access.model_ids', return_value=['old']):
+            first = self.manager.change(request)['probe']
+        db = sqlite3.connect(self.manager.model_store.path)
+        try:
+            db.execute('UPDATE catalogs SET updated_at=0')
+            db.commit()
+        finally:
+            db.close()
+        with patch.object(self.manager, '_start_model_refresh') as background, \
+             patch('bridge.features.accounts.cli_access.model_ids', side_effect=AssertionError('stale read queried upstream')):
+            stale = self.manager.change(request)['probe']
+        self.assertEqual(stale['cache']['state'], 'stale')
+        background.assert_called_once_with('claude', identifier, first['cache']['identity'])
+        self.save_api(id=identifier, apiKey='new-fixture-key')
+        with patch('bridge.features.accounts.cli_access.model_ids', return_value=['new']) as upstream:
+            changed = self.manager.change(request)['probe']
+        upstream.assert_called_once()
+        self.assertNotEqual(changed['cache']['identity'], first['cache']['identity'])
+        self.assertEqual(changed['models'], ['new'])
+
+    def test_connectivity_probe_rejects_credential_change_during_request(self):
+        identifier = self.save_api()
+        def changed(*args, **kwargs):
+            self.save_api(id=identifier, apiKey='replacement-key')
+            return ['old-key-model']
+        with patch('bridge.features.accounts.cli_access.model_ids', side_effect=changed):
+            with self.assertRaisesRegex(ValueError, '接入已变化'):
+                self.manager.change({'provider': 'claude', 'action': 'test', 'id': identifier})
+
+    def test_concurrent_cold_model_reads_share_one_upstream_request(self):
+        identifier = self.save_api()
+        request = {'provider': 'claude', 'action': 'models', 'id': identifier}
+        entered, release = threading.Event(), threading.Event()
+        responses, errors = [], []
+        def upstream(*args, **kwargs):
+            entered.set()
+            self.assertTrue(release.wait(2))
+            return ['shared']
+        def read():
+            try:
+                responses.append(self.manager.change(request)['probe'])
+            except Exception as exc:
+                errors.append(exc)
+        with patch('bridge.features.accounts.cli_access.model_ids', side_effect=upstream) as fetch:
+            first = threading.Thread(target=read)
+            second = threading.Thread(target=read)
+            first.start()
+            self.assertTrue(entered.wait(2))
+            second.start()
+            release.set()
+            first.join(3)
+            second.join(3)
+        self.assertFalse(errors)
+        self.assertEqual(fetch.call_count, 1)
+        self.assertEqual([value['models'] for value in responses], [['shared'], ['shared']])
+
+    def test_close_cancels_scheduled_model_refresh(self):
+        identifier = self.save_api()
+        with patch('bridge.features.accounts.cli_access.model_ids', return_value=['first']):
+            result = self.manager.change({'provider': 'claude', 'action': 'models', 'id': identifier})
+        identity = result['probe']['cache']['identity']
+        timer = self.manager.model_timers[identity]
+        self.manager.close()
+        self.assertTrue(timer.finished.is_set())
+        self.assertEqual(self.manager.model_timers, {})
 
     def test_probe_rejects_native_and_extra_request_fields(self):
         identifier = self.save_api()

@@ -1466,9 +1466,13 @@ class DesktopSessions:
         return self.account_stores[key]
 
     def _accounts_public(self, provider, value):
+        try:
+            identity = self._account_model_identity(provider)
+        except (OSError, ValueError, KeyError, TypeError, BridgeUnavailable):
+            identity = ''
         return {**value, 'provider': provider, 'gatewayRunning': self.gateway_running,
                 'canSwitch': provider not in self.account_operations,
-                'cliSync': self.cli_sync_status.get(provider)}
+                'cliSync': self.cli_sync_status.get(provider), 'modelCatalogIdentity': identity}
 
     def _launch_account_client(self, provider, descriptor):
         from bridge.clients.lifecycle import launch_client

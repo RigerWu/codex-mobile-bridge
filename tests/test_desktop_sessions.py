@@ -131,6 +131,7 @@ class Adapters(unittest.TestCase):
         manager._read = Mock(return_value={'models':[{'id':'first'}], 'groups':[]})
         first = manager.control({'action':'account', 'provider':'claude'})
         self.assertEqual(first['cache']['state'], 'fresh')
+        self.assertEqual(first['cache']['identity'], 'account-one')
         self.assertEqual(manager.call('claude', 'account')['models'], first['models'])
         manager._read.assert_called_once()
         manager._read.side_effect = ValueError('upstream unavailable')
@@ -143,6 +144,13 @@ class Adapters(unittest.TestCase):
         manager._read.side_effect = None
         manager._read.return_value = {'models':[{'id':'second'}], 'groups':[]}
         self.assertEqual(manager.call('claude', 'account')['models'][0]['id'], 'second')
+
+    def test_account_list_exposes_same_safe_catalog_identity(self):
+        manager = self.manager
+        manager._account_model_identity = Mock(return_value='account-one')
+        self.assertEqual(manager._accounts_public('claude', {'accounts': []})['modelCatalogIdentity'], 'account-one')
+        manager._account_model_identity.side_effect = BridgeUnavailable('账号未知')
+        self.assertEqual(manager._accounts_public('claude', {'accounts': []})['modelCatalogIdentity'], '')
 
     def test_account_change_during_model_read_cannot_publish_old_catalog(self):
         manager = self.manager

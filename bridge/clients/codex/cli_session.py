@@ -14,8 +14,9 @@ from pathlib import Path
 
 from bridge.clients.codex.app_server import (
     AppServerError, AppServerUnavailable, AppServerUnknownResult, AppServerUnsupported, CodexAppServer)
-from bridge.clients.codex.catalog import Catalog, CatalogError
+from bridge.clients.codex.catalog import Catalog, ModelStore
 from bridge.clients.codex.remote import RemoteStore, RemoteUnavailable
+from bridge.platforms.codex_daemon_env import read_daemon_environment, DaemonEnvironmentUnavailable
 from bridge.features.sessions.goal import GoalError, GoalUnavailable, GoalUnsupported, normalize_goal_result
 from bridge.features.sessions import linux_permissions
 from bridge.features.sessions.store import SessionStore, StoreUnavailable
@@ -562,6 +563,59 @@ class CliSessions:
             option['reason'] = native_reasons.get(option['reason'], option['reason'])
         return facts, options
 
+    @staticmethod
+    def _required_model_environment(effective, provider, account=None):
+        definition = (effective.get('model_providers') or {}).get(provider) or {}
+        names = {value for value in (definition.get('env_key'),
+                                     *(definition.get('env_http_headers') or {}).values())
+                 if isinstance(value, str) and value}
+        if provider == 'openai' and (
+                not effective.get('openai_base_url') and not definition.get('base_url')):
+            names.add('OPENAI_BASE_URL')
+        if (not definition.get('env_key') and not definition.get('experimental_bearer_token') and
+                (definition.get('requires_openai_auth') or
+                 provider == 'openai' and (account or {}).get('type') == 'apiKey' and
+                 not definition.get('http_headers') and not definition.get('env_http_headers'))):
+            # The native home auth file takes precedence over ambient keys.
+            names.add('OPENAI_API_KEY')
+        return names
+
+    def model_environment(self, config, provider, account=None):
+        """Resolve only variables used by this provider from its joined daemon."""
+        if self.alias is not None:
+            raise DaemonEnvironmentUnavailable('Remote daemon environment is unavailable')
+        runtime = getattr(self.client, 'server_info', None)
+        if isinstance(self.client, CodexAppServer) and (
+                not runtime or Path(runtime.get('codexHome', '')).resolve() != self.home.resolve()):
+            raise DaemonEnvironmentUnavailable('Codex daemon belongs to another home')
+        profile = (config.get('profiles') or {}).get(config.get('profile')) or {}
+        effective = {**config, **profile}
+        names = self._required_model_environment(effective, provider, account)
+        if 'OPENAI_API_KEY' in names:
+            try:
+                saved_key = json.loads((self.home / 'auth.json').read_text(encoding='utf-8')).get('OPENAI_API_KEY')
+            except (OSError, ValueError, AttributeError):
+                saved_key = None
+            if saved_key:
+                names.discard('OPENAI_API_KEY')
+        if not names:
+            return {}, None
+        try:
+            executable = _local_cli(self.home, self.configured_cli)
+        except AppServerUnavailable as exc:
+            raise DaemonEnvironmentUnavailable('Codex daemon executable is unavailable') from exc
+        return read_daemon_environment(self.home, executable, names)
+
+    def model_environment_identity(self, config, provider, account=None):
+        environment, process = self.model_environment(config, provider, account)
+        return ModelStore.key('native-cli-environment-v1', process, environment)
+
+    def _optional_model_metadata(self, method, params):
+        try:
+            return self.client.request(method, params, timeout=2, replay_safe=True)
+        except AppServerError:
+            return {'data': []}
+
     def get_kind(self, thread_id, kind, refresh=False, query='', offset=0, limit=200, ids=None):
         self._check_joined_identity(thread_id)
         if kind == 'models':
@@ -576,6 +630,7 @@ class CliSessions:
             custom = Catalog.custom_provider(effective, provider)
             configured_catalog = (bool(effective.get('model_catalog_json')) and
                                   provider == (effective.get('model_provider') or 'openai'))
+            account = {}
             if not custom and not configured_catalog:
                 account = self.client.request('account/read', {'refreshToken': False},
                                               replay_safe=True).get('account') or {}
@@ -588,14 +643,18 @@ class CliSessions:
                         'currentModel': state.get('latestModel'),
                         'currentEffort': state.get('latestReasoningEffort')}
                 reader = Catalog(self.home, self.configured_cli, allow_background_refresh=False)
-                def metadata_request(method, params):
-                    try:
-                        return self.client.request(method, params, timeout=2, replay_safe=True)
-                    except AppServerError as exc:
-                        raise CatalogError('CLI 模型元数据暂不可用') from exc
+                try:
+                    environment, _ = self.model_environment(config, provider, account)
+                except DaemonEnvironmentUnavailable:
+                    return {'kind': 'models', 'models': [], 'modelSource': 'api',
+                            'fastMode': {'allowed': False},
+                            'modelError': '无法核验当前 CLI 后台服务的启动环境，请重新连接后刷新模型列表',
+                            'currentModel': state.get('latestModel'),
+                            'currentEffort': state.get('latestReasoningEffort')}
                 catalog = reader.read_models(
                     lambda method, params: self.client.request(method, params, replay_safe=True),
-                    cwd, provider, metadata_request=metadata_request, environment={})
+                    cwd, provider, metadata_request=lambda method, params: self._optional_model_metadata(method, params),
+                    environment=environment)
                 models = [{'id': m['model'], 'name': m.get('displayName') or m['model'],
                            'description': m.get('description', ''),
                            'efforts': [e['reasoningEffort'] for e in m.get('supportedReasoningEfforts', [])],
@@ -606,11 +665,11 @@ class CliSessions:
                         'fastMode': {'allowed': False}, 'modelError': catalog.get('modelError'),
                         'currentModel': state.get('latestModel'),
                         'currentEffort': state.get('latestReasoningEffort')}
-            raw_models, cursor = [], None
+            native_models, cursor = [], None
             for _ in range(10):
                 raw = self.client.request('model/list', {'cursor': cursor, 'limit': 100,
-                                                         'includeHidden': False}, replay_safe=True)
-                raw_models.extend(raw.get('data', []))
+                                                          'includeHidden': False}, replay_safe=True)
+                native_models.extend(raw.get('data', []))
                 cursor = raw.get('nextCursor')
                 if not cursor:
                     break
@@ -620,7 +679,7 @@ class CliSessions:
                        'defaultEffort': m.get('defaultReasoningEffort'),
                        'isDefault': m.get('isDefault', False), 'fastTier': Catalog.fast_tier(m),
                        'defaultServiceTier': m.get('defaultServiceTier')}
-                      for m in raw_models if not m.get('hidden') and m.get('model')]
+                      for m in native_models if not m.get('hidden') and m.get('model')]
             try:
                 fast_mode = Catalog.fast_mode(lambda method, params: self.client.request(
                     method, params, replay_safe=True), cwd)

@@ -44,6 +44,12 @@ SSH_SOURCES = {
     'bridge/features/terminals/manager.py': ['CommandJob', 'serve_remote'],
     'bridge/platforms/posix/terminal.py': ['TerminalSession', 'remote_main'],
 }
+PLATFORM_SOURCES = {
+    'bridge/platforms/codex_daemon_env.py',
+    'bridge/platforms/linux/codex_daemon_env.py',
+    'bridge/platforms/macos/codex_daemon_env.py',
+    'bridge/platforms/windows/codex_daemon_env.py',
+}
 CONNECTORS = {'bridge/clients/claude/connector.js', 'bridge/clients/deepseek/host.mjs'}
 NATIVE_SOURCES = {'bridge/platforms/macos/claude-helper.swift',
                   'bridge/platforms/windows/claude-helper.cs',
@@ -120,7 +126,8 @@ class ResourceLayoutTests(unittest.TestCase):
     def test_gateway_manifest_contains_all_remote_sources_and_client_assets(self):
         manifest = json.loads((ROOT/'scripts/gateway-resources.json').read_text())
         self.assertEqual(len(manifest), len(set(manifest)))
-        self.assertEqual({name for name in manifest if name.endswith('.py')}, set(SSH_SOURCES))
+        self.assertEqual({name for name in manifest if name.endswith('.py')},
+                         set(SSH_SOURCES) | PLATFORM_SOURCES)
         self.assertTrue(CONNECTORS <= set(manifest))
         self.assertIn('bridge/clients/LICENSE.coding-mobile', manifest)
         for relative in manifest:

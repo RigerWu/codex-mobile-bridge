@@ -15,7 +15,7 @@ from contextlib import contextmanager, nullcontext
 from concurrent.futures import Future
 
 from bridge.clients.claude.adapter import Claude
-from bridge.clients.claude.cli_session import ResumePreflightBlocked, _cli_selection
+from bridge.clients.claude.cli_session import ResumePreflightBlocked
 from bridge.clients.deepseek.adapter import DeepSeek, BRIDGE_REVISION, LIFECYCLE_REVISIONS, UPDATE_REASON
 from bridge.clients.errors import BridgeUnavailable
 from bridge.clients.codex.catalog import ModelStore, MODEL_REFRESH_SECONDS
@@ -249,45 +249,16 @@ class DesktopSessions:
                      adapter.remote_cli.owned.get(sid))
         return bool(owned and getattr(owned, 'model_list_unsupported', False))
 
-    def _model_selection(self, provider, sid):
-        adapter = self.adapters[provider]
-        if provider == 'deepseek':
-            listing = self._read(provider, 'list')
-            row = next((row for row in listing.get('sessions', []) if row.get('id') == sid), None)
-            if row is None:
-                raise BridgeUnavailable('DeepSeek 会话已关闭，请重新打开')
-            return {'currentModel': row.get('model') or '', 'currentEffort': row.get('effort') or ''}
-        if provider == 'claude':
-            with adapter.cli.lock, adapter.remote_cli.lock:
-                local = adapter.cli.index.get(sid)
-                remote = adapter.remote_cli.index.get(sid)
-            if local:
-                with adapter.cli.lock:
-                    owned = adapter.cli.owned.get(local['nativeId'])
-                    public = adapter.cli._public(local)
-                return _cli_selection(owned, public) if owned else {'currentModel': public.get('model'), 'currentEffort': ''}
-            if remote:
-                with adapter.remote_cli.lock:
-                    owned = adapter.remote_cli.owned.get(sid)
-                    public = adapter.remote_cli._public(remote)
-                return _cli_selection(owned, public) if owned else {'currentModel': public.get('model'), 'currentEffort': ''}
-        return self._read(provider, 'catalog', sid, {'section': 'selection'})
-
     def _cached_model_result(self, provider, sid, identity, persisted, *, error=None, unavailable=False):
         if self._model_identity(provider, sid) != identity:
             raise BridgeUnavailable('客户端账号或配置已变化，请重试')
         result = _copy_read(persisted[1])
         live = self._model_live(provider, sid)
-        if live and not unavailable:
-            try:
-                result.update(self._model_selection(provider, sid))
-            except (OSError, ValueError, BridgeUnavailable):
-                live = False
         if not live or unavailable:
             result['capabilities'] = {**result.get('capabilities', {}), 'models': False, 'effort': False}
             result['notice'] = '请先继续这条会话' if provider == 'claude' else '桌面客户端未连接'
         result['cache'] = {'state': 'stale' if error or time.time()-persisted[0] >= MODEL_REFRESH_SECONDS else 'fresh',
-                           'updatedAt': persisted[0]}
+                           'updatedAt': persisted[0], 'identity': identity}
         if error:
             result['modelError'] = error
             if error.startswith('当前 Claude Code 版本不支持刷新模型目录'):
@@ -340,7 +311,7 @@ class DesktopSessions:
                 try:
                     updated_at = self.model_store.write(identity, stable)
                     self._schedule_model_refresh(provider, sid, identity, updated_at, replace=True)
-                    value['cache'] = {'state': 'fresh', 'updatedAt': updated_at}
+                    value['cache'] = {'state': 'fresh', 'updatedAt': updated_at, 'identity': identity}
                 except (OSError, sqlite3.DatabaseError):
                     pass
             if self._model_identity(provider, sid) != identity:
@@ -427,7 +398,7 @@ class DesktopSessions:
             raise BridgeUnavailable('客户端账号或配置已变化，请重试')
         value = _copy_read(persisted[1])
         value['cache'] = {'state': 'stale' if error or time.time()-persisted[0] >= MODEL_REFRESH_SECONDS else 'fresh',
-                          'updatedAt': persisted[0]}
+                          'updatedAt': persisted[0], 'identity': identity}
         if error:
             value['modelError'] = error
         if self._account_model_identity(provider) != identity:
@@ -474,7 +445,7 @@ class DesktopSessions:
                 updated_at = time.time()
             if self._account_model_identity(provider) != identity:
                 raise BridgeUnavailable('客户端账号或配置已变化，请重试')
-            return {**value, 'cache': {'state': 'fresh', 'updatedAt': updated_at}}
+            return {**value, 'cache': {'state': 'fresh', 'updatedAt': updated_at, 'identity': identity}}
 
     def _schedule_account_model_refresh(self, provider, identity, updated_at, replace=False):
         with self.model_lock:
@@ -576,7 +547,10 @@ class DesktopSessions:
         if action == 'catalog' and body.get('section') == 'models':
             return self._catalog_models(provider, sid, body)
         if action in READS and not (action == 'access' and 'mode' in body):
-            return self._read(provider, action, sid, body)
+            result = self._read(provider, action, sid, body)
+            if action == 'detail' and result.get('session'):
+                result['modelCatalogIdentity'] = self._model_identity(provider, sid)
+            return result
         rid = str(uuid.UUID(body.get('id', '')))
         if action == 'send' and (not isinstance(body.get('text'), str) or
                                  not body['text'].strip() and not (body.get('resolvedImages') or body.get('resolvedFiles')) or len(body['text']) > 100000):
@@ -1492,9 +1466,13 @@ class DesktopSessions:
         return self.account_stores[key]
 
     def _accounts_public(self, provider, value):
+        try:
+            identity = self._account_model_identity(provider)
+        except (OSError, ValueError, KeyError, TypeError, BridgeUnavailable):
+            identity = ''
         return {**value, 'provider': provider, 'gatewayRunning': self.gateway_running,
                 'canSwitch': provider not in self.account_operations,
-                'cliSync': self.cli_sync_status.get(provider)}
+                'cliSync': self.cli_sync_status.get(provider), 'modelCatalogIdentity': identity}
 
     def _launch_account_client(self, provider, descriptor):
         from bridge.clients.lifecycle import launch_client

@@ -57,22 +57,20 @@ class Adapters(unittest.TestCase):
 
     def test_read_only_operations_preserve_backend_and_session(self):
         adapter = Mock(); self.manager.adapters['deepseek'] = adapter
-        self.manager.call('deepseek', 'detail', 'session-one')
+        adapter.call.return_value = {'session': {'id': 'session-one'}}
+        with patch.object(self.manager, '_model_identity', return_value='fixture-identity'):
+            self.assertEqual(self.manager.call('deepseek', 'detail', 'session-one')['modelCatalogIdentity'],
+                             'fixture-identity')
         adapter.call.assert_called_once_with('detail', 'session-one', {})
         with self.assertRaises(ValueError): self.manager.call('deepseek', 'eval', 'session-one')
         with self.assertRaises(ValueError): self.manager.call('deepseek', 'send', 'session-one', {'id':str(uuid.uuid4()),'text':''})
 
-    def test_cached_legacy_claude_selection_reads_applied_model_without_listing(self):
+    def test_legacy_claude_catalog_does_not_schedule_unsupported_refresh(self):
         adapter = self.manager.adapters['claude']
         row = {'nativeId': 'native', 'origin': 'fixture', 'model': 'sonnet'}
         adapter.cli.index['session'] = row
         owner = Mock(model='haiku', catalog={'models': [{'value': 'sonnet'}, {'value': 'haiku'}]})
-        owner.control.return_value = {'applied': {'model': 'claude-haiku-4-5-20251001', 'effort': 'max'}}
         adapter.cli.owned['native'] = owner
-        with patch.object(adapter.cli, '_public', return_value={'model': 'haiku'}):
-            self.assertEqual(self.manager._model_selection('claude', 'session'),
-                             {'currentModel': 'claude-haiku-4-5-20251001', 'currentEffort': 'max'})
-        owner.control.assert_called_once_with({'subtype': 'get_settings'})
         owner.model_list_unsupported = True
         self.assertTrue(self.manager._model_refresh_unsupported('claude', 'session'))
         self.manager._schedule_model_refresh('claude', 'session', 'legacy', 0)
@@ -83,8 +81,6 @@ class Adapters(unittest.TestCase):
             'models': [{'id': 'sonnet'}], 'capabilities': {'models': True, 'effort': False}})
         with patch.object(self.manager, '_model_identity', return_value='legacy'), \
              patch.object(self.manager, '_model_live', return_value=True), \
-             patch.object(self.manager, '_model_selection', return_value={
-                 'currentModel': 'sonnet', 'currentEffort': ''}), \
              patch.object(self.manager, '_read', side_effect=BridgeUnavailable('当前 Claude Code 版本不支持刷新模型目录')):
             result = self.manager._catalog_models('claude', 'session', {'section': 'models', 'refresh': True})
         self.assertEqual(result['models'], [{'id': 'sonnet'}])
@@ -135,6 +131,7 @@ class Adapters(unittest.TestCase):
         manager._read = Mock(return_value={'models':[{'id':'first'}], 'groups':[]})
         first = manager.control({'action':'account', 'provider':'claude'})
         self.assertEqual(first['cache']['state'], 'fresh')
+        self.assertEqual(first['cache']['identity'], 'account-one')
         self.assertEqual(manager.call('claude', 'account')['models'], first['models'])
         manager._read.assert_called_once()
         manager._read.side_effect = ValueError('upstream unavailable')
@@ -148,6 +145,13 @@ class Adapters(unittest.TestCase):
         manager._read.return_value = {'models':[{'id':'second'}], 'groups':[]}
         self.assertEqual(manager.call('claude', 'account')['models'][0]['id'], 'second')
 
+    def test_account_list_exposes_same_safe_catalog_identity(self):
+        manager = self.manager
+        manager._account_model_identity = Mock(return_value='account-one')
+        self.assertEqual(manager._accounts_public('claude', {'accounts': []})['modelCatalogIdentity'], 'account-one')
+        manager._account_model_identity.side_effect = BridgeUnavailable('账号未知')
+        self.assertEqual(manager._accounts_public('claude', {'accounts': []})['modelCatalogIdentity'], '')
+
     def test_account_change_during_model_read_cannot_publish_old_catalog(self):
         manager = self.manager
         manager._account_model_identity = Mock(return_value='old-account')
@@ -159,20 +163,19 @@ class Adapters(unittest.TestCase):
             manager.call('deepseek', 'account')
         self.assertIsNone(manager.model_store.read('old-account'))
 
-    def test_cached_picker_overlays_live_selection_without_listing_models(self):
+    def test_cached_picker_never_waits_for_native_selection(self):
         manager = self.manager
         manager._model_identity = Mock(return_value='shared-access')
         manager._model_live = Mock(return_value=True)
-        manager._model_selection = Mock(return_value={'currentModel':'second', 'currentEffort':'high'})
         manager._read = Mock(return_value={'models':[{'id':'first'}, {'id':'second'}],
                                           'currentModel':'first', 'capabilities':{'models':True}})
         manager.call('claude', 'catalog', 'first-session', {'section':'models'})
         cached = manager.call('claude', 'catalog', 'second-session', {'section':'models'})
-        self.assertEqual(cached['currentModel'], 'second')
-        self.assertEqual(cached['currentEffort'], 'high')
+        self.assertNotIn('currentModel', cached)
+        self.assertEqual(cached['cache']['identity'], 'shared-access')
         manager._read.assert_called_once()
 
-    def test_cached_deepseek_catalog_reads_selection_from_existing_list(self):
+    def test_cached_deepseek_catalog_does_not_read_session_list(self):
         manager = self.manager
         manager._model_identity = Mock(return_value='shared-access')
         manager._model_live = Mock(return_value=True)
@@ -189,8 +192,8 @@ class Adapters(unittest.TestCase):
         manager.adapters['deepseek'].call = Mock(side_effect=native)
         manager.call('deepseek', 'catalog', 'session-one', {'section': 'models'})
         cached = manager.call('deepseek', 'catalog', 'session-one', {'section': 'models'})
-        self.assertEqual((cached['currentModel'], cached['currentEffort']), ('provider/second', 'high'))
-        self.assertEqual(calls, ['catalog', 'list'])
+        self.assertNotIn('currentModel', cached)
+        self.assertEqual(calls, ['catalog'])
 
     def test_session_account_change_after_catalog_write_rejects_old_response(self):
         manager = self.manager

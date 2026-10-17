@@ -394,6 +394,13 @@ class Accounts:
             self.update_discovery()
             return self.desktop_status()
 
+    def api_model_identity(self, row):
+        with self.lock:
+            if self.row(row['id']).get('baseUrl') != row['baseUrl']:
+                raise ValueError('当前接入已变化，请重新读取模型列表')
+            key = read_json(self.directory(row['id'])/'api.json', {})['key']
+            return ModelStore.key('saved-api', str(self.home), row['id'], row['baseUrl'], key)
+
     def api_models(self, row, refresh=False, with_timestamp=False):
         with self.lock:
             self.check_ready()
@@ -485,6 +492,15 @@ class Accounts:
             self.api_model_timers[identity] = timer
             timer.start()
 
+    def current_model_identity(self):
+        with self.lock:
+            if not self.active_matches():
+                return None
+            row = dict(self.row(self.index['activeId']))
+            if row['kind'] == 'api':
+                return self.api_model_identity(row)
+        return self.bridge.catalog_reader.model_identity(str(self.home), 'openai')
+
     def current_models(self, refresh=False):
         with self.lock:
             self.check_ready()
@@ -497,7 +513,12 @@ class Accounts:
         else:
             result = {'models':[], 'modelSource':'api', 'fastMode':{'allowed':False}}
             try:
-                result['models'] = self.api_models(row, refresh)
+                result['models'], updated_at, error = self.api_models(row, refresh, with_timestamp=True)
+                identity = self.api_model_identity(row)
+                result['cache'] = {'state': 'stale' if error else 'fresh', 'updatedAt': updated_at,
+                                   'identity': identity}
+                if error:
+                    result['modelError'] = error
             except ValueError as error:
                 result['modelError'] = str(error)
         with self.lock:

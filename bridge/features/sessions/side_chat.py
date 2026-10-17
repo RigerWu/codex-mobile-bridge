@@ -587,7 +587,8 @@ class SideChats:
             return chat.cancel_queued(body.get('submissionId'))
         if action in ('catalog', 'settings'):
             view = chat.view()
-            catalog = catalog_reader.get_kind('models', view['cwd'], provider=view['provider'])
+            catalog = catalog_reader.get_kind('models', view['cwd'], provider=view['provider'],
+                **({'refresh': True} if action == 'catalog' and body.get('refresh') is True else {}))
             if action == 'catalog':
                 return {**catalog, 'currentModel': view['model'], 'currentEffort': view['effort']}
             return chat.settings(body.get('model'), body.get('effort'), catalog)

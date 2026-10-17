@@ -1147,7 +1147,11 @@ class Bridge:
                 if policy['type'] not in modes:
                     raise ValueError('当前权限配置暂不支持临时侧边聊天')
                 settings['sandbox'] = modes[policy['type']]
-        return self.side_chats.operate(thread_id, action, body, snapshot, settings, self.catalog_reader)
+        result = self.side_chats.operate(thread_id, action, body, snapshot, settings, self.catalog_reader)
+        if (self.host == 'local' and isinstance(result, dict) and result.get('id') and
+                result.get('cwd') and result.get('provider')):
+            result['modelCatalogIdentity'] = self.catalog_reader.model_identity(result['cwd'], result['provider'])
+        return result
 
     def side_attachment(self, thread_id, child, operation, *args):
         self.store.get(thread_id)
@@ -1586,6 +1590,15 @@ class Bridge:
                 view["permissionMode"] = linux_permissions.current_mode(session.state)
         view["host"] = self.host
         view["hostLabel"] = "此电脑" if self.host == "local" else self.hosts.hosts().get(self.host, {}).get("displayName", self.host)
+        if self.host == 'local' and session.origin != 'cli':
+            cwd = view.get('cwd')
+            provider = view.get('provider')
+            if cwd:
+                try:
+                    selected = self.accounts.current_model_identity() if self.host == 'local' and self.accounts else None
+                    view['modelCatalogIdentity'] = selected or self.catalog_reader.model_identity(cwd, provider)
+                except (OSError, ValueError, KeyError):
+                    pass
         view["goalTransport"] = 'cli' if session.connected and session.runtime == 'cli' else self.goal_transport
         view["goalRuntimeAvailable"] = goal_available
         view["goalActivationIds"] = sorted(self._goal_activation_ids(thread_id))
@@ -1975,7 +1988,8 @@ class Bridge:
             persisted = None
         if persisted and not refresh:
             self._schedule_native_model_refresh(identity, thread_id, cwd, provider, persisted[0])
-            return stable(persisted[1])
+            return {**stable(persisted[1]), 'cache': {'state': 'fresh' if time.time()-persisted[0] < MODEL_REFRESH_SECONDS else 'stale',
+                                                    'updatedAt': persisted[0], 'identity': identity}}
         with self.native_model_lock:
             lock = self.native_model_reads.setdefault(identity, threading.Lock())
         with lock:
@@ -1985,13 +1999,14 @@ class Bridge:
                 except (OSError, sqlite3.DatabaseError, ValueError):
                     persisted = None
                 if persisted:
-                    return stable(persisted[1])
+                    return {**stable(persisted[1]), 'cache': {'state': 'fresh', 'updatedAt': persisted[0], 'identity': identity}}
             try:
                 value = self.cli_sessions.get_kind(thread_id, 'models', refresh=refresh,
                                                    query='', offset=0, limit=200, ids=None)
             except (OSError, ValueError, AppServerError):
                 if persisted:
-                    return {**stable(persisted[1]), 'modelError': '模型列表刷新失败，已保留上次结果'}
+                    return {**stable(persisted[1]), 'modelError': '模型列表刷新失败，已保留上次结果',
+                            'cache': {'state': 'stale', 'updatedAt': persisted[0], 'identity': identity}}
                 raise
             if self._native_model_identity(cwd, provider) != identity:
                 raise ValueError('账号身份已变化，请重新读取模型列表')
@@ -2000,12 +2015,13 @@ class Bridge:
                     updated_at = self.native_model_store.write(identity, stable(value))
                     self._schedule_native_model_refresh(identity, thread_id, cwd, provider, updated_at, replace=True)
                 except (OSError, sqlite3.DatabaseError):
-                    pass
+                    updated_at = time.time()
             elif persisted:
-                return {**stable(persisted[1]), 'modelError': value['modelError']}
+                return {**stable(persisted[1]), 'modelError': value['modelError'],
+                        'cache': {'state': 'stale', 'updatedAt': persisted[0], 'identity': identity}}
             if self._native_model_identity(cwd, provider) != identity:
                 raise ValueError('账号身份已变化，请重新读取模型列表')
-            return value
+            return {**value, 'cache': {'state': 'fresh', 'updatedAt': updated_at, 'identity': identity}} if not value.get('modelError') else value
 
     def catalog(self, thread_id, refresh=False, kind=None, query='', offset=0, limit=200, ids=None):
         session = self.session(thread_id, attach=False, background=True)
@@ -2641,6 +2657,8 @@ class Bridge:
     def close(self):
         self.terminals.close()
         self.side_chats.close()
+        if self.cli_access:
+            self.cli_access.close()
         self.closed.set()
         if hasattr(self.catalog_reader, 'stop_model_refresh'):
             self.catalog_reader.stop_model_refresh()

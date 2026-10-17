@@ -6,6 +6,7 @@ from pathlib import Path
 from unittest.mock import Mock, patch
 
 from bridge.clients.manager import DesktopSessions
+from bridge.clients.errors import BridgeUnavailable
 from bridge.clients.deepseek.adapter import DeepSeek, MARKER
 import test_bridge
 
@@ -60,6 +61,36 @@ class Adapters(unittest.TestCase):
         adapter.call.assert_called_once_with('detail', 'session-one', {})
         with self.assertRaises(ValueError): self.manager.call('deepseek', 'eval', 'session-one')
         with self.assertRaises(ValueError): self.manager.call('deepseek', 'send', 'session-one', {'id':str(uuid.uuid4()),'text':''})
+
+    def test_cached_legacy_claude_selection_reads_applied_model_without_listing(self):
+        adapter = self.manager.adapters['claude']
+        row = {'nativeId': 'native', 'origin': 'fixture', 'model': 'sonnet'}
+        adapter.cli.index['session'] = row
+        owner = Mock(model='haiku', catalog={'models': [{'value': 'sonnet'}, {'value': 'haiku'}]})
+        owner.control.return_value = {'applied': {'model': 'claude-haiku-4-5-20251001', 'effort': 'max'}}
+        adapter.cli.owned['native'] = owner
+        with patch.object(adapter.cli, '_public', return_value={'model': 'haiku'}):
+            self.assertEqual(self.manager._model_selection('claude', 'session'),
+                             {'currentModel': 'claude-haiku-4-5-20251001', 'currentEffort': 'max'})
+        owner.control.assert_called_once_with({'subtype': 'get_settings'})
+        owner.model_list_unsupported = True
+        self.assertTrue(self.manager._model_refresh_unsupported('claude', 'session'))
+        self.manager._schedule_model_refresh('claude', 'session', 'legacy', 0)
+        self.assertNotIn('legacy', self.manager.model_timers)
+
+    def test_unsupported_legacy_refresh_keeps_original_cache_timestamp(self):
+        updated_at = self.manager.model_store.write('legacy', {
+            'models': [{'id': 'sonnet'}], 'capabilities': {'models': True, 'effort': False}})
+        with patch.object(self.manager, '_model_identity', return_value='legacy'), \
+             patch.object(self.manager, '_model_live', return_value=True), \
+             patch.object(self.manager, '_model_selection', return_value={
+                 'currentModel': 'sonnet', 'currentEffort': ''}), \
+             patch.object(self.manager, '_read', side_effect=BridgeUnavailable('当前 Claude Code 版本不支持刷新模型目录')):
+            result = self.manager._catalog_models('claude', 'session', {'section': 'models', 'refresh': True})
+        self.assertEqual(result['models'], [{'id': 'sonnet'}])
+        self.assertEqual(result['cache']['updatedAt'], updated_at)
+        self.assertEqual(result['cache']['state'], 'stale')
+        self.assertEqual(self.manager.model_store.read('legacy')[0], updated_at)
 
     def test_model_picker_uses_persisted_catalog_and_refresh_bypasses_it(self):
         adapter = self.manager.adapters['deepseek']

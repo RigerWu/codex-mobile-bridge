@@ -17,7 +17,7 @@ from unittest.mock import AsyncMock, Mock, patch
 
 from bridge.clients.claude import model
 from bridge.clients.claude.adapter import Claude
-from bridge.clients.claude.cli_session import ClaudeCli, ResumePreflightBlocked, _Owned, _skill_catalog, _model_catalog, _cli_catalog, _set_cli_settings, _auth_ready, _events, _saved, _permission_prompt_args
+from bridge.clients.claude.cli_session import ClaudeCli, ClaudeControlRejected, ResumePreflightBlocked, _Owned, _skill_catalog, _model_catalog, _cli_catalog, _cli_selection, _set_cli_settings, _auth_ready, _events, _saved, _permission_prompt_args
 from bridge.clients.errors import BridgeUnavailable
 from bridge.clients.manager import DesktopSessions
 from bridge.clients.uploads import DesktopUploads
@@ -770,6 +770,25 @@ class ClaudeCliModelContract(unittest.TestCase):
         self.owner = SimpleNamespace(catalog={'models': list(self.native_models)}, model=None,
                                      control=control)
 
+    def test_control_distinguishes_native_rejection_from_missing_ack(self):
+        owner = object.__new__(_Owned)
+        owner.condition = threading.Condition()
+        owner.process = Mock()
+        owner.process.poll.return_value = None
+        owner.write = Mock()
+        owner.responses = {'fixed': {'subtype': 'error', 'request_id': 'fixed',
+                           'error': 'Unsupported control request subtype: list_models'}}
+        with patch('bridge.clients.claude.cli_session.uuid.uuid4', return_value='fixed'):
+            with self.assertRaises(ClaudeControlRejected) as rejected:
+                owner.control({'subtype': 'list_models'})
+        self.assertEqual(rejected.exception.reason, 'Unsupported control request subtype: list_models')
+        owner.responses = {}
+        owner.process.poll.return_value = 1
+        with patch('bridge.clients.claude.cli_session.uuid.uuid4', return_value='fixed'):
+            with self.assertRaises(BridgeUnavailable) as missing:
+                owner.control({'subtype': 'set_model', 'model': 'sonnet'})
+        self.assertNotIsInstance(missing.exception, ClaudeControlRejected)
+
     def test_concrete_ids_and_supported_efforts_from_native_rows(self):
         rows = _model_catalog(self.owner.catalog)
         self.assertEqual([row['id'] for row in rows],
@@ -814,3 +833,109 @@ class ClaudeCliModelContract(unittest.TestCase):
         with self.assertRaisesRegex(BridgeUnavailable, '未确认'):
             _set_cli_settings(self.owner, {'model': 'claude-sonnet-5-5'})
         self.assertIsNone(self.owner.model)
+
+    def test_legacy_initialize_models_keep_confirmed_set_model_without_list_models(self):
+        calls = []
+        applied = {'model': 'claude-sonnet-4-6', 'effort': 'max'}
+        def control(request):
+            calls.append(request)
+            if request['subtype'] == 'get_settings':
+                return {'applied': dict(applied), 'sources': []}
+            if request['subtype'] == 'set_model':
+                applied['model'] = 'claude-haiku-4-5-20251001'
+                return {}
+            if request['subtype'] == 'list_models':
+                raise ClaudeControlRejected('Unsupported control request subtype: list_models')
+            if request['subtype'] == 'apply_flag_settings':
+                applied['effort'] = request['settings']['effortLevel']
+                return {}
+            return {}
+        owner = SimpleNamespace(catalog={'models': [
+            {'value': 'sonnet', 'displayName': 'Sonnet', 'supportsEffort': True,
+             'supportedEffortLevels': ['low', 'medium', 'high', 'max']},
+            {'value': 'haiku', 'displayName': 'Haiku'}]}, model=None, control=control)
+        public = {'model': 'sonnet'}
+        result = _cli_catalog(owner, public)
+        self.assertEqual([row['id'] for row in result['models']], ['sonnet', 'haiku'])
+        self.assertEqual(result['currentModel'], 'claude-sonnet-4-6')
+        self.assertEqual(result['currentEffort'], 'max')
+        self.assertEqual(result['models'][0]['efforts'], ['auto', 'low', 'medium', 'high', 'max'])
+        self.assertEqual(result['capabilities'], {'models': True, 'effort': True, 'skills': True})
+        self.assertEqual(calls, [{'subtype': 'get_settings'}])
+        with self.assertRaisesRegex(BridgeUnavailable, '不支持刷新模型目录'):
+            _cli_catalog(owner, public, refresh=True)
+        self.assertEqual(calls[-1], {'subtype': 'list_models'})
+        count = len(calls)
+        with self.assertRaisesRegex(BridgeUnavailable, '不支持刷新模型目录'):
+            _cli_catalog(owner, public, refresh=True)
+        self.assertEqual(len(calls), count)
+        with self.assertRaisesRegex(ValueError, '不支持此思考强度'):
+            _set_cli_settings(owner, {'model': 'haiku', 'effort': 'high'})
+        _set_cli_settings(owner, {'model': 'haiku'})
+        self.assertIn({'subtype': 'set_model', 'model': 'haiku'}, calls)
+        self.assertEqual(_cli_selection(owner, public),
+                         {'currentModel': 'claude-haiku-4-5-20251001', 'currentEffort': 'max'})
+
+    def test_unconfirmed_model_refresh_does_not_mark_protocol_unsupported(self):
+        def control(request):
+            if request['subtype'] == 'list_models':
+                raise BridgeUnavailable('Claude Code 控制请求未确认')
+            return {'applied': {'model': 'fixture-model'}}
+        owner = SimpleNamespace(catalog={'models': [{'value': 'fixture-model'}]}, model=None,
+                                control=control)
+        with self.assertRaisesRegex(BridgeUnavailable, '未确认'):
+            _cli_catalog(owner, {'model': 'fixture-model'}, refresh=True)
+        self.assertFalse(getattr(owner, 'model_list_unsupported', False))
+
+    def test_legacy_set_model_without_success_ack_does_not_update_selection(self):
+        def control(request):
+            if request['subtype'] == 'get_settings':
+                return {'applied': {'model': 'claude-sonnet-4-6'}}
+            raise BridgeUnavailable('Claude Code 控制请求未确认')
+        owner = SimpleNamespace(catalog={'models': [{'value': 'haiku'}]}, model=None,
+                                control=Mock(side_effect=control))
+        with self.assertRaisesRegex(BridgeUnavailable, '未确认'):
+            _set_cli_settings(owner, {'model': 'haiku'})
+        self.assertIsNone(owner.model)
+        self.assertEqual([call.args[0]['subtype'] for call in owner.control.call_args_list],
+                         ['get_settings', 'set_model'])
+
+    def test_legacy_effort_flag_ack_does_not_claim_ineffective_level(self):
+        state = {'model': 'claude-sonnet-4-6', 'effort': 'max', 'flag': None}
+        def control(request):
+            subtype = request['subtype']
+            if subtype == 'get_settings':
+                return {'applied': {'model': state['model'], 'effort': state['effort']},
+                        'sources': [{'source': 'flagSettings', 'settings': {'effortLevel': state['flag']}}]}
+            if subtype == 'set_model':
+                return {}
+            if subtype == 'apply_flag_settings':
+                state['flag'] = request['settings']['effortLevel']
+                return {}
+            raise AssertionError(request)
+        owner = SimpleNamespace(catalog={'models': [{'value': 'sonnet', 'supportsEffort': True,
+                  'supportedEffortLevels': ['low', 'medium', 'high', 'max']}]}, model=None, control=control)
+        with self.assertRaisesRegex(BridgeUnavailable, '未确认'):
+            _set_cli_settings(owner, {'model': 'sonnet', 'effort': 'high'})
+        self.assertEqual(state['flag'], 'high')
+        self.assertEqual(state['effort'], 'max')
+        self.assertIsNone(owner.model)
+
+    def test_legacy_alias_and_effort_are_confirmed_by_ack_and_applied_level(self):
+        state = {'model': 'old-model', 'effort': 'medium'}
+        def control(request):
+            if request['subtype'] == 'get_settings':
+                return {'applied': dict(state), 'sources': []}
+            if request['subtype'] == 'set_model':
+                state['model'] = 'claude-sonnet-4-6'
+                return {}
+            if request['subtype'] == 'apply_flag_settings':
+                state['effort'] = request['settings']['effortLevel']
+                return {}
+            raise AssertionError(request)
+        owner = SimpleNamespace(catalog={'models': [{'value': 'sonnet', 'supportsEffort': True,
+                  'supportedEffortLevels': ['low', 'medium', 'high']}]}, model=None, control=control)
+        _set_cli_settings(owner, {'model': 'sonnet', 'effort': 'high'})
+        self.assertEqual(owner.model, 'claude-sonnet-4-6')
+        self.assertEqual(_cli_selection(owner, {'model': 'old-model'}),
+                         {'currentModel': 'claude-sonnet-4-6', 'currentEffort': 'high'})

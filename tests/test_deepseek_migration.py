@@ -103,6 +103,10 @@ class DeepSeekMigrationTests(unittest.TestCase):
         current = Path(__file__).resolve().parents[1]/'bridge/clients/deepseek/host.mjs'
         lf = current.read_bytes().replace(b'\r\n', b'\n')
         self.assertIn(b'\n', lf)
+        self.assertEqual(hashlib.sha256(lf).hexdigest(),
+                         '7ff9ce99e26c3b1b9e54ade4db4a634976096f3a429b6f4d81e7401d3e067f8f')
+        self.assertEqual(hashlib.sha256(lf.replace(b'\n', b'\r\n')).hexdigest(),
+                         '2bd8e0711db16fe5c2d2a39f473f8e0f747e5f9067dae64572129c56ff0e7136')
         for content in (lf, lf.replace(b'\n', b'\r\n')):
             with self.subTest(line_ending='CRLF' if b'\r\n' in content else 'LF'):
                 source.write_bytes(content)

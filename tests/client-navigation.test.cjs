@@ -331,6 +331,18 @@ test('swipe settles before choosing and canceled animations cannot switch later'
   await done;assert.deepEqual(calls,cancel?[]:['deepseek']);assert.equal(removed,true);assert.equal(nav.swipePreview,null);
  }
 });
+test('a second flick adopts the first settling choice and reaches the following client',async()=>{
+ const context=vm.createContext({window:{matchMedia:()=>({matches:false}),getSelection:()=>null},document:{querySelector:()=>null},localStorage:{getItem:()=>null},innerWidth:390,Date,BridgeI18n:{t:s=>s}});
+ vm.runInContext(fs.readFileSync('web/features/clients/client-navigation.js','utf8'),context);
+ const C=vm.runInContext('ClientNavigation',context),nav=Object.create(C.prototype),calls=[],waits=[],list={getBoundingClientRect:()=>({width:390})};
+ const node=()=>({style:{transform:'translate3d(-100px,0,0)'},animate(){let resolve,reject;const finished=new Promise((yes,no)=>{resolve=yes;reject=no;});const animation={finished,cancel(){reject(Object.assign(Error('canceled'),{name:'AbortError'}));}};waits.push({resolve});return animation;}});
+ Object.assign(nav,{provider:'codex',clients:['codex','claude','deepseek'].map(id=>({id,enabled:true})),sidebar:list,view:{list},dragListSwipe(gesture,dx){if(this.swipePreview)return;const enabled=this.clients,index=enabled.findIndex(c=>c.id===gesture.provider),next=enabled[index+(dx<0?1:-1)];this.swipePreview={provider:gesture.provider,next:next?.id,direction:1,width:390,current:node(),incoming:node(),root:{remove(){}}};},choose(id){this.cancelListSwipe();this.provider=id;calls.push(id);return Promise.resolve();},notify:message=>{throw Error(message);}});
+ const touch=(phase,x)=>{const point={identifier:1,clientX:x,clientY:100};nav.listTouch(phase,{target:{closest:()=>null},touches:phase==='end'?[]:[point],changedTouches:[point],cancelable:true,preventDefault(){}},list);};
+ touch('start',200);touch('move',110);touch('end',90);assert.deepEqual(calls,[]);
+ touch('start',200);assert.deepEqual(calls,['claude']);assert.equal(nav.listGesture.provider,'claude');
+ touch('move',110);touch('end',90);waits.slice(2).forEach(wait=>wait.resolve());await new Promise(setImmediate);
+ assert.deepEqual(calls,['claude','deepseek']);assert.equal(nav.provider,'deepseek');
+});
 
 test('reduced-motion swipes commit without animation and recheck enabled state',async()=>{
  const context=vm.createContext({window:{matchMedia:()=>({matches:true})}});vm.runInContext(fs.readFileSync('web/features/clients/client-navigation.js','utf8'),context);

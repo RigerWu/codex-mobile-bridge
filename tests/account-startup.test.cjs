@@ -347,6 +347,15 @@ test('reopening a failed model query reads the recovered backend result',async()
  assert.ok(ui.nodes.get('model-select').children.some(row=>row.value==='ready'));
  assert.doesNotMatch(ui.nodes.get('model-error').textContent,/Temporary failure/);
 });
+test('same chat reopens model rows before a delayed catalog read',async()=>{
+ const catalog={models:[{id:'ready',name:'Ready',efforts:['low']}],modelSource:'codex',cache:{identity:'a'.repeat(64),updatedAt:1000}},ui=await fixture(r=>r(official),'chatgpt',catalog);
+ ui.run("currentId='11111111-1111-4111-8111-111111111111';state={connected:true,provider:'chatgpt',model:'ready',modelCatalogIdentity:'"+'a'.repeat(64)+"'}");
+ await ui.nodes.get('model-button').onclick();assert.match(ui.nodes.get('model-updated').textContent,/更新于：/);
+ ui.run("var releaseCatalog;const originalApi=api;api=(url,body)=>url.includes('catalog?kind=models')?new Promise(resolve=>releaseCatalog=resolve):originalApi(url,body)");
+ const pending=ui.nodes.get('model-button').onclick();assert.ok(ui.nodes.get('model-options').children.some(row=>row.children[0].value==='ready'));
+ ui.run("releaseCatalog({models:[{id:'ready',name:'Ready',efforts:['low']}],modelSource:'codex',cache:{identity:'"+'a'.repeat(64)+"',updatedAt:1000}})");await pending;
+ assert.match(ui.nodes.get('model-updated').textContent,/更新于：/);
+});
 
 test('legacy model fields are normalized and a failed directory ends the loading state',async()=>{
  const ui=await fixture(r=>r(official),'api',{modelSource:'api',models:[{model:'legacy',displayName:'Legacy name'},'string-model']});
@@ -355,8 +364,8 @@ test('legacy model fields are normalized and a failed directory ends the loading
  assert.ok(ui.nodes.get('model-select').children.some(row=>row.value==='legacy'&&row.textContent==='Legacy name'));
  assert.ok(ui.nodes.get('model-select').children.some(row=>row.value==='string-model'));
  ui.run("api=async()=>{throw Error('Offline')}");await ui.nodes.get('model-refresh').onclick();
- assert.doesNotMatch(ui.nodes.get('model-options').textContent,/读取模型列表/);
- assert.match(ui.nodes.get('model-options').textContent,/读取失败/);
+ assert.ok(ui.nodes.get('model-options').children.some(row=>row.children[0].value==='legacy'),'failed refresh keeps visible rows');
+ assert.match(ui.nodes.get('model-error').textContent,/Offline/);
  assert.equal(ui.nodes.get('model-save').disabled,true);assert.equal(ui.nodes.get('model-refresh').disabled,false);
 });
 

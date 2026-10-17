@@ -37,3 +37,9 @@ test('scoped model probe never switches accounts and ignores a late response aft
   instance.clear();pending.resolve({probe:{provider:'claude',id:'saved-api',status:'reachable',scope:'models',models:['model-a']}});
   await checking;assert.equal(instance.value,null);assert.equal(instance.apiResults.size,0);
 });
+test('CLI model probe keeps successful rows and update time during a failed refresh',async()=>{
+  const {instance}=panel(),row={id:'saved-api',modelCatalogIdentity:'a'.repeat(64)},success={probe:{provider:'claude',id:row.id,status:'reachable',scope:'models',models:['model-a'],cache:{identity:'a'.repeat(64),updatedAt:1000}}};
+  instance.request=async()=>success;await instance.probe(row,'models');assert.equal(instance.apiResults.get(row.id).cache.updatedAt,1000);
+  const pending=deferred();let call;instance.request=value=>{call=value;return pending.promise;};const refreshing=instance.probe(row,'models',true);assert.equal(call.refresh,true);assert.deepEqual(instance.apiResults.get(row.id).models,['model-a']);assert.equal(instance.apiResults.get(row.id).cache.updatedAt,1000);
+  pending.reject(Error('Offline'));await refreshing;assert.deepEqual(instance.apiResults.get(row.id).models,['model-a']);assert.equal(instance.apiResults.get(row.id).cache.updatedAt,1000);assert.equal(instance.apiResults.get(row.id).error,'Offline');
+});

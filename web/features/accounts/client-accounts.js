@@ -80,7 +80,7 @@ class DesktopClientAccountsPanel {
   }
   async perform(value){
     if(this.disposed||this.busy||this.loading)return false;clearTimeout(this.timer);this.busy=true;this.queryingId=this.provider==='claude'&&value.action==='details'?value.id:null;this.error='';this.render();const generation=this.generation;
-    try{const result=await this.request(value);if(generation!==this.generation)return false;this.accept(result,!['import-current','save-api','rename','remove'].includes(value.action));return true;}
+    try{const result=await this.request(value);if(generation!==this.generation)return false;if(['switch','import-current','save-api','remove'].includes(value.action)){this.modelsRevision++;this.models=null;this.modelsOpen=false;}this.accept(result,!['import-current','save-api','rename','remove'].includes(value.action));return true;}
     catch(error){if(generation===this.generation)this.error=error.message;return false;}
     finally{if(generation===this.generation){this.busy=false;this.queryingId=null;this.checkedAt=Date.now();this.render();if(this.value)this.onUpdate(this.value);this.schedule();}}
   }
@@ -146,8 +146,8 @@ class DesktopClientAccountsPanel {
   }
   renderModels(box){
     const controls=this.node('div',undefined,'accounts-model-controls'),refresh=this.button('刷新模型',()=>this.loadModels(true));refresh.disabled=this.modelsLoading;controls.append(refresh);
-    const updated=this.models?.cache?.updatedAt;if(Number.isFinite(updated))controls.append(this.node('small',this.text('更新于：')+new Date(updated*1000).toLocaleString(BridgeI18n.locale()),'account-muted'));box.append(controls);
-    if(this.modelsLoading)box.append(this.node('p','正在读取模型…','account-muted'));
+    const updated=this.models?.cache?.updatedAt;if(Number.isFinite(updated)&&updated>0)controls.append(this.node('small',this.text('更新于：')+new Date(updated*1000).toLocaleString(BridgeI18n.locale()),'account-muted'));box.append(controls);
+    if(this.modelsLoading&&!this.models)box.append(this.node('p','正在读取模型…','account-muted'));
     if(this.modelsError||this.models?.modelError)box.append(this.node('p',this.modelsError||this.models.modelError,'error'));
     if(!this.models&&(this.modelsLoading||this.modelsError))return;
     let count=0;const groups=this.models?.groups?.length?this.models.groups:[{models:this.models?.models||this.models?.catalog?.models||[]}];

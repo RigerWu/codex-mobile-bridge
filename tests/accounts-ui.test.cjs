@@ -154,11 +154,11 @@ for(const desktop of [false,true])test(`${desktop?'desktop':'web'} automatically
  ui.hidden(false);await ui.panel.refresh();assert.equal(ui.requests.length,3);
  await ui.panel.refresh();assert.equal(ui.requests.length,3,'status polling does not repeat the quota query');
 });
-test('quota and reset count precede all account actions',async()=>{
+test('quota and reset count precede account switching',async()=>{
  const ui=fixture();ui.setValue({...ui.value(),accounts:[{id:'official',kind:'chatgpt',name:'Official',details:{usage:{status:'ready',checkedAt:Date.now()/1000,limits:[],resetCredits:{availableCount:2}}}}]});
  await ui.panel.refresh();const nodes=ui.all(ui.panel.rows.children[0]);
  assert.ok(nodes.findIndex(n=>n.textContent==='重置卡 · 2 张可用')<nodes.findIndex(n=>n.textContent==='切换到此接入'));
- const refresh=nodes.find(n=>n.attributes['aria-label']==='查看剩余额度');assert.equal(refresh.textContent,'');assert.match(refresh.innerHTML,/<svg[^>]*viewBox="0 0 24 24"/);assert.equal(refresh.parent.className,'accounts-usage-controls');assert.equal(refresh.parent.parent,nodes.find(n=>n.className==='accounts-actions'));assert.ok(!nodes.some(n=>n.textContent==='刷新额度'));
+ const refresh=nodes.find(n=>n.attributes['aria-label']==='查看剩余额度');assert.equal(refresh.textContent,'');assert.match(refresh.innerHTML,/<svg[^>]*viewBox="0 0 24 24"/);assert.equal(refresh.parent.className,'accounts-usage-controls');assert.equal(refresh.parent.parent,nodes.find(n=>n.className==='accounts-identity'));assert.ok(!nodes.some(n=>n.textContent==='刷新额度'));
 });
 
 for(const desktop of [false,true])test(`${desktop?'desktop':'web'} groups reset count, next usable expiry and the selected account action`,()=>{
@@ -174,7 +174,7 @@ for(const desktop of [false,true])test(`${desktop?'desktop':'web'} groups reset 
  const note=nodes.find(n=>n.className==='account-muted account-subscription-note'),info=nodes.find(n=>n.attributes['aria-label']==='订阅日期说明');assert.equal(note.hidden,true);info.onclick();assert.equal(note.hidden,false);assert.equal(info.attributes['aria-expanded'],'true');
  assert.equal(info.parent.parent.className,'accounts-name');assert.equal(info.textContent,'订阅周期至 '+new Date(expiry*1000).toLocaleDateString('zh-CN',{month:'short',day:'numeric'}));assert.ok(info.title.includes(new Date(expiry*1000).toLocaleString('zh-CN')));assert.ok(!nodes.some(n=>n.textContent==='ⓘ'));
  ui.panel.render();assert.equal(ui.all().find(n=>n.className==='account-muted account-subscription-note').hidden,false);
- const updated=nodes.find(n=>n.className==='account-updated account-muted'),refresh=nodes.find(n=>n.attributes['aria-label']==='查看剩余额度');assert.equal(updated.textContent,new Date(now*1000).toLocaleString('zh-CN',{hour:'2-digit',minute:'2-digit'})+' 更新');assert.equal(updated.parent,refresh.parent);assert.equal(updated.parent.children[0],updated);assert.equal(updated.title,new Date(now*1000).toLocaleString('zh-CN'));
+ const updated=nodes.find(n=>n.className==='account-updated account-muted'),refresh=nodes.find(n=>n.attributes['aria-label']==='查看剩余额度');assert.equal(updated.textContent,new Date(now*1000).toLocaleString('zh-CN',{hour:'2-digit',minute:'2-digit'})+' 更新');assert.equal(updated.parent,refresh.parent);assert.equal(updated.parent.parent.className,'accounts-identity');assert.equal(updated.parent.children[0],refresh);assert.equal(updated.title,new Date(now*1000).toLocaleString('zh-CN'));
  ui.language();assert.match(ui.text(),/Usage resets · 2 available/);assert.match(ui.text(),/Subscription period ends:/);
 });
 

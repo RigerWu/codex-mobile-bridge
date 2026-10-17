@@ -174,20 +174,21 @@ class AccountsPanel {
   accountActions(card,row){
     const models=row.details?.models,opened=this.expandedModels.has(row.id);
     if(!row.transient){const show=this.button(opened?'收起模型':'查看可用模型',()=>{if(opened){this.expandedModels.delete(row.id);this.render();}else{this.expandedModels.add(row.id);this.perform({action:'details',id:row.id,section:'models'});}});show.disabled=this.busy;card.append(show);}
-    if(row.kind==='chatgpt'){
-      const controls=this.node('div',undefined,'accounts-usage-controls'),usage=row.details?.usage;
-      if(usage?.updatedAt){const updated=this.node('small',this.text('{time} 更新').replace('{time}',this.shortTime(usage.updatedAt,true))+(usage.status==='loading'?' · '+this.text('查询中…'):''),'account-updated account-muted');updated.title=new Date(usage.updatedAt*1000).toLocaleString(BridgeI18n.locale());controls.append(updated);}
-      const refresh=this.button('',()=>this.perform({action:'details',id:row.id,section:'usage',refresh:true}));refresh.className='accounts-usage-refresh';
-      refresh.innerHTML='<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="M20 12a8 8 0 1 1-2.34-5.66L20 8M20 3v5h-5"/></svg>';
-      refresh.title=this.text('查看剩余额度');refresh.setAttribute('aria-label',refresh.title);
-      refresh.disabled=this.busy||usage?.status==='loading';controls.append(refresh);card.append(controls);
-    }
     if(opened){const box=this.node('div',undefined,'accounts-models');
       if(!models||models.status==='loading')box.append(this.node('p','正在读取模型…'));
       else if(models.status==='error'){box.append(this.node('p',models.error));box.append(this.button('重试',()=>this.perform({action:'details',id:row.id,section:'models',refresh:true})));}
       else if(!models.models?.length)box.append(this.node('p','暂未提供可用模型'));
       else for(const model of models.models){const line=this.node('div');line.textContent=model.name===model.id?model.id:model.name+' · '+model.id;box.append(line);}card.append(box);
     }
+  }
+  accountUsageControls(row){
+    const controls=this.node('div',undefined,'accounts-usage-controls'),usage=row.details?.usage;
+    const refresh=this.button('',()=>this.perform({action:'details',id:row.id,section:'usage',refresh:true}));refresh.className='accounts-usage-refresh';
+    refresh.innerHTML='<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="M20 12a8 8 0 1 1-2.34-5.66L20 8M20 3v5h-5"/></svg>';
+    refresh.title=this.text('查看剩余额度');refresh.setAttribute('aria-label',refresh.title);
+    refresh.disabled=this.busy||usage?.status==='loading';controls.append(refresh);
+    if(usage?.updatedAt){const updated=this.node('small',this.text('{time} 更新').replace('{time}',this.shortTime(usage.updatedAt,true))+(usage.status==='loading'?' · '+this.text('查询中…'):''),'account-updated account-muted');updated.title=new Date(usage.updatedAt*1000).toLocaleString(BridgeI18n.locale());controls.append(updated);}
+    return controls;
   }
   accept(value){const old=this.value;if(!this.desktop&&old?.canSwitch===false&&value.canSwitch===undefined)value={...value,canSwitch:false};this.value=value;if(old&&(old.activeId!==value.activeId||old.current?.kind!==value.current?.kind||old.current?.name!==value.current?.name||old.switch?.phase!==value.switch?.phase))this.onChanged(value);this.onUpdate(value);this.render();}
   clear(){this.resetDialog?.close();clearTimeout(this.timer);this.generation++;this.value=null;this.loading=false;this.busy=false;this.operationError=false;this.error.textContent='';this.rows.replaceChildren();}
@@ -257,7 +258,7 @@ class AccountsPanel {
       }
       name.append(title,this.node('p',row.kind==='chatgpt'?(row.email||this.text('官方 ChatGPT 账号')):(row.baseUrl+' · '+row.model),'account-muted'));
       if(row.kind==='chatgpt')this.accountSubscription(name,row);
-      identity.append(name);this.accountUsage(identity,row);card.append(identity);
+      identity.append(name);if(row.kind==='chatgpt')identity.append(this.accountUsageControls(row));this.accountUsage(identity,row);card.append(identity);
       if(row.kind==='chatgpt')this.accountReset(card,row,switching);
       if(!row.transient){const choose=this.button(active?'当前接入':'切换到此接入',()=>this.choose(row));choose.disabled=this.busy||switching||active||(!this.desktop&&value.canSwitch===false);actions.append(choose);}
       if(!active&&!row.transient){const label=this.node('label',undefined,'account-reminder'),checkbox=document.createElement('input');checkbox.type='checkbox';checkbox.checked=this.syncLocalCliIds.has(row.id);checkbox.disabled=this.busy||switching;checkbox.onchange=()=>{if(checkbox.checked)this.syncLocalCliIds.add(row.id);else this.syncLocalCliIds.delete(row.id);};label.append(checkbox,this.node('span','同时应用到本机 CLI'));actions.append(label,this.node('small','桌面版与本机 CLI 共用账号配置；切换后 CLI 也会使用新接入。勾选后额外核验 CLI 是否生效。','account-muted'));}

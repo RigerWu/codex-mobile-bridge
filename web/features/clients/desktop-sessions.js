@@ -48,9 +48,10 @@ class DesktopSessionsView {
   bindListCache(identity,host){
     if(this.listCacheIdentity!==identity||this.listCacheHost!==host)this.providerViews.clear();
     this.listCacheIdentity=identity;this.listCacheHost=host;
+    if(identity)for(const storage of [localStorage,sessionStorage])for(let i=storage.length-1;i>=0;i--){const key=storage.key(i);if(key?.startsWith('desktop-list-v1:')&&!key.startsWith('desktop-list-v1:'+identity+':'))storage.removeItem(key);}
     for(const provider of ['claude','deepseek']){
       const key=this.listSnapshotKey(provider);if(!key)continue;
-      let saved;try{saved=JSON.parse(sessionStorage.getItem(key)||'null');}catch{continue;}
+      let saved;try{const snapshot=localStorage.getItem(key)||sessionStorage.getItem(key);if(snapshot?.length>512*1024)continue;saved=JSON.parse(snapshot||'null');}catch{continue;}
       if(saved&&Array.isArray(saved.rows)&&saved.rows.length<=200)this.providerViews.set(provider,{...saved,cachedAt:0,snapshotReady:true});
     }
   }
@@ -67,7 +68,7 @@ class DesktopSessionsView {
     const key=this.listSnapshotKey(provider),view=this.providerViews.get(provider);if(!key||!view?.snapshotReady)return;
     const current=provider===this.provider?{query:this.search.value,archived:this.archived.checked,listMode:this.listMode.value,surface:this.surfaceSelection,scroll:this.rowsRoot.scrollTop}:view;
     const rows=(view.rows||[]).slice(0,200).map(row=>({id:row.id,title:row.title,cwd:row.cwd,backend:row.backend,updatedAt:row.updatedAt,archived:row.archived}));
-    try{const snapshot=JSON.stringify({rows,query:current.query||'',archived:current.archived===true,listMode:current.listMode||'recent',surface:current.surface||'all',scroll:current.scroll||0});if(snapshot.length<=512*1024)sessionStorage.setItem(key,snapshot);}catch{}
+    try{const snapshot=JSON.stringify({rows,query:current.query||'',archived:current.archived===true,listMode:current.listMode||'recent',surface:current.surface||'all',scroll:current.scroll||0});if(snapshot.length<=512*1024){localStorage.setItem(key,snapshot);sessionStorage.removeItem(key);}}catch{}
   }
   sharedRead(provider,action,sid=null){
     const epoch=this.readEpoch,version=this.providerReadEpochs.get(provider)||0,key=JSON.stringify([provider,action,sid,epoch,version]);
@@ -145,7 +146,7 @@ class DesktopSessionsView {
     if(provider===this.provider){clearTimeout(this.timer);this.generation++;this.detailRevision++;this.sid=null;this.state=null;this.freshDetail=false;this.input.value='';}
     const jsonKey=key=>{try{return JSON.parse(key)[0]===provider;}catch{return false;}};
     this.providerViews.delete(provider);for(const key of this.drafts.keys())if(key.startsWith(provider+':'))this.drafts.delete(key);
-    const snapshotKey=this.listSnapshotKey(provider);if(snapshotKey)sessionStorage.removeItem(snapshotKey);
+    const snapshotKey=this.listSnapshotKey(provider);if(snapshotKey){localStorage.removeItem(snapshotKey);sessionStorage.removeItem(snapshotKey);}
     for(const [key,text] of this.accountDrafts.get(identity(next))||[])this.drafts.set(key,text);
     for(const key of this.detailCache.keys())if(jsonKey(key))this.forgetDetail(key);for(const key of this.skillSelections.keys())if(jsonKey(key))this.skillSelections.delete(key);
     for(const key of this.pending.keys())if(key.startsWith(provider+':'))this.pending.delete(key);

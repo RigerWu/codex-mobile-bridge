@@ -1,6 +1,6 @@
 'use strict';
 const test=require('node:test'),assert=require('node:assert/strict'),fs=require('node:fs'),vm=require('node:vm'),path=require('node:path'),{webcrypto}=require('node:crypto');
-function fixture({storage=new Map()}={}){
+function fixture({storage=new Map(),sessionStore=new Map()}={}){
  const listeners={};let document;
  class Node {
   constructor(tag='div'){this.tagName=tag.toUpperCase();this.children=[];this.parentElement=null;this.dataset={};this.attributes={};this.hidden=false;this.disabled=false;this.value='';this.className='';this._text='';this.style={setProperty(){}};this.scrollHeight=100;this.scrollTop=0;this.clientHeight=100;this.clientWidth=1000;this.open=false;this.options=this.children;this.classList={contains:n=>this.className.split(' ').includes(n),add:(...ns)=>this.className=[...new Set([...this.className.split(' ').filter(Boolean),...ns])].join(' '),remove:(...ns)=>this.className=this.className.split(' ').filter(n=>!ns.includes(n)).join(' '),toggle:(n,v)=>{v=v??!this.classList.contains(n);this.classList[v?'add':'remove'](n);return v;}};}
@@ -23,11 +23,11 @@ function fixture({storage=new Map()}={}){
  }
  document={body:new Node('body'),documentElement:new Node('html'),hidden:false,activeElement:null,createElement:tag=>new Node(tag),createElementNS:(_,tag)=>new Node(tag),createTextNode:text=>{const n=new Node('#text');n.textContent=text;return n;},querySelectorAll:s=>document.body.querySelectorAll(s),querySelector:s=>document.body.querySelector(s),getElementById:id=>document.body.querySelector('#'+id),addEventListener:(type,fn)=>listeners[type]=fn,dispatchEvent:event=>listeners[event.type]?.(event)};
  const root=new Node('div');root.className='app';document.body.append(root);const select=new Node('select'),calls=[],notices=[];let uploadHandler=async()=>({ok:true,status:200,json:async()=>({image:true,size:16,name:'image.png'})}),handler=async(url,body)=>body?{status:'accepted'}:url.includes('/detail')?{session:{id:'a',title:'Chat',model:'model-a',effort:'high',status:'idle',capabilities:{}},messages:[]}:url.includes('/workspace')?{entries:[],total:0,project:'/project'}:{sessions:[]};
- const context=vm.createContext({document,window:{addEventListener(){}},navigator:{},location:{pathname:'/'},history:{replaceState(){}},localStorage:{getItem:k=>storage.get(k),setItem:(k,v)=>storage.set(k,v),removeItem:k=>storage.delete(k)},sessionStorage:{getItem:k=>storage.get(k),setItem:(k,v)=>storage.set(k,v),removeItem:k=>storage.delete(k)},crypto:{getRandomValues:array=>webcrypto.getRandomValues(array)},Uint8Array,TextEncoder,Option:class extends Node{constructor(text,value){super('option');this.textContent=text;this.value=value;}},ResizeObserver:class{observe(){}},MutationObserver:class{observe(){}},AbortController,requestAnimationFrame:fn=>fn(),cancelAnimationFrame(){},getComputedStyle:()=>({getPropertyValue:()=>8}),setTimeout(){return 1;},clearTimeout(){},fetch:async(url,options)=>{calls.push({url,upload:options});return uploadHandler(url,options);},renderMarkdown:(node,text)=>node.textContent=text,CustomEvent:class{constructor(type,options){this.type=type;Object.assign(this,options);}}});
+ const context=vm.createContext({document,window:{addEventListener(){}},navigator:{},location:{pathname:'/'},history:{replaceState(){}},localStorage:{get length(){return storage.size;},key:i=>[...storage.keys()][i],getItem:k=>storage.get(k),setItem:(k,v)=>storage.set(k,v),removeItem:k=>storage.delete(k)},sessionStorage:{get length(){return sessionStore.size;},key:i=>[...sessionStore.keys()][i],getItem:k=>sessionStore.get(k),setItem:(k,v)=>sessionStore.set(k,v),removeItem:k=>sessionStore.delete(k)},crypto:{getRandomValues:array=>webcrypto.getRandomValues(array)},Uint8Array,TextEncoder,Option:class extends Node{constructor(text,value){super('option');this.textContent=text;this.value=value;}},ResizeObserver:class{observe(){}},MutationObserver:class{observe(){}},AbortController,requestAnimationFrame:fn=>fn(),cancelAnimationFrame(){},getComputedStyle:()=>({getPropertyValue:()=>8}),setTimeout(){return 1;},clearTimeout(){},fetch:async(url,options)=>{calls.push({url,upload:options});return uploadHandler(url,options);},renderMarkdown:(node,text)=>node.textContent=text,CustomEvent:class{constructor(type,options){this.type=type;Object.assign(this,options);}}});
  vm.runInContext(fs.readFileSync(path.join(__dirname,'../web/shell/app.js'),'utf8').match(/^function uuid\(\).*$/m)[0],context);
  for(const file of ['web/layouts/viewport.js','web/features/chat/activity.js','web/features/chat/attachments.js','web/shared/i18n.js','web/features/clients/client-lifecycle.js','web/features/chat/message-actions.js','web/features/chat/permissions.js','web/features/workspace/workbench.js','web/features/chat/list-sync.js','web/features/clients/desktop-sessions.js'])vm.runInContext(fs.readFileSync(path.join(__dirname,'..',file),'utf8'),context);
  const View=vm.runInContext('DesktopSessionsView',context),view=new View({root,select,request:(url,body)=>{calls.push({url,body});return handler(url,body);},notify:text=>notices.push(text),onSelect(){},csrf:()=>'csrf-test',onUnauthorized(){}});
- return {view,root,document,calls,notices,storage,setHandler:fn=>handler=fn,setUploadHandler:fn=>uploadHandler=fn,run:s=>vm.runInContext(s,context),text:n=>n.textContent};
+ return {view,root,document,calls,notices,storage,sessionStore,setHandler:fn=>handler=fn,setUploadHandler:fn=>uploadHandler=fn,run:s=>vm.runInContext(s,context),text:n=>n.textContent};
 }
 async function opened(){const ui=fixture();await ui.view.choose('claude');await ui.view.open('a');return ui;}
 
@@ -36,13 +36,18 @@ test('Claude list reentry paints a bounded identity-scoped snapshot before the l
  first.setHandler(async()=>({sessions:[{id:'saved',title:'Saved chat',backend:'code',cwd:'/work',updatedAt:9,capabilities:{send:true}}]}));
  await first.view.choose('claude');first.view.search.value='Saved';first.view.archived.checked=true;first.view.listMode.value='project';first.view.renderList();first.view.rowsRoot.scrollTop=40;first.view.saveListSnapshot('claude');
  const key=first.view.listSnapshotKey('claude'),saved=JSON.parse(storage.get(key));assert.equal(saved.rows.length,1);assert.equal(saved.rows[0].capabilities,undefined);
- const second=fixture({storage});second.view.bindListCache(identity,'gateway.test');let finish;second.setHandler(()=>new Promise(resolve=>finish=resolve));
+ const second=fixture({storage});assert.equal(second.sessionStore.size,0);second.view.bindListCache(identity,'gateway.test');let finish;second.setHandler(()=>new Promise(resolve=>finish=resolve));
  const entering=second.view.choose('claude');assert.equal(second.view.rowsRoot.querySelector('.session').dataset.id,'saved');assert.equal(second.view.search.value,'Saved');assert.equal(second.view.archived.checked,true);assert.equal(second.view.listMode.value,'project');assert.equal(second.view.rowsRoot.scrollTop,40);assert.equal(second.view.canMutate(),false);
  finish({sessions:[{id:'fresh',title:'Fresh chat',backend:'code',cwd:'/work',updatedAt:10}]});await entering;assert.equal(second.view.rows[0].id,'fresh');
- const wrongLogin=fixture({storage});wrongLogin.view.bindListCache('b'.repeat(64),'gateway.test');assert.equal(wrongLogin.view.providerViews.size,0);
  const wrongHost=fixture({storage});wrongHost.view.bindListCache(identity,'other.test');assert.equal(wrongHost.view.providerViews.size,0);
  let finishAccountRead;first.setHandler(()=>new Promise(resolve=>finishAccountRead=resolve));const switching=first.view.accountChanged('claude',{activeId:'old'},{activeId:'new'});assert.equal(storage.has(key),false);
  finishAccountRead({sessions:[]});await switching;assert.deepEqual(JSON.parse(storage.get(key)).rows,[]);
+ const wrongLogin=fixture({storage});wrongLogin.view.bindListCache('b'.repeat(64),'gateway.test');assert.equal(wrongLogin.view.providerViews.size,0);assert.equal(storage.has(key),false);
+});
+test('legacy session snapshots remain readable and migrate to durable storage on reentry',async()=>{
+ const identity='a'.repeat(64),key=`desktop-list-v1:${identity}:gateway.test:claude`,sessionStore=new Map([[key,JSON.stringify({rows:[{id:'legacy',title:'Legacy chat'}]})]]),ui=fixture({sessionStore});
+ ui.view.bindListCache(identity,'gateway.test');assert.equal(ui.view.providerViews.get('claude').rows[0].id,'legacy');
+ ui.view.previewCachedList('claude');assert.equal(JSON.parse(ui.storage.get(key)).rows[0].id,'legacy');
 });
 test('DeepSeek stores only complete list reads and restores its own provider rows',async()=>{
  const storage=new Map(),view=fixture({storage});view.view.bindListCache('a'.repeat(64),'gateway.test');
@@ -51,6 +56,13 @@ test('DeepSeek stores only complete list reads and restores its own provider row
  view.setHandler(async()=>({sessions:[{id:'dsh',title:'Harness chat',backend:'chat'}],complete:true}));await view.view.refreshList();
  assert.equal(JSON.parse(storage.get(key)).rows[0].id,'dsh');assert.equal(storage.has(view.view.listSnapshotKey('claude')),false);
  const restored=fixture({storage});restored.view.bindListCache('a'.repeat(64),'gateway.test');assert.equal(restored.view.providerViews.get('deepseek').rows[0].id,'dsh');assert.equal(restored.view.providerViews.has('claude'),false);
+});
+test('durable provider snapshots retain at most 200 rows and 512 KiB',async()=>{
+ const ui=fixture();ui.view.bindListCache('a'.repeat(64),'gateway.test');
+ ui.setHandler(async()=>({sessions:Array.from({length:201},(_,i)=>({id:String(i),title:'Chat '+i}))}));await ui.view.choose('claude');
+ const key=ui.view.listSnapshotKey('claude');assert.equal(JSON.parse(ui.storage.get(key)).rows.length,200);
+ ui.setHandler(async()=>({sessions:[{id:'large',title:'x'.repeat(512*1024)}]}));await ui.view.refreshList();
+ assert.equal(JSON.parse(ui.storage.get(key)).rows.length,200);
 });
 
 test('cached provider previews stay inert until client discovery confirms selection',async()=>{

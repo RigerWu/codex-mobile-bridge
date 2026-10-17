@@ -92,9 +92,11 @@ class ClientNavigation {
   listTouch(phase,event,list){
     if(!this.preference('swipe-clients',undefined,true)||document.querySelector('dialog[open]')||this.clients.filter(c=>c.enabled).length<2){this.cancelListSwipe();return;}
     if(phase==='start'){
+      const settling=this.swipePreview;
+      if(settling?.commitTarget&&settling.provider===this.provider&&this.clients.some(client=>client.id===settling.commitTarget&&client.enabled))this.choose(settling.commitTarget).catch(error=>this.notify(error.message));
       this.cancelListSwipe();const touch=event.touches[0],control=event.target.closest('input,select,textarea,button,a,[contenteditable="true"],summary');
       if(event.touches.length!==1||!touch||touch.clientX<28||touch.clientX>innerWidth-28||event.target.closest('.list-heading,.chat-list-toolbar,.client-navigation')||(control&&!control.closest('.session'))||window.getSelection()?.toString())return;
-      this.listGesture={list,provider:this.provider,id:touch.identifier,x:touch.clientX,y:touch.clientY,time:Date.now(),horizontal:false};return;
+      this.listGesture={list,paintList:this.provider==='codex'?this.sidebar:this.view.list,provider:this.provider,id:touch.identifier,x:touch.clientX,y:touch.clientY,time:Date.now(),horizontal:false};return;
     }
     const gesture=this.listGesture;if(!gesture||gesture.list!==list)return;if(gesture.provider!==this.provider){this.cancelListSwipe();return;}
     if(event.touches.length>(phase==='end'?0:1)){this.cancelListSwipe();return;}
@@ -134,7 +136,7 @@ class ClientNavigation {
     let preview=this.swipePreview;
     if(preview&&(preview.next!==next?.id||preview.direction!==direction)){this.cancelListSwipe();this.listGesture=gesture;preview=null;}
     if(!preview){
-      const source=this.swipeRows(),rect=source.getBoundingClientRect(),listRect=gesture.list.getBoundingClientRect();
+      const source=this.swipeRows(),rect=source.getBoundingClientRect(),listRect=(gesture.paintList||gesture.list).getBoundingClientRect();
       const root=document.createElement('div');root.className='client-swipe-preview';root.setAttribute('aria-hidden','true');root.inert=true;
       Object.assign(root.style,{left:listRect.left+'px',top:rect.top+'px',width:listRect.width+'px',height:Math.max(0,this.navigation.getBoundingClientRect().top-rect.top)+'px'});
       const current=document.createElement('div'),incoming=document.createElement('div');current.className=incoming.className='client-swipe-page';
@@ -161,6 +163,7 @@ class ClientNavigation {
   }
   async finishListSwipe(gesture,dx,next){
     this.dragListSwipe(gesture,dx);const preview=this.swipePreview,commit=next&&preview.next===next;
+    preview.commitTarget=commit?next:null;
     const end=commit?-preview.direction*preview.width:0;
     try{
       if(!window.matchMedia('(prefers-reduced-motion: reduce)').matches){

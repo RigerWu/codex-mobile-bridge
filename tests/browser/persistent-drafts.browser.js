@@ -29,6 +29,19 @@ async function runPersistentDraftTests(){
     resolveSend({ok:true,status:200,json:async()=>({status:'accepted'})});await sendingPromise;
     check($('message').value==='edited while sending'&&composerDrafts.load(scope(a)).text==='edited while sending','Delayed acknowledgement preserves the later DOM edit');
     check(composerDrafts.pending(scope(a))===null,'Confirmed send clears its durable pending id');
+    currentId=b;codexDraftScope=null;codexDraftTouched=false;$('message').value='';state={status:'idle',access:{source:'desktop',canSend:true}};
+    let attempts=[];window.fetch=async(url,options)=>{if(String(url).includes('/api/sessions/'+b+'/send')){attempts.push(JSON.parse(options.body));return {ok:true,status:200,json:async()=>({status:attempts.length===1?'unknown':'accepted'})};}return old.fetch.call(window,url,options);};
+    $('message').value='sent before account scope';$('message').dispatchEvent(new Event('input',{bubbles:true}));
+    await $('composer').onsubmit({preventDefault(){}});
+    const temporary=JSON.parse(sessionStorage.getItem('pending:local|'+b));
+    check(temporary?.id===attempts[0].id&&temporary.gateway===gateway,'Unknown send keeps a gateway-tagged temporary ID');
+    bindCodexDraft({draftAccountIdentity:'account-a'});await $('composer').onsubmit({preventDefault(){}});
+    check(attempts.length===2&&attempts[1].id===attempts[0].id,'Account scope transition retries the same payload with the same ID');
+    check(composerDrafts.pending(scope(b))===null,'Confirmed transition retry clears the durable pending ID');
+    sessionStorage.setItem('pending:local|'+b,JSON.stringify({...attempts[0],id:'foreign-id',gateway:'different-gateway',target:'local|'+b,account:''}));
+    codexDraftScope=null;codexDraftTouched=false;$('message').value='sent before account scope';$('message').dispatchEvent(new Event('input',{bubbles:true}));bindCodexDraft({draftAccountIdentity:'account-b'});
+    await $('composer').onsubmit({preventDefault(){}});
+    check(attempts[2]?.id!=='foreign-id','A foreign gateway pending ID is not imported');
     draftGateway='';codexDraftScope=null;currentId=b;$('message').value='temporary';$('message').dispatchEvent(new Event('input',{bubbles:true}));
     check(sessionStorage.getItem('draft:local|'+b)==='temporary','Gateway without draft identity keeps temporary composer behavior');
     let sent=null;state={status:'idle',access:{source:'desktop',canSend:true}};
@@ -39,6 +52,7 @@ async function runPersistentDraftTests(){
   }finally{
     for(const key of [scope(a),scope(b),scope(a,'account-b')])composerDrafts.clear(key);
     sessionStorage.removeItem('draft:local|'+b);
+    sessionStorage.removeItem('pending:local|'+b);
     window.fetch=old.fetch;currentId=old.id;currentHost=old.host;codexDraftScope=old.scope;draftGateway=old.gateway;codexDraftTouched=old.touched;$('message').value=old.text;selectedSkills=old.skills;workModes.selection=old.mode;state=old.state;
   }
 }

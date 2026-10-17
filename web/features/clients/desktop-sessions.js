@@ -140,7 +140,7 @@ class DesktopSessionsView {
     if(!this.draftGateway||!account||!this.sid||!this.composerDrafts)return;
     const scope={gateway:this.draftGateway,provider:this.provider,account,host:'local',session:this.sid};
     if(this.composerDrafts.key(scope)===this.composerDrafts.key(this.draftScope))return;
-    const switching=!!this.draftScope;if(switching){this.saveDraft();this.drafts.delete(this.provider+':'+this.sid);}this.draftScope=scope;
+    const switching=!!this.draftScope;if(switching){this.saveDraft();this.drafts.delete(this.provider+':'+this.sid);for(const key of this.pending.keys())if(key.startsWith(this.provider+':'+this.sid+':send:')&&key.endsWith(':'+this.draftGateway+':'))this.pending.delete(key);}this.draftScope=scope;
     const legacy=this.composerDrafts.migrate(scope,sessionStorage,{text:'desktop-draft:'+this.provider+':'+this.sid});
     const draft=this.composerDrafts.load(scope)||legacy;
     if(draft&&(switching||!this.draftTouched)){
@@ -285,9 +285,10 @@ class DesktopSessionsView {
     form.onsubmit=event=>{event.preventDefault();if(!this.freshDetail||sid!==this.sid||generation!==this.generation)return;const answers={};for(const {key,area,custom} of inputs){const values=[...area.querySelectorAll('input:checked')].map(n=>n.value);if(custom.value.trim())values.push(custom.value.trim());if(!values.length){this.notify(BridgeI18n.t('请回答每一项问题'));return;}answers[key]={answers:values};}accept.disabled=true;this.mutate('respond',{requestId:request.id,decision:'accept',answers}).finally(()=>accept.disabled=false);};this.requests.append(form);
   }}
   requestId(){if(typeof uuid==='function')return uuid();if(typeof crypto.randomUUID==='function')return crypto.randomUUID();const bytes=crypto.getRandomValues(new Uint8Array(16));bytes[6]=(bytes[6]&15)|64;bytes[8]=(bytes[8]&63)|128;const h=[...bytes].map(x=>x.toString(16).padStart(2,'0')).join('');return h.slice(0,8)+'-'+h.slice(8,12)+'-'+h.slice(12,16)+'-'+h.slice(16,20)+'-'+h.slice(20);}
-  async mutate(action,body,sessionId=action==='create'?null:this.sid,requestId=null){
-    if(this.busy||sessionId&&(!(action==='resume'?this.canResume():this.canMutate())||sessionId!==this.sid))return null;const provider=this.provider,generation=this.generation,key=provider+':'+sessionId+':'+action+':'+JSON.stringify(body);this.invalidateReads(provider);const epoch=this.readEpoch,providerEpoch=this.providerReadEpochs.get(provider),currentWrite=()=>epoch===this.readEpoch&&providerEpoch===this.providerReadEpochs.get(provider);this.busy=true;this.error.textContent='';this.updateComposer();
-    try{let id=requestId||this.pending.get(key);if(!id){id=this.requestId();this.pending.set(key,id);}const result=await this.request(this.path(action,null,provider),{...body,id,sessionId});if(action==='resume'&&result.status==='blocked')this.pending.delete(key);if(!['accepted','queued','ready'].includes(result.status))throw Error(result.message||'结果待核对，请检查桌面原会话');this.pending.delete(key);if(action==='access'&&result.mode&&provider===this.provider&&sessionId===this.sid&&generation===this.generation&&currentWrite()&&this.state){this.state.permissionMode=result.mode;const option=result.options?.find(row=>(row.value??row.id)===result.mode);this.state.permissionLabel=option?.label||option?.name||null;}return result;}
+  pendingKey(action,body,sessionId,provider=this.provider,account=''){return provider+':'+sessionId+':'+action+':'+JSON.stringify(body)+(action==='send'?':'+this.draftGateway+':'+account:'');}
+  async mutate(action,body,sessionId=action==='create'?null:this.sid,requestId=null,draftAccount=''){
+    if(this.busy||sessionId&&(!(action==='resume'?this.canResume():this.canMutate())||sessionId!==this.sid))return null;const provider=this.provider,generation=this.generation,key=this.pendingKey(action,body,sessionId,provider,draftAccount);this.invalidateReads(provider);const epoch=this.readEpoch,providerEpoch=this.providerReadEpochs.get(provider),currentWrite=()=>epoch===this.readEpoch&&providerEpoch===this.providerReadEpochs.get(provider);this.busy=true;this.error.textContent='';this.updateComposer();
+    try{let id=requestId||this.pending.get(key);if(!id)id=this.requestId();if(action==='send'||!requestId)this.pending.set(key,id);const result=await this.request(this.path(action,null,provider),{...body,id,sessionId});if(action==='resume'&&result.status==='blocked')this.pending.delete(key);if(!['accepted','queued','ready'].includes(result.status))throw Error(result.message||'结果待核对，请检查桌面原会话');this.pending.delete(key);if(action==='access'&&result.mode&&provider===this.provider&&sessionId===this.sid&&generation===this.generation&&currentWrite()&&this.state){this.state.permissionMode=result.mode;const option=result.options?.find(row=>(row.value??row.id)===result.mode);this.state.permissionLabel=option?.label||option?.name||null;}return result;}
     catch(error){if(generation===this.generation&&sessionId===this.sid)this.error.textContent=BridgeI18n.t(error.message);this.notify(BridgeI18n.t(error.message));return null;}
     finally{const current=currentWrite();if(current)this.invalidateReads(provider);this.busy=false;this.updateComposer();if(current&&provider===this.provider)this.refresh();}
   }
@@ -315,9 +316,11 @@ class DesktopSessionsView {
     const sid=this.sid,provider=this.provider,key=JSON.stringify([provider,sid]),scope=this.draftScope;
     const body={text,mode:this.mode.value},skills=this.state.capabilities.skills===true?[...selected.keys()].sort():[];
     if(ids.length)body.attachments=ids;if(skills.length)body.plugins=skills;
-    const revision=this.saveDraft()?.revision,pending=scope&&this.composerDrafts?this.composerDrafts.begin(scope,body,this.requestId()):null;
+    const transientKey=this.pendingKey('send',body,sid,provider),scopedKey=this.pendingKey('send',body,sid,provider,scope?.account||''),fallbackId=this.pending.get(scopedKey)||this.pending.get(transientKey);
+    const revision=this.saveDraft()?.revision,pending=scope&&this.composerDrafts?this.composerDrafts.begin(scope,body,fallbackId||this.requestId()):null;
     if(pending?.blocked){this.error.textContent=BridgeI18n.t('上次发送结果尚未确认，请检查聊天记录或先处理未确认记录。');return;}
-    const result=await this.mutate('send',body,sid,pending?.id);
+    const result=await this.mutate('send',body,sid,pending?.id||fallbackId,scope?.account||'');
+    if(scope&&(pending||this.pending.has(scopedKey)||result))this.pending.delete(transientKey);
     if(result){
       const sameRevision=pending?this.composerDrafts.load(scope)?.revision===revision:this.input.value===raw;
       const confirmed=pending?this.composerDrafts.confirm(scope,pending.id,revision):true;

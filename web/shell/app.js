@@ -408,7 +408,7 @@ function bindCodexDraft(view){
   const scope={gateway:draftGateway,provider:'codex',account,host:currentHost,session:currentId};
   if(composerDrafts.key(scope)===composerDrafts.key(codexDraftScope))return;
   const switching=!!codexDraftScope;
-  if(switching){saveDraft();sessionStorage.removeItem('draft:'+chatKey());sessionStorage.removeItem('skills:'+chatKey());}
+  if(switching){saveDraft();sessionStorage.removeItem('draft:'+chatKey());sessionStorage.removeItem('skills:'+chatKey());let oldPending;try{oldPending=JSON.parse(sessionStorage.getItem('pending:'+chatKey()));}catch{}if(!oldPending?.account)sessionStorage.removeItem('pending:'+chatKey());}
   codexDraftScope=scope;
   const legacy=window.BridgeSharedRelay?null:composerDrafts.migrate(scope,sessionStorage,{text:'draft:'+chatKey(),skills:'skills:'+chatKey()});
   const draft=composerDrafts.load(scope)||legacy;
@@ -640,11 +640,12 @@ $('composer').onsubmit=async event=>{
   const skills=[...selectedSkills].sort(),scope=codexDraftScope;
   const body={text,mode,skills,workMode,attachments:attachmentIds,uiLocale:BridgeI18n.locale()};
   const revision=saveDraft()?.revision;
-  const legacyKey='pending:'+chatKey();let pending,usedDurable=false;
-  if(scope&&composerDrafts){pending=composerDrafts.begin(scope,body,uuid());usedDurable=!!pending;}
+  const legacyKey='pending:'+chatKey();let legacy;try{legacy=JSON.parse(sessionStorage.getItem(legacyKey));}catch{}
+  const sameLegacy=legacy?.id&&legacy.gateway===draftGateway&&legacy.target===chatKey()&&(!legacy.account||legacy.account===scope?.account)&&['text','mode','workMode','skills','attachments','uiLocale'].every(field=>JSON.stringify(legacy[field])===JSON.stringify(body[field]));
+  let pending,usedDurable=false;
+  if(scope&&composerDrafts){pending=composerDrafts.begin(scope,body,sameLegacy?legacy.id:uuid());usedDurable=!!pending;if(usedDurable&&sameLegacy&&!pending.blocked)sessionStorage.removeItem(legacyKey);}
   if(pending?.blocked){$('send-error').textContent=t('上次发送结果尚未确认，请检查聊天记录或先处理未确认记录。');return;}
-  if(!pending){try{pending=JSON.parse(sessionStorage.getItem(legacyKey));}catch{}
-    if(!pending||!pending.id||!['text','mode','workMode','skills','attachments'].every(field=>JSON.stringify(pending[field]??pending.body?.[field])===JSON.stringify(body[field])))pending={id:uuid(),...body};
+  if(!pending){pending=sameLegacy?legacy:{id:uuid(),gateway:draftGateway,target:chatKey(),account:scope?.account||'',...body};
     sessionStorage.setItem(legacyKey,JSON.stringify(pending));}
   sending=true;attachments.setLocked(true);workModes.render(state,mode,true);$('send').disabled=true;$('send-error').textContent='';
   const target=currentId,targetHost=currentHost;

@@ -722,6 +722,15 @@ class CliSessionTests(unittest.TestCase):
             {'model_providers': {'openai': {'env_key': 'CMB_FIXTURE_KEY'}}}, 'openai', {})
         self.assertEqual(names, {'OPENAI_BASE_URL', 'CMB_FIXTURE_KEY'})
 
+    def test_openai_custom_route_reads_daemon_key_even_without_account(self):
+        config = {'model_providers': {'openai': {'query_params': {'fixture': '1'}}}}
+        with patch('bridge.clients.codex.cli_session._local_cli', return_value='/fixture/codex'), patch(
+                'bridge.clients.codex.cli_session.read_daemon_environment',
+                return_value=({'OPENAI_API_KEY': 'daemon-key'}, ('fixture-process',))) as reader:
+            values, _ = self.sessions.model_environment(config, 'openai', {})
+        self.assertEqual(values['OPENAI_API_KEY'], 'daemon-key')
+        self.assertEqual(reader.call_args.args[2], {'OPENAI_BASE_URL', 'OPENAI_API_KEY'})
+
     def test_local_native_openai_api_key_uses_same_home_auth_file(self):
         self.sessions.attach('thread-a', explicit=True)
         self.sessions.metadata['thread-a']['modelProvider'] = 'openai'

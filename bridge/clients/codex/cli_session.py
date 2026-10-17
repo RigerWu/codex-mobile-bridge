@@ -574,7 +574,7 @@ class CliSessions:
             names.add('OPENAI_BASE_URL')
         if (not definition.get('env_key') and not definition.get('experimental_bearer_token') and
                 (definition.get('requires_openai_auth') or
-                 provider == 'openai' and (account or {}).get('type') == 'apiKey' and
+                 provider == 'openai' and
                  not definition.get('http_headers') and not definition.get('env_http_headers'))):
             # The native home auth file takes precedence over ambient keys.
             names.add('OPENAI_API_KEY')

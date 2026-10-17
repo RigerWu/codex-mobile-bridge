@@ -151,14 +151,15 @@ class DesktopClientAccountsPanel {
     if(this.modelsLoading&&!this.models)box.append(this.node('p','正在读取模型…','account-muted'));
     if(this.modelsError||this.models?.modelError)box.append(this.node('p',this.modelsError||this.models.modelError,'error'));
     if(!this.models&&(this.modelsLoading||this.modelsError))return;
+    if(this.models?.notice)box.append(this.node('p',this.models.notice,'account-muted'));
     let count=0;const groups=this.models?.groups?.length?this.models.groups:[{models:this.models?.models||this.models?.catalog?.models||[]}];
     for(const group of groups){
       if(!group.models?.length)continue;count+=group.models.length;
-      box.append(this.node('strong',[group.surface==='code'?'Code':group.surface==='cowork'?'Cowork':group.label||group.name||group.id,this.text(group.source==='session-history'?'历史模型':'可用模型')].filter(Boolean).join(' · ')));
+      box.append(this.node('strong',[group.surface==='code'?'Code':group.surface==='cowork'?'Cowork':group.label||group.name||group.id,this.text(group.source==='session-history'?'历史模型':group.source==='desktop-config'?'配置模型':'可用模型')].filter(Boolean).join(' · ')));
       if(group.notice)box.append(this.node('p',group.notice,'account-muted'));
       const list=this.node('ul');for(const model of group.models){const row=this.node('li',typeof model==='string'?model:model.name||model.id);if(model.efforts?.length)row.append(this.node('small',' · '+model.efforts.map(effort=>this.text(typeof effort==='string'?effort:effort.name||effort.id)).join(' / '),'account-muted'));list.append(row);}box.append(list);
     }
-    if(!count)box.append(this.node('p','当前客户端未返回可用模型，请检查客户端登录与模型配置。','account-muted'));
+    if(!count&&!this.models?.notice)box.append(this.node('p','当前客户端未返回可用模型，请检查客户端登录与模型配置。','account-muted'));
   }
   reconcileRows(cards,modelTargetId){
     const previous=new Map([...this.rows.children].filter(card=>card.accountRowId).map(card=>[card.accountRowId,card]));

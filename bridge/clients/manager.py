@@ -389,9 +389,18 @@ class DesktopSessions:
 
     def _account_model_live(self, provider):
         adapter = self.adapters[provider]
-        return (bool(adapter.desktop and adapter.desktop.connected and not adapter.setup_cancel.is_set()
-                     and not adapter.connection_probe_failed) if provider == 'claude'
-                else (adapter.directory/'endpoint.json').is_file())
+        if provider == 'claude':
+            try:
+                store = self._account_store(provider)
+                with store.lock:
+                    kind = store._current()[0]
+                if kind == 'api':
+                    return True
+                return bool(adapter.desktop and adapter.desktop.connected and not adapter.setup_cancel.is_set()
+                            and not adapter.connection_probe_failed)
+            except (OSError, ValueError, sqlite3.Error):
+                return False
+        return (adapter.directory/'endpoint.json').is_file()
 
     def _account_model_result(self, provider, identity, persisted, error=None):
         if self._account_model_identity(provider) != identity:
@@ -426,18 +435,33 @@ class DesktopSessions:
                 if persisted:
                     return self._account_model_result(provider, identity, persisted)
             try:
-                value = self._read(provider, 'account')
+                if provider == 'claude':
+                    store = self._account_store(provider)
+                    with store.lock:
+                        kind = store._current()[0]
+                    value = store.models()
+                    if kind == 'official' and self._account_model_live(provider):
+                        native = self._read(provider, 'account')
+                        if isinstance(native.get('groups'), list):
+                            models = {row['id']: row for group in native['groups'] if isinstance(group, dict)
+                                      for row in group.get('models', []) if isinstance(row, dict) and isinstance(row.get('id'), str)}
+                            value = {**native, 'models': list(models.values())}
+                else:
+                    value = self._read(provider, 'account')
             except (OSError, ValueError, BridgeUnavailable):
                 if persisted:
                     return self._account_model_result(provider, identity, persisted, '模型目录刷新失败，已保留上次结果')
                 raise
             if self._account_model_identity(provider) != identity:
                 raise BridgeUnavailable('客户端账号或配置已变化，请重试')
-            if value.get('modelError') or not isinstance(value.get('models'), list):
+            if (value.get('modelError') or not isinstance(value.get('models'), list)
+                    or provider == 'claude' and not value.get('models')):
                 if persisted:
                     return self._account_model_result(provider, identity, persisted,
                                                       value.get('modelError') or '模型目录刷新失败，已保留上次结果')
-                return value
+                if self._account_model_identity(provider) != identity:
+                    raise BridgeUnavailable('客户端账号或配置已变化，请重试')
+                return {**value, 'cache': {'state': 'unavailable', 'updatedAt': None, 'identity': identity}}
             try:
                 updated_at = self.model_store.write(identity, value)
                 self._schedule_account_model_refresh(provider, identity, updated_at, replace=True)

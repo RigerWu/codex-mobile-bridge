@@ -24,6 +24,7 @@ from pathlib import Path
 from urllib import error, parse, request
 
 from bridge.features.accounts.accounts import private_bytes, private_json
+from bridge.features.accounts.models import model_catalog
 from bridge.features.auth.tls import client_context
 from bridge.platforms.windows.claude import windows_claude_profile_paths
 
@@ -344,6 +345,45 @@ class ClaudeAccounts:
         if 'official' in self._ambiguous_profiles:
             raise ValueError(AMBIGUOUS_PROFILE)
         return 'official', _fingerprint(_cookies(self.home)), None
+
+    def models(self):
+        """Read the current Desktop account's model source without connecting it."""
+        with self.lock:
+            kind, _, gateway = self._current()
+            if kind == 'official':
+                return {'models': [], 'groups': [], 'notice':
+                    'Claude 官方账号未提供可离线读取的模型目录；连接 Desktop 后已有的缓存仍可查看'}
+            config = gateway['config']
+            base = config.get('inferenceGatewayBaseUrl')
+            key = config.get('inferenceGatewayApiKey')
+            scheme = config.get('inferenceGatewayAuthScheme', 'bearer')
+            credential_kind = config.get('inferenceCredentialKind', 'static')
+            configured = []
+            native_models = config.get('inferenceModels')
+            for entry in native_models if isinstance(native_models, list) else []:
+                identifier = entry if isinstance(entry, str) else entry.get('name') if isinstance(entry, dict) else None
+                if isinstance(identifier, str) and identifier:
+                    configured.append({'id': identifier, 'name': identifier, 'efforts': []})
+            parsed = parse.urlsplit(base) if isinstance(base, str) else None
+            static = (credential_kind == 'static' and isinstance(key, str) and bool(key)
+                      and scheme in ('bearer', 'x-api-key') and parsed is not None
+                      and (parsed.scheme == 'https' or parsed.scheme == 'http' and parsed.hostname in ('localhost', '127.0.0.1', '::1'))
+                      and bool(parsed.hostname) and not (parsed.username or parsed.password or parsed.query or parsed.fragment))
+            if static:
+                headers = ({'x-api-key': key} if scheme == 'x-api-key' else None)
+                try:
+                    rows = model_catalog(base, key, headers=headers)
+                    return {'models': rows, 'groups': [{'surface': 'api', 'source': 'upstream-api',
+                        'name': gateway.get('name') or 'Claude API', 'models': rows}]}
+                except ValueError:
+                    if not configured:
+                        raise
+            if configured:
+                notice = '上游模型目录暂不可用；以下是 Claude Desktop 当前配置的模型' if static else '以下是 Claude Desktop 当前配置的模型；此接入不支持直接查询上游目录'
+                return {'models': configured, 'groups': [{'surface': 'api', 'source': 'desktop-config',
+                    'name': gateway.get('name') or 'Claude API', 'models': configured, 'notice': notice}],
+                    **({'modelError': '上游模型目录刷新失败'} if static else {})}
+            return {'models': [], 'groups': [], 'notice': '当前 Claude Desktop API 接入未提供可读取的模型目录'}
 
     def public(self):
         with self.lock:

@@ -66,6 +66,27 @@ class ClaudeAccountSnapshots(unittest.TestCase):
                    'inferenceModels': [{'name': 'actual-upstream-model'}]})
         return config_id
 
+    def test_current_desktop_api_catalog_uses_native_gateway_key_and_preserves_upstream_efforts(self):
+        config_id = self.gateway('DESKTOP-GATEWAY-SECRET')
+        config_path = self.threep/'configLibrary'/(config_id+'.json')
+        config = json.loads(config_path.read_text())
+        config['inferenceGatewayBaseUrl'] = 'https://provider.test/v1'
+        self.write(config_path, config)
+        rows = [{'id': 'provider/model', 'name': 'Provider model', 'efforts': ['high'], 'defaultEffort': 'high'}]
+        with patch(MODULE+'model_catalog', return_value=rows) as query:
+            result = self.accounts.models()
+        query.assert_called_once_with('https://provider.test/v1', 'DESKTOP-GATEWAY-SECRET', headers=None)
+        self.assertEqual(result['groups'][0]['models'], rows)
+        self.assertEqual(result['groups'][0]['source'], 'upstream-api')
+
+    def test_official_desktop_catalog_has_no_invented_models_or_network_call(self):
+        with patch(MODULE+'model_catalog') as query:
+            result = self.accounts.models()
+        self.assertEqual(result['models'], [])
+        self.assertEqual(result['groups'], [])
+        self.assertIn('未提供可离线读取', result['notice'])
+        query.assert_not_called()
+
     def test_import_keeps_native_profile_and_excludes_conversations_and_cli(self):
         before = (self.home/'Cookies').read_bytes()
         identifier = self.save('Work')

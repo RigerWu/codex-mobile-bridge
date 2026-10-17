@@ -480,3 +480,9 @@ test('LAN HTTP list snapshots use the server identity without Web Crypto',async(
   assert.equal(ui.run("listAuthIdentity({authenticated:false,listCacheIdentity:'"+'c'.repeat(64)+"'})"),'');
   assert.equal(ui.run("listAuthIdentity({authenticated:true,listCacheIdentity:'unsafe'})"),'');
 });
+
+test('logout cache cleanup removes desktop provider snapshots with Codex snapshots',async()=>{
+  const sessionStore=new Map([['desktop-list-v1:secret:gateway:claude','private'],['codex-list-v1:secret:all','private'],['unrelated','keep']]);
+  const ui=await fixture({sessionStore,skipStartup:true});ui.run('clearListSnapshot()');
+  assert.deepEqual([...sessionStore], [['unrelated','keep']]);
+});

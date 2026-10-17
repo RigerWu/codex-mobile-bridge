@@ -345,6 +345,13 @@ class Catalog:
         except (OSError, sqlite3.DatabaseError):
             logger.warning('Could not invalidate persisted model cache', exc_info=True)
 
+    def stop_model_refresh(self):
+        self.allow_background_refresh = False
+        with self.model_refresh_lock:
+            for timer in self.model_timers.values():
+                timer.cancel()
+            self.model_timers.clear()
+
     def model_identity(self, cwd, provider):
         """Bind cached models to local/remote home, account and API configuration."""
         files = []

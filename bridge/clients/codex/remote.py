@@ -140,11 +140,19 @@ class RemoteCatalog:
         self.model_refreshing = set()
         self.model_timers = {}
         self.model_retry_at = {}
+        self.model_closed = False
 
     def invalidate_models(self):
         with self.lock:
             for kind in ('catalog', 'models'):
                 self.kind_caches.pop(kind, None)
+            for timer in self.model_timers.values():
+                timer.cancel()
+            self.model_timers.clear()
+
+    def stop_model_refresh(self):
+        with self.lock:
+            self.model_closed = True
             for timer in self.model_timers.values():
                 timer.cancel()
             self.model_timers.clear()
@@ -159,7 +167,7 @@ class RemoteCatalog:
         return source
 
     def _start_model_refresh(self, key, cwd, provider):
-        if key in self.model_refreshing or time.time() < self.model_retry_at.get(key, 0):
+        if self.model_closed or key in self.model_refreshing or time.time() < self.model_retry_at.get(key, 0):
             return
         self.model_refreshing.add(key)
         def update():
@@ -177,6 +185,8 @@ class RemoteCatalog:
         threading.Thread(target=update, daemon=True, name='ssh-model-refresh').start()
 
     def _schedule_model_refresh(self, key, cwd, provider, updated_at, retry=False, replace=False):
+        if self.model_closed:
+            return
         if replace and key in self.model_timers:
             self.model_timers.pop(key).cancel()
         if key in self.model_timers:

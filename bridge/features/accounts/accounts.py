@@ -438,6 +438,8 @@ class Accounts:
 
     def _schedule_api_model_refresh(self, row, identity, updated_at, replace=False):
         with self.lock:
+            if getattr(self.bridge, 'closed', None) is not None and self.bridge.closed.is_set():
+                return
             if replace and identity in self.api_model_timers:
                 self.api_model_timers.pop(identity).cancel()
             if identity in self.api_model_timers:
@@ -446,6 +448,8 @@ class Accounts:
             def due():
                 with self.lock:
                     self.api_model_timers.pop(identity, None)
+                    if getattr(self.bridge, 'closed', None) is not None and self.bridge.closed.is_set():
+                        return
                 try:
                     self.api_models(row, refresh=True)
                 except ValueError:

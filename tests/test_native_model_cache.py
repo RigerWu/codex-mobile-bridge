@@ -73,6 +73,24 @@ class NativeModelCacheTests(unittest.TestCase):
             self.bridge._native_models('thread', self.temp.name, 'openai')
         self.assertIsNone(self.bridge.native_model_store.read('identity-a'))
 
+    def test_api_catalog_failure_does_not_stamp_empty_models_as_fresh(self):
+        self.bridge.cli_sessions.get_kind.return_value = {
+            'models': [], 'modelSource': 'api', 'modelError': '无法核验 API 凭据'}
+        failed = self.bridge._native_models('thread', self.temp.name, 'custom')
+        self.assertEqual(failed['models'], [])
+        self.assertEqual(failed['modelError'], '无法核验 API 凭据')
+        self.assertNotIn('cache', failed)
+        self.assertIsNone(self.bridge.native_model_store.read('identity-a'))
+
+        self.bridge.native_model_store.write('identity-a', {
+            'models': [{'id': 'last-good'}], 'modelSource': 'api'})
+        previous = self.bridge.native_model_store.read('identity-a')[0]
+        retained = self.bridge._native_models('thread', self.temp.name, 'custom', refresh=True)
+        self.assertEqual(retained['models'][0]['id'], 'last-good')
+        self.assertEqual(retained['cache']['state'], 'stale')
+        self.assertEqual(retained['cache']['updatedAt'], previous)
+        self.assertEqual(self.bridge.native_model_store.read('identity-a')[0], previous)
+
     def test_native_identity_uses_account_and_config_without_model_list(self):
         bridge = self.bridge
         bridge.cli_sessions.client = SimpleNamespace(request=Mock(side_effect=lambda method, params, **kwargs:

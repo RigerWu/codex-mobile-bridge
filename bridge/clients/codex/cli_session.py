@@ -14,7 +14,7 @@ from pathlib import Path
 
 from bridge.clients.codex.app_server import (
     AppServerError, AppServerUnavailable, AppServerUnknownResult, AppServerUnsupported, CodexAppServer)
-from bridge.clients.codex.catalog import Catalog
+from bridge.clients.codex.catalog import Catalog, CatalogError
 from bridge.clients.codex.remote import RemoteStore, RemoteUnavailable
 from bridge.features.sessions.goal import GoalError, GoalUnavailable, GoalUnsupported, normalize_goal_result
 from bridge.features.sessions import linux_permissions
@@ -574,13 +574,36 @@ class CliSessions:
             profile = (config.get('profiles') or {}).get(config.get('profile')) or {}
             effective = {**config, **profile}
             custom = Catalog.custom_provider(effective, provider)
-            if not custom:
+            configured_catalog = (bool(effective.get('model_catalog_json')) and
+                                  provider == (effective.get('model_provider') or 'openai'))
+            if not custom and not configured_catalog:
                 account = self.client.request('account/read', {'refreshToken': False},
                                               replay_safe=True).get('account') or {}
                 custom = account.get('type') == 'apiKey'
-            if custom:
-                return {'kind': 'models', 'models': [], 'modelSource': 'api',
-                        'fastMode': {'allowed': False}, 'modelError': None,
+            if custom and not configured_catalog:
+                if self.alias is not None:
+                    return {'kind': 'models', 'models': [], 'modelSource': 'api',
+                        'fastMode': {'allowed': False},
+                        'modelError': '无法核验 SSH 原生 CLI 的 API 凭据环境，请手动填写模型 ID',
+                        'currentModel': state.get('latestModel'),
+                        'currentEffort': state.get('latestReasoningEffort')}
+                reader = Catalog(self.home, self.configured_cli, allow_background_refresh=False)
+                def metadata_request(method, params):
+                    try:
+                        return self.client.request(method, params, timeout=2, replay_safe=True)
+                    except AppServerError as exc:
+                        raise CatalogError('CLI 模型元数据暂不可用') from exc
+                catalog = reader.read_models(
+                    lambda method, params: self.client.request(method, params, replay_safe=True),
+                    cwd, provider, metadata_request=metadata_request, environment={})
+                models = [{'id': m['model'], 'name': m.get('displayName') or m['model'],
+                           'description': m.get('description', ''),
+                           'efforts': [e['reasoningEffort'] for e in m.get('supportedReasoningEfforts', [])],
+                           'defaultEffort': m.get('defaultReasoningEffort'),
+                           'isDefault': False, 'fastTier': None, 'defaultServiceTier': None}
+                          for m in catalog['models']]
+                return {'kind': 'models', 'models': models, 'modelSource': 'api',
+                        'fastMode': {'allowed': False}, 'modelError': catalog.get('modelError'),
                         'currentModel': state.get('latestModel'),
                         'currentEffort': state.get('latestReasoningEffort')}
             raw_models, cursor = [], None

@@ -122,9 +122,12 @@ class IntegrationTests(unittest.TestCase):
         # Path must fit macOS's 104-byte Unix socket limit; bind via relative path.
         self.original_path = self.root
         self.fixture = DesktopFixture(self.root)
+        rollout = self.root / 'sessions/fixture.jsonl'
+        rollout.parent.mkdir(parents=True)
+        rollout.write_text('')
         db = sqlite3.connect(str(self.root / 'state_5.sqlite'))
         db.execute('CREATE TABLE threads(id TEXT PRIMARY KEY, title TEXT, cwd TEXT, updated_at INT, archived INT, originator TEXT, source TEXT, rollout_path TEXT)')
-        db.execute('INSERT INTO threads VALUES(?,?,?,?,?,?,?,?)', (THREAD, 'Desktop test', '/workspace', 1, 0, 'Codex Desktop', 'vscode', 'unused'))
+        db.execute('INSERT INTO threads VALUES(?,?,?,?,?,?,?,?)', (THREAD, 'Desktop test', '/workspace', 1, 0, 'Codex Desktop', 'vscode', str(rollout)))
         db.commit()
         db.close()
         db.close()

@@ -79,7 +79,13 @@ class OfflineManagement(unittest.TestCase):
         self.assertEqual(len(responses), 3)
         self.assertTrue(all(response['ok'] for response in responses), responses)
         self.assertEqual(responses[0]['result']['accounts'], responses[1]['result']['accounts'])
-        self.assertEqual(responses[2]['result']['codex']['accounts'], responses[1]['result']['accounts'])
+        codex_accounts = responses[2]['result']['codex']['accounts']
+        self.assertEqual(len(codex_accounts), 1)
+        identity = codex_accounts[0]['modelCatalogIdentity']
+        self.assertEqual(len(identity), 64)
+        self.assertTrue(all(character in '0123456789abcdef' for character in identity))
+        self.assertEqual([{key: value for key, value in row.items() if key != 'modelCatalogIdentity'}
+                          for row in codex_accounts], responses[1]['result']['accounts'])
         self.assertNotIn('private-stream-key', result.stdout)
         self.assertFalse((self.root/'gateway-control.json').exists())
 

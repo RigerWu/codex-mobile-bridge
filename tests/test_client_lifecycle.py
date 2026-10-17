@@ -45,6 +45,8 @@ class ClientLifecycleTests(unittest.TestCase):
             patcher.start(); self.addCleanup(patcher.stop)
         self.manager = DesktopSessions(self.root, self.bridge, gateway_running=True)
         self.addCleanup(self.manager.close)
+        # Lifecycle store mocks do not model credential files or their locks.
+        self.manager._account_model_identity = Mock(return_value='fixture-account')
         discovered = {}
         for provider in ('codex', 'claude', 'deepseek'):
             executable = self.root/provider; executable.write_bytes(b'fixture'); executable.chmod(0o700)
@@ -570,6 +572,7 @@ class ClientLifecycleTests(unittest.TestCase):
         result = self.manager.client_accounts('claude', {'operation': 'switch', 'id': 'other'})
         self.assertEqual(calls, ['stop', 'restore', 'launch'])
         self.assertTrue(result['canSwitch'])
+        self.assertEqual(result['modelCatalogIdentity'], 'fixture-account')
         store.commit.assert_called_once_with('transaction')
 
     def test_optional_claude_cli_sync_reports_partial_failure_after_desktop_verified(self):

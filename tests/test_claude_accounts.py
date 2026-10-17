@@ -144,6 +144,45 @@ class ClaudeAccountSnapshots(unittest.TestCase):
             thread.join(2)
             server.server_close()
 
+    def test_slow_model_catalog_does_not_block_account_panel_snapshot(self):
+        config_id = self.gateway('FIXTURE-KEY')
+        path = self.threep/'configLibrary'/(config_id+'.json')
+        config = json.loads(path.read_text())
+        config['inferenceGatewayBaseUrl'] = 'https://provider.test/v1'
+        self.write(path, config)
+        entered, release, panel_done = threading.Event(), threading.Event(), threading.Event()
+        errors = []
+        def slow_catalog(*args, **kwargs):
+            entered.set()
+            if not release.wait(3):
+                raise AssertionError('catalog fixture timed out')
+            return [{'id': 'fixture-model', 'name': 'Fixture', 'efforts': []}]
+        def read_models():
+            try:
+                self.accounts.models()
+            except Exception as exc:
+                errors.append(exc)
+        def read_panel():
+            try:
+                self.accounts.public()
+            except Exception as exc:
+                errors.append(exc)
+            finally:
+                panel_done.set()
+        with patch(MODULE+'model_catalog', side_effect=slow_catalog):
+            model_thread = threading.Thread(target=read_models)
+            model_thread.start()
+            self.assertTrue(entered.wait(1))
+            panel_thread = threading.Thread(target=read_panel)
+            panel_thread.start()
+            try:
+                self.assertTrue(panel_done.wait(.5), 'account panel waited on the upstream model request')
+            finally:
+                release.set()
+                model_thread.join(3)
+                panel_thread.join(3)
+        self.assertEqual(errors, [])
+
     def test_official_desktop_catalog_has_no_invented_models_or_network_call(self):
         with patch(MODULE+'model_catalog') as query:
             result = self.accounts.models()

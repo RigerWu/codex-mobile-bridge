@@ -38,6 +38,12 @@ _MANAGED_API_ROUTING = {
 }
 
 
+class ClaudeControlRejected(BridgeUnavailable):
+    def __init__(self, reason):
+        super().__init__('Claude Code 控制请求未确认，请检查原会话')
+        self.reason = reason
+
+
 def managed_api_env(source=None):
     """Keep ambient provider credentials and routing out of a selected API profile."""
     source = os.environ if source is None else source
@@ -104,21 +110,41 @@ def _applied_settings(owned):
     return settings
 
 
+def _has_resolved_models(catalog):
+    # 2.1.168 reports effort levels but not resolved IDs, and rejects list_models.
+    return any(isinstance(item, dict) and isinstance(item.get('resolvedModel'), str)
+               and item['resolvedModel'] for item in catalog.get('models') or [])
+
+
+def _cli_selection(owned, public):
+    applied = _applied_settings(owned)['applied']
+    return {'currentModel': applied['model'], 'currentEffort': applied.get('effort') or ''}
+
+
 def _cli_catalog(owned, public, refresh=False):
     if refresh:
-        models = owned.control({'subtype': 'list_models'}).get('models')
+        if getattr(owned, 'model_list_unsupported', False):
+            raise BridgeUnavailable('当前 Claude Code 版本不支持刷新模型目录')
+        try:
+            models = owned.control({'subtype': 'list_models'}).get('models')
+        except ClaudeControlRejected as exc:
+            if exc.reason != 'Unsupported control request subtype: list_models':
+                raise
+            owned.model_list_unsupported = True
+            raise BridgeUnavailable('当前 Claude Code 版本不支持刷新模型目录') from None
         if not isinstance(models, list):
             raise BridgeUnavailable('Claude Code 未返回模型列表')
         owned.catalog['models'] = models
     rows = _model_catalog(owned.catalog)
     try:
-        applied = _applied_settings(owned)['applied']
+        selection = _cli_selection(owned, public)
+        verified = True
     except BridgeUnavailable:
-        applied = {}
-    return {'models': rows, 'currentModel': applied.get('model') or public['model'],
-            'currentEffort': applied.get('effort') or '',
-            'capabilities': {'models': bool(rows and applied),
-                             'effort': bool(applied and any(row['efforts'] for row in rows)),
+        selection = {'currentModel': public['model'], 'currentEffort': ''}
+        verified = False
+    return {'models': rows, **selection,
+            'capabilities': {'models': bool(rows and verified),
+                             'effort': bool(verified and any(row['efforts'] for row in rows)),
                              'skills': True}, 'skills': _skill_catalog(owned.catalog)}
 
 
@@ -141,7 +167,8 @@ def _set_cli_settings(owned, body):
                        'settings': {'effortLevel': None if effort == 'auto' else effort}})
     settings = _applied_settings(owned)
     applied = settings['applied']
-    if applied.get('model') != expected or (effort not in (None, 'auto') and applied.get('effort') != effort):
+    if (_has_resolved_models(owned.catalog) and applied.get('model') != expected or
+            effort not in (None, 'auto') and applied.get('effort') != effort):
         raise BridgeUnavailable('Claude Code 未确认模型或思考强度设置，请刷新检查')
     sources = settings.get('sources')
     if effort == 'auto' and (not isinstance(sources, list) or
@@ -395,6 +422,8 @@ class _Owned:
             while rid not in self.responses and self.process.poll() is None and time.monotonic() < deadline:
                 self.condition.wait(max(0, deadline-time.monotonic()))
             response = self.responses.pop(rid, None)
+        if response and response.get('subtype') == 'error':
+            raise ClaudeControlRejected(response.get('error'))
         if not response or response.get('subtype') != 'success':
             raise BridgeUnavailable('Claude Code 控制请求未确认，请检查原会话')
         return response.get('response') or {}

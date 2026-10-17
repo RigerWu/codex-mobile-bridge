@@ -15,7 +15,7 @@ from contextlib import contextmanager, nullcontext
 from concurrent.futures import Future
 
 from bridge.clients.claude.adapter import Claude
-from bridge.clients.claude.cli_session import ResumePreflightBlocked
+from bridge.clients.claude.cli_session import ResumePreflightBlocked, _cli_selection
 from bridge.clients.deepseek.adapter import DeepSeek, BRIDGE_REVISION, LIFECYCLE_REVISIONS, UPDATE_REASON
 from bridge.clients.errors import BridgeUnavailable
 from bridge.clients.codex.catalog import ModelStore, MODEL_REFRESH_SECONDS
@@ -239,6 +239,16 @@ class DesktopSessions:
         return bool(adapter.desktop and adapter.desktop.connected and not adapter.setup_cancel.is_set()
                     and not adapter.connection_probe_failed and sid in adapter.index)
 
+    def _model_refresh_unsupported(self, provider, sid):
+        if provider != 'claude':
+            return False
+        adapter = self.adapters[provider]
+        with adapter.cli.lock, adapter.remote_cli.lock:
+            local = adapter.cli.index.get(sid)
+            owned = (adapter.cli.owned.get(local['nativeId']) if local else
+                     adapter.remote_cli.owned.get(sid))
+        return bool(owned and getattr(owned, 'model_list_unsupported', False))
+
     def _model_selection(self, provider, sid):
         adapter = self.adapters[provider]
         if provider == 'claude':
@@ -249,16 +259,12 @@ class DesktopSessions:
                 with adapter.cli.lock:
                     owned = adapter.cli.owned.get(local['nativeId'])
                     public = adapter.cli._public(local)
-                applied = owned.control({'subtype': 'get_settings'}).get('applied') if owned else None
-                return {'currentModel': applied.get('model') if isinstance(applied, dict) else public.get('model'),
-                        'currentEffort': applied.get('effort') or '' if isinstance(applied, dict) else ''}
+                return _cli_selection(owned, public) if owned else {'currentModel': public.get('model'), 'currentEffort': ''}
             if remote:
                 with adapter.remote_cli.lock:
                     owned = adapter.remote_cli.owned.get(sid)
                     public = adapter.remote_cli._public(remote)
-                applied = owned.control({'subtype': 'get_settings'}).get('applied') if owned else None
-                return {'currentModel': applied.get('model') if isinstance(applied, dict) else public.get('model'),
-                        'currentEffort': applied.get('effort') or '' if isinstance(applied, dict) else ''}
+                return _cli_selection(owned, public) if owned else {'currentModel': public.get('model'), 'currentEffort': ''}
         return self._read(provider, 'catalog', sid, {'section': 'selection'})
 
     def _cached_model_result(self, provider, sid, identity, persisted, *, error=None, unavailable=False):
@@ -278,6 +284,8 @@ class DesktopSessions:
                            'updatedAt': persisted[0]}
         if error:
             result['modelError'] = error
+            if error.startswith('当前 Claude Code 版本不支持刷新模型目录'):
+                result['notice'] = error
         if self._model_identity(provider, sid) != identity:
             raise BridgeUnavailable('客户端账号或配置已变化，请重试')
         return result
@@ -290,9 +298,10 @@ class DesktopSessions:
         except (OSError, sqlite3.DatabaseError, ValueError):
             persisted = None
         if persisted and not refresh:
-            if self._model_live(provider, sid) and time.time() - persisted[0] >= MODEL_REFRESH_SECONDS:
+            if (self._model_live(provider, sid) and not self._model_refresh_unsupported(provider, sid)
+                    and time.time() - persisted[0] >= MODEL_REFRESH_SECONDS):
                 self._start_model_refresh(provider, sid, identity)
-            elif self._model_live(provider, sid):
+            elif self._model_live(provider, sid) and not self._model_refresh_unsupported(provider, sid):
                 self._schedule_model_refresh(provider, sid, identity, persisted[0])
             return self._cached_model_result(provider, sid, identity, persisted)
         with self.model_lock:
@@ -307,9 +316,12 @@ class DesktopSessions:
                     return self._cached_model_result(provider, sid, identity, persisted)
             try:
                 value = self._read(provider, 'catalog', sid, body)
-            except (OSError, ValueError, BridgeUnavailable):
+            except (OSError, ValueError, BridgeUnavailable) as exc:
                 if persisted:
-                    return self._cached_model_result(provider, sid, identity, persisted, error='模型目录刷新失败，已保留上次结果')
+                    error = ('当前 Claude Code 版本不支持刷新模型目录，已保留上次结果'
+                             if str(exc) == '当前 Claude Code 版本不支持刷新模型目录' else
+                             '模型目录刷新失败，已保留上次结果')
+                    return self._cached_model_result(provider, sid, identity, persisted, error=error)
                 raise
             if self._model_identity(provider, sid) != identity:
                 raise BridgeUnavailable('客户端账号或配置已变化，请重试')
@@ -331,7 +343,8 @@ class DesktopSessions:
 
     def _start_model_refresh(self, provider, sid, identity):
         with self.model_lock:
-            if (self.closed.is_set() or not self._model_live(provider, sid) or identity in self.model_refreshing or
+            if (self.closed.is_set() or not self._model_live(provider, sid) or
+                    self._model_refresh_unsupported(provider, sid) or identity in self.model_refreshing or
                     time.time() < self.model_retry_at.get(identity, 0)):
                 return
             self.model_refreshing.add(identity)
@@ -345,7 +358,8 @@ class DesktopSessions:
                 with self.model_lock:
                     self.model_retry_at[identity] = time.time() + 60
                     self.model_refreshing.discard(identity)
-                if not self.closed.is_set() and self._model_live(provider, sid) and self._model_identity(provider, sid) == identity:
+                if (not self.closed.is_set() and self._model_live(provider, sid) and
+                        not self._model_refresh_unsupported(provider, sid) and self._model_identity(provider, sid) == identity):
                     try:
                         record = self.model_store.read(identity)
                     except (OSError, sqlite3.DatabaseError, ValueError):
@@ -357,13 +371,14 @@ class DesktopSessions:
         with self.model_lock:
             if replace and identity in self.model_timers:
                 self.model_timers.pop(identity).cancel()
-            if self.closed.is_set() or identity in self.model_timers:
+            if self.closed.is_set() or self._model_refresh_unsupported(provider, sid) or identity in self.model_timers:
                 return
             delay = max(60 if retry else 1, updated_at + MODEL_REFRESH_SECONDS - time.time())
             def due():
                 with self.model_lock:
                     self.model_timers.pop(identity, None)
-                if not self.closed.is_set() and self._model_live(provider, sid) and self._model_identity(provider, sid) == identity:
+                if (not self.closed.is_set() and self._model_live(provider, sid) and
+                        not self._model_refresh_unsupported(provider, sid) and self._model_identity(provider, sid) == identity):
                     self._start_model_refresh(provider, sid, identity)
             timer = threading.Timer(delay, due)
             timer.daemon = True

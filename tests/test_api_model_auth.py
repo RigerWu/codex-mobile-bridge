@@ -7,6 +7,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 from bridge.clients.codex.catalog import Catalog
+from bridge.features.accounts.models import model_catalog
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -91,6 +92,21 @@ class ApiModelAuthTests(unittest.TestCase):
         public = self.reader.get_kind('models', self.home)
         self.assertEqual(public['models'][0]['efforts'], [])
         self.assertIsNone(public['models'][0]['defaultEffort'])
+
+    def test_claude_explicit_effort_capabilities_exclude_unsupported_levels_and_retired_models(self):
+        payload = {'data': [
+            {'id': 'available', 'lifecycle': 'active', 'capabilities': {'effort': {'supported': True,
+                'low': {'supported': True}, 'medium': {'supported': False}, 'high': {'supported': True},
+                'xhigh': {'supported': False}, 'max': {'supported': True}}}},
+            {'id': 'no-effort', 'capabilities': {'effort': {'supported': False, 'high': {'supported': True}}}},
+            {'id': 'retired', 'lifecycle': 'retired', 'capabilities': {'effort': {'supported': True,
+                'high': {'supported': True}}}}]}
+        with patch('bridge.features.accounts.models.build_opener') as factory:
+            factory.return_value.open.return_value = io.BytesIO(json.dumps(payload).encode())
+            rows = model_catalog('https://fixture.invalid/v1', 'fixture-key')
+        self.assertEqual([row['id'] for row in rows], ['available', 'no-effort'])
+        self.assertEqual(rows[0]['efforts'], ['low', 'high', 'max'])
+        self.assertEqual(rows[1]['efforts'], [])
 
     def test_native_efforts_only_enrich_exact_available_ids_and_preserve_upstream_metadata(self):
         payload = {'data': [

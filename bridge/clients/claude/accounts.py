@@ -370,9 +370,13 @@ class ClaudeAccounts:
                       and (parsed.scheme == 'https' or parsed.scheme == 'http' and parsed.hostname in ('localhost', '127.0.0.1', '::1'))
                       and bool(parsed.hostname) and not (parsed.username or parsed.password or parsed.query or parsed.fragment))
             if static:
-                headers = ({'x-api-key': key} if scheme == 'x-api-key' else None)
+                url = base.rstrip('/')
+                if not parsed.path.rstrip('/').endswith('/v1'):
+                    url += '/v1'
+                auth = {'Authorization': 'Bearer '+key} if scheme == 'bearer' else {'x-api-key': key}
+                headers = {**auth, 'anthropic-version': '2023-06-01'}
                 try:
-                    rows = model_catalog(base, key, headers=headers)
+                    rows = model_catalog(url, key, headers=headers)
                     return {'models': rows, 'groups': [{'surface': 'api', 'source': 'upstream-api',
                         'name': gateway.get('name') or 'Claude API', 'models': rows}]}
                 except ValueError:

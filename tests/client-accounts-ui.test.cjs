@@ -1,15 +1,15 @@
 'use strict';
 const test=require('node:test'),assert=require('node:assert/strict'),fs=require('node:fs'),vm=require('node:vm');
-function fixture({desktop=false,provider='deepseek'}={}){
+function fixture({desktop=false,provider='deepseek',toolbar=false}={}){
   function node(tag){return {tag,children:[],dataset:{},textContent:'',hidden:false,disabled:false,attributes:{},classList:{add(){}},append(...nodes){this.children.push(...nodes);},replaceChildren(...nodes){this.children=nodes;},setAttribute(key,value){this.attributes[key]=value;},closest(){return null;},querySelectorAll(selector){return this.children.flatMap(child=>[...(selector==='[data-i18n]'&&child.dataset.i18n?[child]:[]),...child.querySelectorAll(selector)]);}};}
-  const root=node('div'),listeners={},timers=new Map(),calls=[],prompts=[],updates=[];let time=1000000,tid=0,visible=true,confirmed=true,value={accounts:[],activeId:null,canSwitch:true},handler=async()=>value,readHandler=async()=>value;
+  const root=node('div'),outerToolbar=toolbar?node('div'):null,listeners={},timers=new Map(),calls=[],prompts=[],updates=[];let time=1000000,tid=0,visible=true,confirmed=true,value={accounts:[],activeId:null,canSwitch:true},handler=async()=>value,readHandler=async()=>value;
   const document={hidden:false,documentElement:{},createElement:node,querySelectorAll:()=>[],addEventListener:(type,fn)=>(listeners[type]??=[]).push(fn),removeEventListener:(type,fn)=>listeners[type]=listeners[type].filter(row=>row!==fn),dispatchEvent(event){for(const fn of listeners[event.type]||[])fn(event);}};
   class Clock extends Date{static now(){return time;}}
   const context=vm.createContext({document,Date:Clock,CustomEvent:class{constructor(type){this.type=type;}},localStorage:{getItem(){return null;},setItem(){}},window:{confirm(message){prompts.push(message);return confirmed;}},setTimeout(fn,ms){timers.set(++tid,{fn,due:time+ms});return tid;},clearTimeout:id=>timers.delete(id)});
   for(const path of ['web/shared/i18n.js','web/features/accounts/client-accounts.js'])vm.runInContext(fs.readFileSync(path,'utf8'),context);
-  const Panel=vm.runInContext('DesktopClientAccountsPanel',context),panel=new Panel({root,provider,desktop,read:()=>{calls.push({action:'list'});return readHandler();},request:body=>{calls.push(body);return handler(body);},readModels:()=>handler({action:'models'}),visible:()=>visible,onUpdate:result=>updates.push(result)});
+  const Panel=vm.runInContext('DesktopClientAccountsPanel',context),panel=new Panel({root,provider,desktop,toolbar:outerToolbar,read:()=>{calls.push({action:'list'});return readHandler();},request:body=>{calls.push(body);return handler(body);},readModels:()=>handler({action:'models'}),visible:()=>visible,onUpdate:result=>updates.push(result)});
   const all=node=>[node,...node.children.flatMap(all)];
-  return {panel,root,calls,prompts,updates,timers,setValue:next=>value=next,setHandler:next=>handler=next,setRead:next=>readHandler=next,setVisible:next=>visible=next,confirm:next=>confirmed=next,advance:async ms=>{time+=ms;for(const [id,timer]of [...timers])if(timer.due<=time){timers.delete(id);await timer.fn();}},tick:ms=>time+=ms,now:()=>time,all:()=>all(root),text:()=>all(root).map(row=>row.textContent).join('\n'),english:()=>vm.runInContext("BridgeI18n.setLanguage('en')",context)};
+  return {panel,root,outerToolbar,calls,prompts,updates,timers,setValue:next=>value=next,setHandler:next=>handler=next,setRead:next=>readHandler=next,setVisible:next=>visible=next,confirm:next=>confirmed=next,advance:async ms=>{time+=ms;for(const [id,timer]of [...timers])if(timer.due<=time){timers.delete(id);await timer.fn();}},tick:ms=>time+=ms,now:()=>time,all:()=>all(root),text:()=>all(root).map(row=>row.textContent).join('\n'),english:()=>vm.runInContext("BridgeI18n.setLanguage('en')",context)};
 }
 const row=(id,kind='account',usage)=>({id,name:id,kind,usage});
 const snapshot=(accounts,activeIds=['current'])=>({accounts,activeId:activeIds[0],activeIds,current:{name:'Current desktop access'},canSwitch:true});
@@ -62,7 +62,33 @@ test('closing a panel discards its late account response and refresh timers',asy
 test('DSH wallet amounts stay separate from percent quota and never invent missing balances',()=>{
   const ui=fixture();ui.panel.accept(snapshot([row('current','account',{status:'ready',limits:[],balance:{wallets:[{currency:'CNY',remaining:'12.30',toppedUp:'10.00',granted:'2.30'},{currency:'USD',remaining:'4.00'}]}})]));
   assert.match(ui.text(),/CNY 12.30/);assert.match(ui.text(),/USD 4.00/);assert.match(ui.text(),/10.00/);assert.equal(ui.all().filter(node=>node.tag==='progress').length,0);
-  ui.panel.accept(snapshot([row('current','account',{status:'unsupported',limits:[]})]));assert.match(ui.text(),/暂未提供额度信息/);assert.doesNotMatch(ui.text(),/0%|12.30|USD/);
+  const card=ui.panel.rows.children[0];assert.match(card.className,/accounts-client-card is-current/);assert.match(card.children[1].className,/accounts-client-usage/);
+  assert.equal(card.children[1].children[0].children[0].textContent,'账户余额');assert.equal(card.children[1].children[0].children[1].textContent,'刷新余额');
+  ui.panel.accept(snapshot([row('current','account',{status:'unsupported',limits:[]})]));assert.match(ui.text(),/余额信息暂不可用/);assert.doesNotMatch(ui.text(),/0%|12.30|USD/);
+});
+test('client cards keep provider usage and API actions distinct',async()=>{
+  const claude=fixture({provider:'claude'});claude.panel.accept(snapshot([row('current'),row('api','api')]));
+  assert.match(claude.panel.rows.children[0].children[1].className,/accounts-client-usage/);
+  assert.equal(claude.panel.rows.children[0].children[1].children[0].children[1].textContent,'查看剩余额度');
+  assert.equal(claude.panel.rows.children[1].children.length,2,'API card has identity and actions, no invented quota');
+  const dsh=fixture();dsh.panel.accept(snapshot([row('current'),row('api','api')]));
+  assert.equal(dsh.panel.rows.children[1].children.length,2);
+  dsh.english();assert.match(dsh.text(),/Refresh balance/);assert.doesNotMatch(dsh.text(),/[\u4e00-\u9fff]/);
+  await dsh.panel.rows.children[0].children[1].children[0].children[1].onclick();
+  assert.deepEqual(JSON.parse(JSON.stringify(dsh.calls)),[{action:'details',id:'current',refresh:true}]);
+});
+test('DSH API wallet appears only when the backend supplies a balance',()=>{
+  const ui=fixture();ui.panel.accept(snapshot([row('api','api',{status:'ready',balance:{wallets:[{currency:'CNY',remaining:'9.50'}]}})],['api']));
+  assert.match(ui.text(),/CNY 9.50/);assert.equal(ui.panel.rows.children[0].children.length,3);
+  ui.panel.accept(snapshot([row('api','api',{status:'unsupported'})],['api']));
+  assert.equal(ui.panel.rows.children[0].children.length,2);assert.doesNotMatch(ui.text(),/CNY 9.50|余额信息暂不可用/);
+});
+test('external toolbar places refresh beside the title and models below cards',async()=>{
+  const ui=fixture({toolbar:true});ui.setValue(snapshot([row('current')]));ui.panel.accept(snapshot([row('current')]));
+  assert.equal(ui.outerToolbar.children.length,1);assert.equal(ui.outerToolbar.children[0].textContent,'刷新');
+  assert.equal(ui.root.children.some(node=>node.className==='accounts-toolbar'),false);
+  assert.ok(ui.root.children.indexOf(ui.panel.modelsButton)>ui.root.children.indexOf(ui.panel.rows));
+  await ui.outerToolbar.children[0].onclick();assert.deepEqual(ui.calls.map(call=>call.action),['list','details']);
 });
 test('Claude enrollment confirms restart while DSH API import remains a read-only native snapshot',async()=>{
   const ui=fixture({desktop:true,provider:'claude'});ui.setValue(snapshot([row('current')]));ui.panel.accept(snapshot([row('current')]));ui.confirm(false);await ui.panel.importCurrent();assert.equal(ui.calls.length,0);

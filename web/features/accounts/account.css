@@ -79,6 +79,15 @@
 @media(pointer:coarse){.account-reset-dialog .account-card>button,.account-reset-dialog .account-heading button{min-height:44px}}
 
 .accounts-panel .accounts-import-name{max-width:320px}
+.accounts-panel .accounts-client-card .accounts-identity{display:block}
+.accounts-panel .accounts-client-card .accounts-name>p{margin:2px 0 0}
+.accounts-panel .accounts-client-usage{display:block;margin:14px 0 0}
+.accounts-client-usage-heading{display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:10px;font-size:13px}
+.accounts-panel .accounts-client-usage-refresh{flex:none;margin:0;padding:6px 10px;font-size:12px}
+.accounts-client-usage-results{display:grid;gap:10px;min-width:0}
+.accounts-client-usage-results .accounts-window{width:100%;max-width:none;min-width:0}
+.accounts-client-usage-results .accounts-window strong{text-align:right;white-space:nowrap}
+.accounts-client-usage-results .account-updated{margin:0}
 .accounts-client-editor{margin-top:18px;padding:18px;border:1px solid var(--line,#dfe3eb);border-radius:12px}.accounts-client-editor label{display:grid;gap:6px;margin:12px 0}.accounts-client-editor input,.accounts-client-editor textarea,.accounts-client-editor select{box-sizing:border-box;width:100%;font:inherit}.accounts-client-editor textarea{resize:vertical;min-height:80px}.accounts-client-editor>button{margin-right:8px}
 
 .picker .cli-access-panel>h2,.account-compact .cli-access-panel>h2{display:none}

@@ -95,13 +95,17 @@ class InfoTests(unittest.TestCase):
     def test_inactive_official_usage_models_are_isolated_and_sanitized(self):
         row,_=self.official();before=self.manager.snapshot_files();info=self.manager.info
         info.read_identity=Mock(return_value={'kind':'api','name':'other','key':'unrelated','baseUrl':'https://other.test'})
-        with patch('bridge.features.accounts.accounts.ManagedRPC') as rpc:
+        with patch('bridge.features.accounts.accounts.ManagedRPC') as rpc, \
+             patch.object(self.bridge.catalog_reader, 'get_kind', create=True, return_value={
+                 'models':[{'id':'fixture-model','name':'Fixture model'}],
+                 'cache':{'state':'fresh','updatedAt':123}}):
             rpc.return_value.__enter__.return_value=self.rpc()
             info.read(row,'usage');info.read(row,'models')
         result=self.manager.public();data=result['accounts'][0]['details']
         self.assertEqual(data['usage']['limits'][0]['windows'][0]['remainingPercent'],75)
         self.assertEqual(data['usage']['resetCredits']['availableCount'],2)
         self.assertEqual(data['models']['models'],[{'id':'fixture-model','name':'Fixture model'}])
+        self.assertEqual(data['models']['cache']['updatedAt'],123)
         self.assertEqual(self.manager.snapshot_files(),before)
         self.assertNotIn('access-fixture',json.dumps(result));self.assertNotIn('refresh-fixture',json.dumps(result))
 

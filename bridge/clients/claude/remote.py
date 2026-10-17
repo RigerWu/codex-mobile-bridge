@@ -203,7 +203,7 @@ class RemoteClaudeCli:
 
     def _public(self, row):
         value = {key: item for key, item in row.items() if key not in
-                 ('events', 'origin', 'alias', 'permissionKnown')}
+                 ('events', 'origin', 'alias', 'permissionKnown', 'projectConfig')}
         value.update(context_fields(row.get('events') or []))
         owned = self.owned.get(row['id'])
         live = bool(owned and owned.origin == row['origin'] and owned.process.poll() is None and not owned.error)

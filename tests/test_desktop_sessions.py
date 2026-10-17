@@ -81,15 +81,63 @@ class Adapters(unittest.TestCase):
             refreshed = second.call('deepseek', 'catalog', 'session-one', {'section': 'models', 'refresh': True})
             self.assertEqual(refreshed['models'][0]['id'], 'provider/second')
             second_adapter.call.assert_called_once()
+            second_adapter.call.return_value = {'models': [], 'capabilities': {'models': False}}
+            retained = second.call('deepseek', 'catalog', 'session-one', {'section': 'models', 'refresh': True})
+            self.assertEqual(retained['models'], refreshed['models'])
+            self.assertEqual(retained['cache']['state'], 'stale')
+            self.assertFalse(retained['capabilities']['models'])
             second_adapter.call.side_effect = ValueError('temporary upstream failure')
             self.assertEqual(second.call('deepseek', 'catalog', 'session-one', {'section': 'models', 'refresh': True})['models'], refreshed['models'])
             second_adapter.call.side_effect = None
-            second_adapter.directory.mkdir(parents=True, exist_ok=True)
-            (second_adapter.directory/'connection.json').write_text('{"token":"different"}')
+            second_adapter.home = self.root/'changed-home'
             second_adapter.call.return_value = {'models': [{'id': 'provider/new-account'}], 'capabilities': {'models': True}}
             self.assertEqual(second.call('deepseek', 'catalog', 'session-one', body)['models'][0]['id'], 'provider/new-account')
         finally:
             second.close()
+
+    def test_account_models_share_cache_and_keep_last_success_on_refresh_failure(self):
+        manager = self.manager
+        manager._account_model_identity = Mock(return_value='account-one')
+        manager._account_model_live = Mock(return_value=False)
+        manager._read = Mock(return_value={'models':[{'id':'first'}], 'groups':[]})
+        first = manager.control({'action':'account', 'provider':'claude'})
+        self.assertEqual(first['cache']['state'], 'fresh')
+        self.assertEqual(manager.call('claude', 'account')['models'], first['models'])
+        manager._read.assert_called_once()
+        manager._read.side_effect = ValueError('upstream unavailable')
+        stale = manager.call('claude', 'account', body={'refresh':True})
+        self.assertEqual(stale['models'], first['models'])
+        self.assertEqual(stale['cache']['updatedAt'], first['cache']['updatedAt'])
+        self.assertEqual(stale['cache']['state'], 'stale')
+        self.assertTrue(stale['modelError'])
+        manager._account_model_identity.return_value = 'account-two'
+        manager._read.side_effect = None
+        manager._read.return_value = {'models':[{'id':'second'}], 'groups':[]}
+        self.assertEqual(manager.call('claude', 'account')['models'][0]['id'], 'second')
+
+    def test_account_change_during_model_read_cannot_publish_old_catalog(self):
+        manager = self.manager
+        manager._account_model_identity = Mock(return_value='old-account')
+        def changed(*args):
+            manager._account_model_identity.return_value = 'new-account'
+            return {'models':[{'id':'old-model'}]}
+        manager._read = Mock(side_effect=changed)
+        with self.assertRaisesRegex(ValueError, '账号或配置已变化'):
+            manager.call('deepseek', 'account')
+        self.assertIsNone(manager.model_store.read('old-account'))
+
+    def test_cached_picker_overlays_live_selection_without_listing_models(self):
+        manager = self.manager
+        manager._model_identity = Mock(return_value='shared-access')
+        manager._model_live = Mock(return_value=True)
+        manager._model_selection = Mock(return_value={'currentModel':'second', 'currentEffort':'high'})
+        manager._read = Mock(return_value={'models':[{'id':'first'}, {'id':'second'}],
+                                          'currentModel':'first', 'capabilities':{'models':True}})
+        manager.call('claude', 'catalog', 'first-session', {'section':'models'})
+        cached = manager.call('claude', 'catalog', 'second-session', {'section':'models'})
+        self.assertEqual(cached['currentModel'], 'second')
+        self.assertEqual(cached['currentEffort'], 'high')
+        manager._read.assert_called_once()
 
     def test_client_switch_requires_configuration_and_persists(self):
         self.manager.adapters['claude'].cli.status = Mock(return_value={
@@ -184,6 +232,16 @@ class HttpAdapters(unittest.TestCase):
         manager.call.assert_called_with('claude', 'catalog', 'native-id', {'section': 'models', 'refresh': False})
         self.assertEqual(self.request('GET', route + '&refresh=true', headers=headers)[0], 200)
         manager.call.assert_called_with('claude', 'catalog', 'native-id', {'section': 'models', 'refresh': True})
+
+    def test_account_model_http_distinguishes_open_from_explicit_refresh(self):
+        manager = self.server.desktop_sessions = Mock()
+        manager.call.return_value = {'models': [{'id':'fixture'}], 'cache': {'state':'fresh', 'updatedAt':123}}
+        headers = self.login()
+        route = '/api/desktop-sessions/deepseek/account'
+        self.assertEqual(self.request('GET', route, headers=headers)[0], 200)
+        manager.call.assert_called_with('deepseek', 'account', None, {'refresh': False})
+        self.assertEqual(self.request('GET', route+'?refresh=true', headers=headers)[0], 200)
+        manager.call.assert_called_with('deepseek', 'account', None, {'refresh': True})
 
     def test_force_desktop_choice_requires_auth_csrf_and_exact_payload(self):
         manager = self.server.desktop_sessions = Mock()

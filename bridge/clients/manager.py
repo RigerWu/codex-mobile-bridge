@@ -1,5 +1,6 @@
 """Allowlisted desktop integrations with durable at-most-once mutation receipts."""
 import hashlib
+import os
 import json
 import sqlite3
 import threading
@@ -178,23 +179,108 @@ class DesktopSessions:
 
     def _model_identity(self, provider, sid):
         adapter = self.adapters[provider]
-        paths = [self.config_path, adapter.directory/'connection.json']
+        paths = []
+        scope = None
         if provider == 'claude':
-            paths.append(adapter.directory/'discovery.json')
-            profile = adapter.cli.profile_resolver()
-            if profile:
+            with adapter.cli.lock, adapter.remote_cli.lock:
+                local = adapter.cli.index.get(sid)
+                remote = adapter.remote_cli.index.get(sid)
+            if remote:
+                host = adapter.remote_cli.hosts.hosts().get(remote['host']) if adapter.remote_cli.hosts else None
+                if not host or host['alias'] != remote['alias']:
+                    raise BridgeUnavailable('SSH 主机配置已变化')
+                scope = ('ssh-cli', remote['host'], remote['alias'], remote['origin'], remote['cwd'],
+                         remote.get('projectConfig'))
+            elif local:
+                profile = adapter.cli.profile_resolver()
+                if not profile or profile['origin'] != local['origin']:
+                    raise BridgeUnavailable('Claude Code 接入已变化')
+                directory = Path(profile['directory'])
+                paths.extend((directory/'.credentials.json', directory/'settings.json'))
                 paths.extend(Path(profile[key]) for key in ('authPath', 'configPath') if profile.get(key))
-            profile_stamp = ModelStore.key(profile) if profile else None
+                paths.extend((Path(local['cwd'])/'.claude/settings.json', Path(local['cwd'])/'.claude/settings.local.json'))
+                scope = ('local-cli', profile['origin'], str(directory), local['cwd'],
+                         tuple((name, os.environ.get(name)) for name in ('ANTHROPIC_API_KEY', 'ANTHROPIC_AUTH_TOKEN',
+                           'CLAUDE_CODE_OAUTH_TOKEN', 'ANTHROPIC_BASE_URL', 'ANTHROPIC_CUSTOM_HEADERS')))
+            else:
+                row = adapter.index.get(sid)
+                if not row:
+                    raise ValueError('找不到 Claude 会话')
+                store = self._account_store('claude')
+                with store.lock:
+                    kind, fingerprint, _ = store._current()
+                scope = ('desktop', row['backend'], row.get('cwd'), tuple(row.get('folders') or []),
+                         str(store.home), str(store.threep), kind, fingerprint)
         else:
             paths.append(adapter.home/'profiles/desktop/cordis.patch.yml')
-            profile_stamp = None
+            paths.append(adapter.home/'.credentials.yaml')
+            scope = ('desktop', str(adapter.home), os.environ.get('DEEPSEEK_API_KEY'))
         stamps = []
         for path in paths:
             try:
                 stamps.append(hashlib.sha256(path.read_bytes()).hexdigest())
             except OSError:
                 stamps.append(None)
-        return ModelStore.key('desktop', provider, sid, profile_stamp, stamps)
+        return ModelStore.key('desktop', provider, scope, stamps)
+
+    def _model_live(self, provider, sid):
+        adapter = self.adapters[provider]
+        if provider == 'deepseek':
+            return (adapter.directory/'endpoint.json').is_file()
+        with adapter.cli.lock, adapter.remote_cli.lock:
+            local = adapter.cli.index.get(sid)
+            remote = adapter.remote_cli.index.get(sid)
+            if local:
+                owned = adapter.cli.owned.get(local['nativeId'])
+                return bool(owned and owned.origin == local['origin'] and owned.process.poll() is None and not owned.error)
+            if remote:
+                owned = adapter.remote_cli.owned.get(sid)
+                return bool(owned and owned.origin == remote['origin'] and owned.process.poll() is None and not owned.error)
+        return bool(adapter.desktop and adapter.desktop.connected and not adapter.setup_cancel.is_set()
+                    and not adapter.connection_probe_failed and sid in adapter.index)
+
+    def _model_selection(self, provider, sid):
+        adapter = self.adapters[provider]
+        if provider == 'claude':
+            with adapter.cli.lock, adapter.remote_cli.lock:
+                local = adapter.cli.index.get(sid)
+                remote = adapter.remote_cli.index.get(sid)
+            if local:
+                with adapter.cli.lock:
+                    owned = adapter.cli.owned.get(local['nativeId'])
+                    public = adapter.cli._public(local)
+                applied = owned.control({'subtype': 'get_settings'}).get('applied') if owned else None
+                return {'currentModel': applied.get('model') if isinstance(applied, dict) else public.get('model'),
+                        'currentEffort': applied.get('effort') or '' if isinstance(applied, dict) else ''}
+            if remote:
+                with adapter.remote_cli.lock:
+                    owned = adapter.remote_cli.owned.get(sid)
+                    public = adapter.remote_cli._public(remote)
+                applied = owned.control({'subtype': 'get_settings'}).get('applied') if owned else None
+                return {'currentModel': applied.get('model') if isinstance(applied, dict) else public.get('model'),
+                        'currentEffort': applied.get('effort') or '' if isinstance(applied, dict) else ''}
+        return self._read(provider, 'catalog', sid, {'section': 'selection'})
+
+    def _cached_model_result(self, provider, sid, identity, persisted, *, error=None, unavailable=False):
+        if self._model_identity(provider, sid) != identity:
+            raise BridgeUnavailable('客户端账号或配置已变化，请重试')
+        result = _copy_read(persisted[1])
+        live = self._model_live(provider, sid)
+        if live and not unavailable:
+            try:
+                result.update(self._model_selection(provider, sid))
+            except (OSError, ValueError, BridgeUnavailable):
+                live = False
+        if not live or unavailable:
+            result['capabilities'] = {**result.get('capabilities', {}), 'models': False, 'effort': False}
+            result['notice'] = '请先继续这条会话' if provider == 'claude' else '桌面客户端未连接'
+        result['cache'] = {'state': 'stale' if error or time.time()-persisted[0] >= MODEL_REFRESH_SECONDS else 'fresh',
+                           'updatedAt': persisted[0]}
+        if error:
+            result['modelError'] = error
+        if self._model_identity(provider, sid) != identity:
+            raise BridgeUnavailable('客户端账号或配置已变化，请重试')
+        return result
 
     def _catalog_models(self, provider, sid, body):
         identity = self._model_identity(provider, sid)
@@ -204,11 +290,11 @@ class DesktopSessions:
         except (OSError, sqlite3.DatabaseError, ValueError):
             persisted = None
         if persisted and not refresh:
-            if time.time() - persisted[0] >= MODEL_REFRESH_SECONDS:
+            if self._model_live(provider, sid) and time.time() - persisted[0] >= MODEL_REFRESH_SECONDS:
                 self._start_model_refresh(provider, sid, identity)
-            else:
+            elif self._model_live(provider, sid):
                 self._schedule_model_refresh(provider, sid, identity, persisted[0])
-            return _copy_read(persisted[1])
+            return self._cached_model_result(provider, sid, identity, persisted)
         with self.model_lock:
             lock = self.model_locks.setdefault(identity, threading.Lock())
         with lock:
@@ -218,35 +304,38 @@ class DesktopSessions:
                 except (OSError, sqlite3.DatabaseError, ValueError):
                     persisted = None
                 if persisted:
-                    return _copy_read(persisted[1])
+                    return self._cached_model_result(provider, sid, identity, persisted)
             try:
                 value = self._read(provider, 'catalog', sid, body)
             except (OSError, ValueError, BridgeUnavailable):
                 if persisted:
-                    return _copy_read(persisted[1])
+                    return self._cached_model_result(provider, sid, identity, persisted, error='模型目录刷新失败，已保留上次结果')
                 raise
             if self._model_identity(provider, sid) != identity:
                 raise BridgeUnavailable('客户端账号或配置已变化，请重试')
-            if value.get('modelError') and persisted:
-                return {**_copy_read(persisted[1]), 'modelError': value['modelError']}
+            if (value.get('modelError') or value.get('capabilities', {}).get('models') is False) and persisted:
+                return self._cached_model_result(provider, sid, identity, persisted,
+                    error=value.get('modelError') or '模型目录刷新失败，已保留上次结果',
+                    unavailable=value.get('capabilities', {}).get('models') is False)
             if isinstance(value.get('models'), list) and value.get('capabilities', {}).get('models') is not False:
                 stable = {key: _copy_read(value[key]) for key in ('models', 'capabilities', 'notice') if key in value}
                 try:
                     updated_at = self.model_store.write(identity, stable)
                     self._schedule_model_refresh(provider, sid, identity, updated_at, replace=True)
+                    value['cache'] = {'state': 'fresh', 'updatedAt': updated_at}
                 except (OSError, sqlite3.DatabaseError):
                     pass
             return value
 
     def _start_model_refresh(self, provider, sid, identity):
         with self.model_lock:
-            if (self.closed.is_set() or identity in self.model_refreshing or
+            if (self.closed.is_set() or not self._model_live(provider, sid) or identity in self.model_refreshing or
                     time.time() < self.model_retry_at.get(identity, 0)):
                 return
             self.model_refreshing.add(identity)
         def update():
             try:
-                if self._model_identity(provider, sid) == identity:
+                if self._model_live(provider, sid) and self._model_identity(provider, sid) == identity:
                     self._catalog_models(provider, sid, {'section': 'models', 'refresh': True})
             except (OSError, ValueError, BridgeUnavailable):
                 pass
@@ -254,7 +343,7 @@ class DesktopSessions:
                 with self.model_lock:
                     self.model_retry_at[identity] = time.time() + 60
                     self.model_refreshing.discard(identity)
-                if not self.closed.is_set() and self._model_identity(provider, sid) == identity:
+                if not self.closed.is_set() and self._model_live(provider, sid) and self._model_identity(provider, sid) == identity:
                     try:
                         record = self.model_store.read(identity)
                     except (OSError, sqlite3.DatabaseError, ValueError):
@@ -272,8 +361,124 @@ class DesktopSessions:
             def due():
                 with self.model_lock:
                     self.model_timers.pop(identity, None)
-                if not self.closed.is_set() and self._model_identity(provider, sid) == identity:
+                if not self.closed.is_set() and self._model_live(provider, sid) and self._model_identity(provider, sid) == identity:
                     self._start_model_refresh(provider, sid, identity)
+            timer = threading.Timer(delay, due)
+            timer.daemon = True
+            self.model_timers[identity] = timer
+            timer.start()
+
+    def _account_model_identity(self, provider):
+        adapter = self.adapters[provider]
+        store = self._account_store(provider)
+        paths = []
+        if provider == 'claude':
+            with store.lock:
+                kind, fingerprint, _ = store._current()
+            if not fingerprint:
+                raise BridgeUnavailable('无法确认 Claude 当前账号')
+            scope = (str(store.home), str(store.threep), kind, fingerprint)
+            paths.append(store.home/'claude_desktop_config.json')
+        else:
+            from bridge.clients.deepseek.accounts import _read, _document
+            with store.lock:
+                source = _document(_read(store.path))
+            scope = (str(adapter.home), source, os.environ.get('DEEPSEEK_API_KEY'))
+            paths.append(adapter.home/'profiles/desktop/cordis.patch.yml')
+        stamps = []
+        for path in paths:
+            try:
+                stamps.append(hashlib.sha256(path.read_bytes()).hexdigest())
+            except OSError:
+                stamps.append(None)
+        return ModelStore.key('desktop-account', provider, scope, stamps)
+
+    def _account_model_live(self, provider):
+        adapter = self.adapters[provider]
+        return (bool(adapter.desktop and adapter.desktop.connected and not adapter.setup_cancel.is_set()
+                     and not adapter.connection_probe_failed) if provider == 'claude'
+                else (adapter.directory/'endpoint.json').is_file())
+
+    def _account_model_result(self, provider, identity, persisted, error=None):
+        if self._account_model_identity(provider) != identity:
+            raise BridgeUnavailable('客户端账号或配置已变化，请重试')
+        value = _copy_read(persisted[1])
+        value['cache'] = {'state': 'stale' if error or time.time()-persisted[0] >= MODEL_REFRESH_SECONDS else 'fresh',
+                          'updatedAt': persisted[0]}
+        if error:
+            value['modelError'] = error
+        if self._account_model_identity(provider) != identity:
+            raise BridgeUnavailable('客户端账号或配置已变化，请重试')
+        return value
+
+    def _account_models(self, provider, refresh=False):
+        identity = self._account_model_identity(provider)
+        try:
+            persisted = self.model_store.read(identity)
+        except (OSError, sqlite3.DatabaseError, ValueError):
+            persisted = None
+        if persisted and not refresh:
+            if self._account_model_live(provider):
+                self._schedule_account_model_refresh(provider, identity, persisted[0])
+            return self._account_model_result(provider, identity, persisted)
+        with self.model_lock:
+            lock = self.model_locks.setdefault(identity, threading.Lock())
+        with lock:
+            if not refresh:
+                try:
+                    persisted = self.model_store.read(identity)
+                except (OSError, sqlite3.DatabaseError, ValueError):
+                    persisted = None
+                if persisted:
+                    return self._account_model_result(provider, identity, persisted)
+            try:
+                value = self._read(provider, 'account')
+            except (OSError, ValueError, BridgeUnavailable):
+                if persisted:
+                    return self._account_model_result(provider, identity, persisted, '模型目录刷新失败，已保留上次结果')
+                raise
+            if self._account_model_identity(provider) != identity:
+                raise BridgeUnavailable('客户端账号或配置已变化，请重试')
+            if value.get('modelError') or not isinstance(value.get('models'), list):
+                if persisted:
+                    return self._account_model_result(provider, identity, persisted,
+                                                      value.get('modelError') or '模型目录刷新失败，已保留上次结果')
+                return value
+            try:
+                updated_at = self.model_store.write(identity, value)
+                self._schedule_account_model_refresh(provider, identity, updated_at, replace=True)
+            except (OSError, sqlite3.DatabaseError):
+                updated_at = time.time()
+            if self._account_model_identity(provider) != identity:
+                raise BridgeUnavailable('客户端账号或配置已变化，请重试')
+            return {**value, 'cache': {'state': 'fresh', 'updatedAt': updated_at}}
+
+    def _schedule_account_model_refresh(self, provider, identity, updated_at, replace=False):
+        with self.model_lock:
+            if replace and identity in self.model_timers:
+                self.model_timers.pop(identity).cancel()
+            if self.closed.is_set() or not self.gateway_running or identity in self.model_timers:
+                return
+            delay = max(1, updated_at + MODEL_REFRESH_SECONDS - time.time())
+            def due():
+                with self.model_lock:
+                    self.model_timers.pop(identity, None)
+                if self.closed.is_set() or not self._account_model_live(provider):
+                    return
+                try:
+                    self._account_models(provider, refresh=True)
+                except (OSError, ValueError, BridgeUnavailable):
+                    pass
+                finally:
+                    if not self.closed.is_set():
+                        try:
+                            if self._account_model_identity(provider) == identity:
+                                record = self.model_store.read(identity)
+                                if record:
+                                    self._schedule_account_model_refresh(provider, identity,
+                                        max(record[0], time.time()-MODEL_REFRESH_SECONDS+300))
+                        except (OSError, sqlite3.DatabaseError, ValueError, BridgeUnavailable):
+                            pass
             timer = threading.Timer(delay, due)
             timer.daemon = True
             self.model_timers[identity] = timer
@@ -343,6 +548,8 @@ class DesktopSessions:
             raise ValueError('会话标识无效')
         body = body or {}
         adapter = self.adapters[provider]
+        if action == 'account':
+            return self._account_models(provider, refresh=body.get('refresh') is True)
         if action == 'catalog' and body.get('section') == 'models':
             return self._catalog_models(provider, sid, body)
         if action in READS and not (action == 'access' and 'mode' in body):
@@ -1439,7 +1646,7 @@ class DesktopSessions:
             provider = value.get('provider')
             if provider not in self.adapters:
                 raise ValueError('不支持的桌面客户端')
-            return self._read(provider, 'account')
+            return self._account_models(provider, refresh=value.get('refresh') is True)
         if action == 'scan':
             return self.scan(setup=value.get('setup', True) is True)
         if action in ('connect-deepseek', 'restart-deepseek'):

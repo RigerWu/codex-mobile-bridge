@@ -1,4 +1,5 @@
 import copy
+import sqlite3
 import threading
 import unittest
 from unittest.mock import patch
@@ -126,6 +127,13 @@ class ModelReadTests(unittest.TestCase):
                     with self.assertRaises(ValueError):
                         self.manager.api_models(row)
                 self.assertNotIn(row['id'], self.manager.info.entries)
+
+    def test_api_model_read_survives_corrupt_cache_database(self):
+        row = self.active()
+        with patch.object(self.manager.api_model_store, 'read', side_effect=sqlite3.DatabaseError('broken')), \
+             patch.object(self.manager.api_model_store, 'write', side_effect=sqlite3.DatabaseError('broken')), \
+             patch('bridge.features.accounts.accounts.model_catalog', return_value=[{'id':'fixture'}]):
+            self.assertEqual(self.manager.api_models(row), [{'id':'fixture'}])
 
     def test_official_model_results_verify_connection_after_query(self):
         self.active('chatgpt')

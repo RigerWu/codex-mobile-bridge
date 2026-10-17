@@ -201,6 +201,7 @@ class AccountInfo:
                     if (current.get('kind') != 'chatgpt' or current_login.get('accountKey') != row['accountKey']):
                         raise ValueError('账号身份已变化')
                     result = {'models': catalog.get('models', []), 'accountKey': row['accountKey'],
+                              'cache': catalog.get('cache'),
                               **({'error': catalog['modelError']} if catalog.get('modelError') else {})}
                 else:
                     result = self.manager.account({'id': CURRENT_LOGIN_ID, 'operation': 'read', 'refresh': refresh})
@@ -231,7 +232,9 @@ class AccountInfo:
         result = {}
         try:
             if row['kind'] == 'api':
-                result = {'models':manager.api_models(row, refresh)}
+                models, updated_at, error = manager.api_models(row, refresh, with_timestamp=True)
+                result = {'models': models, 'cache': {'state': 'fresh' if not error and time.time()-updated_at < 12*60*60 else 'stale',
+                                                     'updatedAt': updated_at}, **({'error': error} if error else {})}
             else:
                 with manager.bridge.account.lock:
                     with manager.lock:
@@ -265,25 +268,15 @@ class AccountInfo:
                                         current['accountKey'] != context['accountKey']):
                                     raise ValueError('账号身份已变化')
                         else:
-                            models, cursor, seen = [], None, set()
-                            while True:
-                                page = rpc.request('model/list', {'includeHidden':False,'limit':100,'cursor':cursor})
-                                for model in page.get('data', []):
-                                    identifier = model.get('model') or model.get('id')
-                                    if isinstance(identifier, str) and not model.get('hidden'):
-                                        models.append({'id':identifier,'name':model.get('displayName') or identifier})
-                                cursor = page.get('nextCursor')
-                                if not cursor:
-                                    break
-                                if cursor in seen or len(seen) >= 20:
-                                    raise ValueError('模型目录分页未完成')
-                                seen.add(cursor)
-                            result = {'models':list({m['id']:m for m in models}.values())}
+                            catalog = manager.bridge.catalog_reader.get_kind('models', str(home), refresh=refresh,
+                                                                              provider='openai')
+                            result = {'models': catalog.get('models', []), 'cache': catalog.get('cache'),
+                                      **({'error': catalog['modelError']} if catalog.get('modelError') else {})}
                     if token_owner(read_json(home/'auth.json', {})) != row.get('tokenOwner'):
                         raise ValueError('账号身份已变化')
                     if home == manager.home:
                         private_bytes(manager.directory(row['id'])/'auth.json', (home/'auth.json').read_bytes())
-            result.update(status='ready',checkedAt=time.time())
+            result.update(status='error' if result.get('error') else 'ready', checkedAt=time.time())
         except Exception:
             result = {'status':'error','checkedAt':time.time(),
                       'error':'额度暂不可用，请检查登录后重试' if section == 'usage' else '模型列表暂不可用，请检查接入后重试'}

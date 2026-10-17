@@ -98,6 +98,12 @@ def saved(path, found, *, include_events=False):
                 and isinstance(e.get('cwd'), str) and e['cwd']), '')
     if not cwd:
         return None
+    project_settings = []
+    for name in ('settings.json', 'settings.local.json'):
+        try:
+            project_settings.append(hashlib.sha256((Path(cwd)/'.claude'/name).read_bytes()).hexdigest())
+        except OSError:
+            project_settings.append(None)
     assistants = [e for e in history if e.get('type') == 'assistant' and isinstance(e.get('message'), dict)]
     model = next((e['message'].get('model') for e in reversed(assistants)
                   if isinstance(e['message'].get('model'), str)), '')
@@ -112,6 +118,7 @@ def saved(path, found, *, include_events=False):
         content = '\n'.join(e.get('text', '') for e in content if isinstance(e, dict) and e.get('type') == 'text')
     title = str(content).strip().splitlines()[0][:120] if str(content).strip() else 'Claude Code 会话'
     row = {'nativeId': native, 'origin': found['origin'], 'cwd': cwd, 'model': model,
+           'projectConfig': hashlib.sha256(json.dumps(project_settings).encode()).hexdigest(),
            'permissionMode': permission or 'default', 'permissionKnown': permission is not None,
            'updatedAt': path.stat().st_mtime, 'title': title}
     if include_events:

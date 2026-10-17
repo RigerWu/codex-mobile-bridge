@@ -163,7 +163,9 @@ class Reads(unittest.TestCase):
                 if not release.wait(3):
                     raise TimeoutError('fixture was not released')
             return copy(value)
-        with patch.object(manager_module, '_copy_read', delayed_copy), ThreadPoolExecutor(1) as pool:
+        with patch.object(manager_module, '_copy_read', delayed_copy), \
+             patch.object(self.manager, '_account_model_identity', return_value='fixture-account'), \
+             ThreadPoolExecutor(1) as pool:
             pending = pool.submit(self.manager.call, 'deepseek', 'account')
             try:
                 self.assertTrue(entered.wait(2))

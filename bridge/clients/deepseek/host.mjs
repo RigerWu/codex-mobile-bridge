@@ -39,6 +39,7 @@ export async function apply(ctx,config){
   const localized=value=>typeof value==='string'?value:value?.['zh-CN']||value?.zh||value?.en||'';
   const catalog=async(sid,section='all')=>{
     const row=normalize(await find(sid)),result={currentModel:row.model,currentEffort:row.effort,capabilities:capabilities()};
+    if(section==='selection')return result;
     if(section!=='plugins'){
       const raw=await bounded(ctx.sessionController.modelCatalog());
       result.models=raw.groups.flatMap(g=>g.models.map(m=>({id:g.id+'/'+m.id,name:m.name,efforts:(m.reasoning?.efforts||[]).map(e=>e.id),defaultEffort:m.reasoning?.defaultEffort})));

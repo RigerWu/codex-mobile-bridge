@@ -50,6 +50,8 @@ try{
   row.projections.values.modelSelection=originalProjection;
   assert.equal(models.skills.filter(p=>p.id==='installed:@deepseek-ai/dsh-skill-office').length,1);assert.equal(models.skills.find(p=>p.name==='Office 文档').selectable,false);
   const before=pluginReads;await request('catalog',{section:'models'});assert.equal(pluginReads,before);
+  const selectionBefore=modelReads;const selection=await(await request('catalog',{section:'selection'})).json();
+  assert.equal(selection.currentModel,'deepseek/chat');assert.equal(selection.currentEffort,'high');assert.equal(modelReads,selectionBefore);
   const modelBefore=modelReads;const plugins=await(await request('catalog',{section:'plugins'})).json();assert.equal(modelReads,modelBefore);assert.equal(plugins.models,undefined);
   assert.equal((await request('send',{id:'invalid',text:'no',plugins:['installed:@deepseek-ai/dsh-skill-office']})).status,400);assert.equal(calls.length,0);
   assert.equal((await(await request('send',{id:'r',text:'follow-up',plugins:['review']})).json()).status,'queued');assert.equal(calls[0].mode,'queue');assert.ok(calls[0].content[0].text.includes('review'));

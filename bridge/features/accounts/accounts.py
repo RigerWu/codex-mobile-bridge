@@ -12,6 +12,7 @@ import os
 import queue
 import re
 import shutil
+import sqlite3
 import tempfile
 import threading
 import time
@@ -383,7 +384,7 @@ class Accounts:
             self.update_discovery()
             return self.desktop_status()
 
-    def api_models(self, row, refresh=False):
+    def api_models(self, row, refresh=False, with_timestamp=False):
         with self.lock:
             self.check_ready()
             self.row(row['id'])
@@ -396,9 +397,17 @@ class Accounts:
                     raise ValueError('当前接入已变化，请重新读取模型列表')
                 key = read_json(self.directory(row['id'])/'api.json', {})['key']
                 identity = ModelStore.key('saved-api', str(self.home), row['id'], row['baseUrl'], key)
+                def result(models, updated_at, error=None):
+                    with self.lock:
+                        self.check_ready()
+                        if (self.row(row['id']) != stored or
+                                read_json(self.directory(row['id'])/'api.json', {}).get('key') != key):
+                            raise ValueError('当前接入已变化，请重新读取模型列表')
+                    copied = copy.deepcopy(models)
+                    return (copied, updated_at, error) if with_timestamp else copied
                 try:
                     persisted = self.api_model_store.read(identity)
-                except (OSError, ValueError):
+                except (OSError, sqlite3.DatabaseError, ValueError):
                     persisted = None
                 if persisted and not refresh:
                     if (time.time()-persisted[0] >= MODEL_REFRESH_SECONDS and identity not in self.api_model_refreshing
@@ -416,12 +425,12 @@ class Accounts:
                         threading.Thread(target=update, daemon=True, name='saved-api-model-refresh').start()
                     elif time.time()-persisted[0] < MODEL_REFRESH_SECONDS:
                         self._schedule_api_model_refresh(row, identity, persisted[0])
-                    return copy.deepcopy(persisted[1])
+                    return result(persisted[1], persisted[0])
             try:
                 models = model_catalog(row['baseUrl'], key)
             except ValueError:
                 if persisted:
-                    return copy.deepcopy(persisted[1])
+                    return result(persisted[1], persisted[0], '模型目录刷新失败，已保留上次结果')
                 raise
             with self.lock:
                 self.check_ready()
@@ -432,9 +441,9 @@ class Accounts:
             try:
                 updated_at = self.api_model_store.write(identity, models)
                 self._schedule_api_model_refresh(row, identity, updated_at, replace=True)
-            except OSError:
-                pass
-            return models
+            except (OSError, sqlite3.DatabaseError):
+                updated_at = time.time()
+            return result(models, updated_at)
 
     def _schedule_api_model_refresh(self, row, identity, updated_at, replace=False):
         with self.lock:
@@ -458,7 +467,7 @@ class Accounts:
                     with self.lock:
                         try:
                             record = self.api_model_store.read(identity)
-                        except (OSError, ValueError):
+                        except (OSError, sqlite3.DatabaseError, ValueError):
                             record = None
                         if record and any(saved['id'] == row['id'] for saved in self.index['accounts']):
                             self._schedule_api_model_refresh(row, identity, max(record[0], time.time() - MODEL_REFRESH_SECONDS + 300))

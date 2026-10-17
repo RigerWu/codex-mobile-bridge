@@ -57,15 +57,16 @@ class FastCapabilityTests(unittest.TestCase):
         self.assertEqual(self.capability(profile)[0]['provider'], 'custom')
         self.assertNotIn('PRIVATE', str(result))
 
-    def test_route_speed_metadata_uses_visible_native_base_and_preserves_explicit_overrides(self):
+    def test_route_capabilities_are_not_inferred_from_a_similarly_named_model(self):
         reader = Catalog('/unused', 'unused')
         models = [
             {'model': 'gpt-fixture', 'serviceTiers': [{'id': 'priority', 'name': 'Fast'}], 'defaultServiceTier': 'default'},
-            {'model': 'route/gpt-fixture', 'serviceTiers': []},
+            {'model': 'route/gpt-fixture', 'serviceTiers': [], 'supportedReasoningEfforts': []},
             {'model': 'override/gpt-fixture', 'serviceTiers': [{'id': 'fast', 'name': 'Fast'}], 'defaultServiceTier': 'fast'},
             {'model': 'standard/gpt-fixture', 'serviceTiers': [{'id': 'default', 'name': 'Standard'}]},
             {'model': 'hidden', 'hidden': True, 'serviceTiers': [{'id': 'priority'}]},
             {'model': 'route/hidden'}, {'model': 'route/image'}, {'model': 'image', 'serviceTiers': []},
+            {'model': 'missing/gpt-fixture'},
         ]
         def request(method, params):
             if method == 'config/read':
@@ -74,11 +75,13 @@ class FastCapabilityTests(unittest.TestCase):
             return {'data': copy.deepcopy(models), 'nextCursor': None}
         result = reader.read_models(request, '/project', 'custom')['models']
         self.assertEqual([m['model'] for m in result], [m['model'] for m in models])
-        self.assertEqual(reader.fast_tier(result[1]), 'priority')
-        self.assertEqual(result[1]['defaultServiceTier'], 'default')
+        self.assertEqual(result, models)
+        self.assertIsNone(reader.fast_tier(result[1]))
+        self.assertNotIn('defaultServiceTier', result[1])
+        self.assertEqual(result[1]['supportedReasoningEfforts'], [])
         self.assertEqual(reader.fast_tier(result[2]), 'fast')
         self.assertEqual(result[2]['defaultServiceTier'], 'fast')
-        for index in (3, 5, 6, 7):
+        for index in (3, 5, 6, 7, 8):
             self.assertIsNone(reader.fast_tier(result[index]))
 
     def test_catalog_keeps_model_tier_ids_defaults_and_filters_unknown_capabilities(self):
@@ -99,6 +102,29 @@ class FastCapabilityTests(unittest.TestCase):
             state['latestThreadSettings'] = {'serviceTier': value}
             self.assertEqual(normalize_state(state)['serviceTier'], value)
         self.assertNotIn('serviceTier', normalize_state(support.state()))
+
+
+
+    def test_route_reasoning_metadata_keeps_explicit_empty_and_missing_capabilities(self):
+        reader = Catalog('/unused', 'unused')
+        base = {'model': 'base', 'supportedReasoningEfforts': [{'reasoningEffort': 'high'}],
+                'defaultReasoningEffort': 'high'}
+        models = [base, {'model': 'route/base', 'supportedReasoningEfforts': []},
+                  {'model': 'override/base', 'supportedReasoningEfforts': [{'reasoningEffort': 'low'}],
+                   'defaultReasoningEffort': 'low'},
+                  {'model': 'hidden', 'hidden': True, **{key: value for key, value in base.items() if key != 'model'}},
+                  {'model': 'route/hidden'}]
+        def request(method, params):
+            if method == 'config/read':
+                return {'config': {'model_provider': 'custom', 'model_catalog_json': 'models.json'}}
+            return {'data': copy.deepcopy(models)}
+        result = reader.read_models(request, '/project', 'custom')['models']
+        self.assertEqual(result[1]['model'], 'route/base')
+        self.assertEqual(result[1]['supportedReasoningEfforts'], [])
+        self.assertNotIn('defaultReasoningEffort', result[1])
+        self.assertEqual(result[2]['supportedReasoningEfforts'], [{'reasoningEffort': 'low'}])
+        self.assertEqual(result[2]['defaultReasoningEffort'], 'low')
+        self.assertNotIn('supportedReasoningEfforts', result[4])
 
 
 class FastSettingsTests(unittest.TestCase):

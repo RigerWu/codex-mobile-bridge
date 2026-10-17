@@ -41,7 +41,7 @@ function chatKey(id=currentId,host=currentHost){return host+'|'+id;}
 function sessionUrl(id,action='',host=currentHost){const path='/api/sessions/'+id+(action?'/'+action:'')+'?host='+encodeURIComponent(host);return window.BridgeRelayURL?.(path)||path;}
 function hostUrl(path,host=currentHost){const value=/^\/api\/sessions\/[0-9a-f-]{36}/.test(path)&&!/[?&]host=/.test(path)?path+(path.includes('?')?'&':'?')+'host='+encodeURIComponent(host):path;return window.BridgeRelayURL?.(value)||value;}
 let listLoading=0;
-let modelCatalogGeneration=0,modelCatalogCheckedAt=0;let catalogData={models:null,skills:null};let catalogResults={models:null,skills:null};let catalogTasks={models:null,skills:null};let selectedSkills=new Set(),invalidSkills=new Set(),skillIndex=new Map(),skillTotal=0,skillPages=[],skillQuery={q:'',offset:0,limit:200},skillSearchTimer,skillRequest=0;
+let modelCatalogGeneration=0;let catalogData={models:null,skills:null};let catalogResults={models:null,skills:null};let catalogTasks={models:null,skills:null};let selectedSkills=new Set(),invalidSkills=new Set(),skillIndex=new Map(),skillTotal=0,skillPages=[],skillQuery={q:'',offset:0,limit:200},skillSearchTimer,skillRequest=0;
 function el(tag,cls,text){const node=document.createElement(tag);if(cls)node.className=cls;if(text!==undefined)node.textContent=text;return node;}
 function toast(text){text=t(text);$('toast').textContent=text;$('toast').hidden=false;clearTimeout(toast.timer);toast.timer=setTimeout(()=>$('toast').hidden=true,4200);}
 function renderHostErrors(hosts){
@@ -595,23 +595,26 @@ document.querySelectorAll('[data-close]').forEach(button=>button.onclick=()=>$(b
 async function loadCatalogKind(kind,refresh=false){
   if(kind!=='models')throw Error(t('未知目录类型'));
   if(refresh)modelCatalogGeneration++;
-  const target=currentId,targetHost=currentHost,generation=modelCatalogGeneration;
-  if(!refresh&&catalogResults[kind]&&Date.now()-modelCatalogCheckedAt<300000)return catalogResults[kind];
-  if(!refresh&&catalogTasks[kind])return catalogTasks[kind];
+  const target=currentId,targetHost=currentHost,provider=state?.provider,generation=modelCatalogGeneration;
+  const identity=JSON.stringify([target,targetHost,provider]);
+  if(!refresh&&catalogTasks[kind]?.identity===identity)return catalogTasks[kind];
   const request=api('/api/sessions/'+target+'/catalog?kind='+kind+(refresh?'&refresh=true':'')).then(value=>{
-    if(currentId!==target||currentHost!==targetHost||generation!==modelCatalogGeneration)throw Error(t('聊天已切换'));
+    if(currentId!==target||currentHost!==targetHost||state?.provider!==provider||generation!==modelCatalogGeneration)throw Error(t('聊天已切换'));
     const payload=value?.[kind]??value?.data??value;
     if(!Array.isArray(payload)){
       const actual=payload===null?'null':typeof payload;
       throw Error(t('模型目录返回无效')+' ('+kind+': '+actual+')');
     }
-    catalogData[kind]=payload.map(row=>typeof row==='string'?{id:row,name:row}:row).filter(row=>row&&(row.id||row.model));
+    catalogData[kind]=payload.map(row=>{
+      if(typeof row==='string')return {id:row,name:row};
+      const id=row?.id||row?.model;
+      return typeof id==='string'&&id?{...row,id,name:row.name||row.displayName||id}:null;
+    }).filter(Boolean);
     const result={...value,kind,[kind]:catalogData[kind]};
     catalogResults[kind]=result;
-    modelCatalogCheckedAt=Date.now();
     return result;
   }).finally(()=>{if(catalogTasks[kind]===request)catalogTasks[kind]=null;});
-  catalogTasks[kind]=request;
+  request.identity=identity;catalogTasks[kind]=request;
   return request;
 }
 function resetSkillCatalog(){
@@ -668,17 +671,22 @@ function startCatalog(){
 }
 function resetModelCatalog(){
   modelCatalogGeneration++;catalogData.models=null;catalogResults.models=null;catalogTasks.models=null;
-  modelCatalogCheckedAt=0;
   modelRequest++;modelTarget=null;fastModeControl.reset();$('model-dialog').close();
 }
+function updateModelScrollHint(){
+  const list=$('model-options');
+  $('model-list-field').classList.toggle('has-more',list.scrollHeight-list.clientHeight-list.scrollTop>1);
+}
+$('model-options').addEventListener('scroll',updateModelScrollHint,{passive:true});
+if(typeof ResizeObserver!=='undefined')new ResizeObserver(updateModelScrollHint).observe($('model-options'));
 function renderModelChoices(){
   const list=$('model-options');list.replaceChildren();
-  const models=Array.isArray(catalogData?.models)?catalogData.models:[];
+  const models=Array.isArray(catalogData?.models)?catalogData.models:[],byId=new Map(models.map(model=>[model.id,model]));
   for(const option of $('model-select').children){
     if(!option.value)continue;
     const row=el('label','model-choice'),input=el('input'),name=el('span','model-choice-name'),check=el('span','model-choice-check','✓');
     input.type='radio';input.name='model-choice';input.value=option.value;input.checked=option.value===$('model-select').value;input.disabled=modelSaving;
-    const baseId=option.value.split('/').at(-1),base=models.find(model=>model.id===baseId),routed=option.value.includes('/')&&!!base;
+    const baseId=option.value.split('/').at(-1),base=byId.get(baseId),routed=option.value.includes('/')&&!!base;
     name.textContent=option.textContent.includes('\ufffd')?(base?.name?.includes('\ufffd')?baseId:base?.name||baseId):option.textContent;
     row.title=option.value==='__custom__'?name.textContent:option.value;
     check.setAttribute('aria-hidden','true');
@@ -689,6 +697,7 @@ function renderModelChoices(){
   }
   const selected=list.querySelector('input:checked')?.closest('label');
   if(selected)list.scrollTop=selected.offsetTop-(list.clientHeight-selected.clientHeight)/2;
+  updateModelScrollHint();
 }
 function renderEffortChoices(){
   const list=$('effort-options');list.replaceChildren();
@@ -702,20 +711,20 @@ function renderEffortChoices(){
     row.append(input,name);list.append(row);
   }
 }
-function renderEfforts(){
+function renderEfforts({effort=state?.effort,keepFast=false}={}){
   const id=$('model-select').value,models=Array.isArray(catalogData?.models)?catalogData.models:[];
   const model=models.find(m=>m.id===(id==='__custom__'?$('custom-model').value.trim():id));
   for(const input of $('model-options').querySelectorAll('input'))input.checked=input.value===id;
   $('custom-model-label').hidden=id!=='__custom__';$('custom-model').required=id==='__custom__';
   const options=model?.efforts?.length?model.efforts:catalogResults.models?.modelSource==='api'?['none','minimal','low','medium','high','xhigh','max','ultra']:[];
   $('effort-select').replaceChildren(...options.map(value=>new Option(value,value)));
-  $('effort-select').value=options.includes(state?.effort)?state.effort:options.includes(model?.defaultEffort)?model.defaultEffort:options[0]||'';
+  $('effort-select').value=options.includes(effort)?effort:options.includes(model?.defaultEffort)?model.defaultEffort:options[0]||'';
   $('effort-select').disabled=!options.length;
   renderEffortChoices();
   const effortError=t('未能读取此模型的推理能力，请重新打开模型设置');
   if($('model-error').textContent===effortError)$('model-error').textContent='';
   if(!options.length&&!$('model-error').textContent)$('model-error').textContent=effortError;
-  fastModeControl.select(id);$('model-save').disabled=!state?.connected||!id||!options.length;
+  if(!keepFast)fastModeControl.select(id);$('model-save').disabled=!state?.connected||!id||!options.length;
 }
 async function openModelDialog(forceRefresh=false){
   if(modelSaving)return;
@@ -731,7 +740,10 @@ async function openModelDialog(forceRefresh=false){
     $('model-error').textContent=catalog.modelError?t(catalog.modelError):catalog.modelSource==='api'&&!known&&models.length?t('当前聊天模型不在上游列表中，请选择可用模型后应用。'):'';
     catalog.kind='models';
     renderModelChoices();fastModeControl.open(catalog,state,$('model-select').value);renderEfforts();
-  }catch(e){if(request===modelRequest&&target===chatKey())$('model-error').textContent=t(e.message);}
+  }catch(e){if(request===modelRequest&&target===chatKey()){
+    $('model-select').replaceChildren();$('model-options').textContent=t('模型目录读取失败，请刷新后重试');
+    $('custom-model-label').hidden=true;$('model-save').disabled=true;$('model-error').textContent=t(e.message);
+  }}
   finally{if(request===modelRequest)$('model-refresh').disabled=false;}
 }
 $('model-button').onclick=()=>openModelDialog();
@@ -746,9 +758,9 @@ $('model-form').onsubmit=async event=>{
   modelSaving=true;fastModeControl.setBusy(true);$('model-form').querySelectorAll('input,select,button').forEach(n=>n.disabled=true);$('model-save').disabled=true;$('model-error').textContent='';
   try{
     const result=await api(sessionUrl(target,'settings',host),body);
-    if(request===modelRequest&&chatKey(target,host)===chatKey()){$('model-dialog').close();toast(result.confirmed?t('模型设置已同步'):t('Codex 已接受设置，等待同步'));}
+    if(request===modelRequest&&chatKey(target,host)===chatKey()){$('model-dialog').close();toast(result.confirmed?t('桌面模型设置已同步'):t('桌面已接受设置，等待同步'));}
   }catch(e){if(request===modelRequest&&chatKey(target,host)===chatKey())$('model-error').textContent=t(e.message);}
-  finally{modelSaving=false;if(request===modelRequest){$('model-form').querySelectorAll('input,select,button').forEach(n=>n.disabled=false);fastModeControl.setBusy(false);renderEfforts();}}
+  finally{modelSaving=false;if(request===modelRequest){$('model-form').querySelectorAll('input,select,button').forEach(n=>n.disabled=false);fastModeControl.setBusy(false);renderEfforts({effort:body.effort,keepFast:true});}}
 };
 function renderSkillPills(){
   $('skill-count').textContent=selectedSkills.size?'('+selectedSkills.size+')':'';

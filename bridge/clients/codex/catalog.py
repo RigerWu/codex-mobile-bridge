@@ -497,15 +497,6 @@ class Catalog:
             cursor = response.get('nextCursor')
             if not cursor:
                 break
-        if configured_catalog:
-            by_id = {m.get('model') or m.get('id'): m for m in models if not m.get('hidden')}
-            for index, model in enumerate(models):
-                identifier = model.get('model') or model.get('id') or ''
-                base_model = by_id.get(identifier.rsplit('/', 1)[-1]) if '/' in identifier else None
-                # Routed aliases may omit speed metadata; keep the route ID and explicit tier overrides.
-                if base_model and not model.get('serviceTiers') and self.fast_tier(base_model):
-                    models[index] = {**model, 'serviceTiers': base_model['serviceTiers'],
-                                     'defaultServiceTier': model.get('defaultServiceTier', base_model.get('defaultServiceTier'))}
         return {'models': models, 'modelSource': 'codex', 'currentEffort': effective.get('model_reasoning_effort')}
 
     @staticmethod
@@ -620,8 +611,12 @@ class Catalog:
                 cached = self.kind_caches[kind].get(key)
                 if cached and not refresh and time.monotonic() - cached[0] < 300:
                     return cached[1]
-                raw = self._fetch(cwd, provider, kind)
-                models = [{'id': m.get('model', m.get('id')), 'name': m.get('displayName', m.get('model')),
+                try:
+                    raw = self._fetch(cwd, provider, kind)
+                except CatalogError:
+                    self.kind_caches[kind].pop(key, None)
+                    raise
+                models = [{'id': m.get('model', m.get('id')), 'name': m.get('displayName') or m.get('name') or m.get('model') or m.get('id'),
                            'description': m.get('description', ''), 'efforts': [e['reasoningEffort'] for e in m.get('supportedReasoningEfforts', [])],
                            'defaultEffort': m.get('defaultReasoningEffort'), 'isDefault': m.get('isDefault', False), 'fastTier': self.fast_tier(m),
                            'defaultServiceTier': m.get('defaultServiceTier')} for m in raw['models'] if not m.get('hidden')]
@@ -629,7 +624,10 @@ class Catalog:
                          'fastMode': raw.get('fastMode', {'allowed': False}),
                          'modelError': raw.get('modelError'), 'currentModel': raw.get('currentModel'),
                          'currentEffort': raw.get('currentEffort')}
-                self.kind_caches[kind][key] = (time.monotonic(), value)
+                if value.get('modelError'):
+                    self.kind_caches[kind].pop(key, None)
+                else:
+                    self.kind_caches[kind][key] = (time.monotonic(), value)
                 return value
 
         bucket = self.skill_store.bucket(cwd)
@@ -706,8 +704,12 @@ class Catalog:
             cached = self.cache.get(key)
             if cached and not refresh and time.monotonic() - cached[0] < 300:
                 return cached[1]
-            raw = self._fetch(cwd, provider)
-            models = [{'id': m.get('model', m.get('id')), 'name': m.get('displayName', m.get('model')),
+            try:
+                raw = self._fetch(cwd, provider)
+            except CatalogError:
+                self.cache.pop(key, None)
+                raise
+            models = [{'id': m.get('model', m.get('id')), 'name': m.get('displayName') or m.get('name') or m.get('model') or m.get('id'),
                        'description': m.get('description', ''), 'efforts': [e['reasoningEffort'] for e in m.get('supportedReasoningEfforts', [])],
                        'defaultEffort': m.get('defaultReasoningEffort'), 'isDefault': m.get('isDefault', False), 'fastTier': self.fast_tier(m),
                        'defaultServiceTier': m.get('defaultServiceTier')} for m in raw['models'] if not m.get('hidden')]
@@ -724,5 +726,8 @@ class Catalog:
             value = {'models': models, 'skills': skills, 'errors': errors, 'fastMode': raw.get('fastMode', {'allowed': False}),
                      'modelSource': raw.get('modelSource', 'codex'), 'modelError': raw.get('modelError'),
                      'currentModel': raw.get('currentModel'), 'currentEffort': raw.get('currentEffort')}
-            self.cache[key] = (time.monotonic(), value)
+            if value.get('modelError'):
+                self.cache.pop(key, None)
+            else:
+                self.cache[key] = (time.monotonic(), value)
             return value

@@ -207,6 +207,40 @@ class RemoteAdapterContract(unittest.TestCase):
         self.assertEqual(result['session']['contextUsage']['usedTokens'], 15)
         self.assertEqual(result['session']['contextUsage']['model'], 'remote-model')
 
+    def test_live_ssh_catalog_and_settings_use_same_native_controls(self):
+        row = self.cli._row('ssh:test', self.hosts.hosts()['ssh:test'], self.row)
+        self.cli.index[row['id']] = row
+        process = Mock()
+        process.poll.return_value = None
+        applied = {'model': 'remote-old', 'effort': 'medium'}
+        models = [{'value': 'default', 'resolvedModel': 'remote-current', 'displayName': 'Default'},
+                  {'value': 'sonnet', 'resolvedModel': 'remote-sonnet', 'displayName': 'Sonnet',
+                   'supportsEffort': True, 'supportedEffortLevels': ['low', 'high']}]
+        controls = []
+        def control(request):
+            controls.append(request)
+            if request['subtype'] == 'get_settings':
+                return {'applied': dict(applied), 'sources': []}
+            if request['subtype'] == 'list_models':
+                return {'models': models}
+            if request['subtype'] == 'set_model':
+                applied['model'] = request['model']
+            if request['subtype'] == 'apply_flag_settings':
+                applied['effort'] = request['settings']['effortLevel']
+            return {}
+        owned = SimpleNamespace(origin=row['origin'], process=process, error=None,
+                                condition=threading.Condition(), active=False, pending={},
+                                model=None, model_selection=None, permission=None, events=[],
+                                catalog={'models': []}, control=control, close=Mock())
+        self.cli.owned[row['id']] = owned
+        catalog = self.cli.call('catalog', row['id'], {'refresh': True})
+        self.assertEqual(catalog['models'][1]['id'], 'remote-sonnet')
+        self.assertEqual(catalog['models'][1]['efforts'], ['auto', 'low', 'high'])
+        self.assertEqual(controls[0], {'subtype': 'list_models'})
+        self.cli.call('settings', row['id'], {'model': 'remote-sonnet', 'effort': 'high'})
+        self.assertEqual(owned.model, 'remote-sonnet')
+        self.assertIn({'subtype': 'apply_flag_settings', 'settings': {'effortLevel': 'high'}}, controls)
+
     def test_project_discovery_uses_one_bounded_host_probe(self):
         self.hosts.projects.return_value = [{'host': 'ssh:test', 'cwd': '/remote/project'}]
         with patch.object(remote, '_remote', return_value={

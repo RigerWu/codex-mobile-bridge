@@ -2,6 +2,9 @@ import asyncio
 import json
 import os
 import queue
+import re
+import shutil
+import subprocess
 import sys
 import tempfile
 import threading
@@ -14,7 +17,7 @@ from unittest.mock import AsyncMock, Mock, patch
 
 from bridge.clients.claude import model
 from bridge.clients.claude.adapter import Claude
-from bridge.clients.claude.cli_session import ClaudeCli, ResumePreflightBlocked, _Owned, _skill_catalog, _auth_ready, _events, _saved, _permission_prompt_args
+from bridge.clients.claude.cli_session import ClaudeCli, ResumePreflightBlocked, _Owned, _skill_catalog, _model_catalog, _cli_catalog, _set_cli_settings, _auth_ready, _events, _saved, _permission_prompt_args
 from bridge.clients.errors import BridgeUnavailable
 from bridge.clients.manager import DesktopSessions
 from bridge.clients.uploads import DesktopUploads
@@ -472,7 +475,9 @@ class ClaudeCliContract(unittest.TestCase):
         owner.condition = threading.Condition()
         owner.error = None
         owner.control.return_value = {'mode': 'default'}
-        owner.control.side_effect = lambda request: {'mode': request['mode']} if request['subtype'] == 'set_permission_mode' else {}
+        owner.control.side_effect = lambda request: (
+            {'mode': request['mode']} if request['subtype'] == 'set_permission_mode' else
+            {'applied': {'model': 'fixture-model'}} if request['subtype'] == 'get_settings' else {})
         self.cli.owned[self.native] = owner
         self.assertEqual(self.cli.call('send', self.sid, {'text': 'new fixture message'})['status'], 'accepted')
         self.assertTrue(self.cli.busy())
@@ -481,7 +486,7 @@ class ClaudeCliContract(unittest.TestCase):
             self.cli.call('send', self.sid, {'text': 'overlapping fixture'})
         owner.write.assert_called_with({'type': 'user', 'message': {'role': 'user', 'content': 'new fixture message'}})
         self.cli.call('settings', self.sid, {'model': 'fixture-model'})
-        owner.control.assert_called_with({'subtype': 'set_model', 'model': 'fixture-model'})
+        owner.control.assert_any_call({'subtype': 'set_model', 'model': 'fixture-model'})
         self.cli.call('access', self.sid, {'mode': 'default'})
         owner.control.assert_called_with({'subtype': 'set_permission_mode', 'mode': 'default'})
         self.assertEqual(owner.permission, 'default')
@@ -668,3 +673,144 @@ class ClaudeCliVersionContract(unittest.TestCase):
             self.assertEqual(_permission_prompt_args('claude.cmd', {}),
                              ['--permission-prompts', 'host'])
             self.assertEqual(run.call_args.kwargs['encoding'], 'utf-8')
+
+    def test_installed_cli_effort_control_is_session_only_and_read_back(self):
+        binary = shutil.which('claude')
+        if not binary:
+            self.skipTest('Claude CLI is not installed')
+        version = subprocess.run([binary, '--version'], capture_output=True, text=True,
+                                 encoding='utf-8', timeout=5).stdout
+        found = re.match(r'(\d+)\.(\d+)\.(\d+)', version)
+        if not found or tuple(map(int, found.groups())) < (2, 1, 287):
+            self.skipTest('Claude CLI version predates the observed effort control protocol')
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary).resolve()
+            config = root/'claude'; config.mkdir()
+            env = {key: os.environ[key] for key in ('PATH', 'SystemRoot', 'WINDIR', 'TEMP', 'TMP')
+                   if key in os.environ}
+            env.update(HOME=str(root), USERPROFILE=str(root), CLAUDE_CONFIG_DIR=str(config),
+                       DISABLE_AUTOUPDATER='1', CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC='1')
+            process = subprocess.Popen([binary, '-p', '--input-format', 'stream-json',
+                                        '--output-format', 'stream-json', '--verbose'],
+                                       stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+                                       stderr=subprocess.DEVNULL, text=True, encoding='utf-8',
+                                       cwd=root, env=env)
+            incoming = queue.Queue()
+            def read_frames():
+                for line in process.stdout:
+                    incoming.put(line)
+            reader = threading.Thread(target=read_frames, daemon=True)
+            reader.start()
+            responses = {}
+            try:
+                for label, request in [('initialize', {'subtype': 'initialize', 'hooks': None}),
+                                       ('set', {'subtype': 'apply_flag_settings',
+                                                'settings': {'effortLevel': 'low'}}),
+                                       ('read', {'subtype': 'get_settings'})]:
+                    rid = str(uuid.uuid4())
+                    process.stdin.write(json.dumps({'type': 'control_request', 'request_id': rid,
+                                                    'request': request})+'\n')
+                    process.stdin.flush()
+                    while True:
+                        event = json.loads(incoming.get(timeout=10))
+                        if event.get('type') == 'control_response' and event['response'].get('request_id') == rid:
+                            responses[label] = event['response']
+                            break
+            finally:
+                process.terminate()
+                try:
+                    process.wait(timeout=2)
+                except subprocess.TimeoutExpired:
+                    process.kill(); process.wait(timeout=2)
+                reader.join(timeout=2)
+                process.stdin.close()
+                process.stdout.close()
+            self.assertEqual(responses['set']['subtype'], 'success')
+            self.assertEqual(responses['read']['response']['applied']['effort'], 'low')
+            self.assertTrue(responses['initialize']['response']['models'])
+            self.assertFalse((config/'settings.json').exists())
+
+
+class ClaudeCliModelContract(unittest.TestCase):
+    def setUp(self):
+        self.native_models = [
+            {'value': 'default', 'resolvedModel': 'claude-opus-5-5',
+             'displayName': 'Default (recommended)', 'supportsEffort': True,
+             'supportedEffortLevels': ['low', 'medium', 'high', 'xhigh', 'max']},
+            {'value': 'opus', 'resolvedModel': 'claude-opus-5-5', 'displayName': 'Opus',
+             'supportsEffort': True, 'supportedEffortLevels': ['low', 'medium', 'high']},
+            {'value': 'sonnet', 'resolvedModel': 'claude-sonnet-5-5', 'displayName': 'Sonnet',
+             'supportsEffort': True, 'supportedEffortLevels': ['low', 'medium', 'high']},
+            {'value': 'haiku', 'resolvedModel': 'claude-haiku-4-5-20251001', 'displayName': 'Haiku'},
+        ]
+        self.state = {'model': 'claude-opus-5-5', 'effort': 'medium', 'flag': None}
+        self.calls = []
+
+        def control(request):
+            self.calls.append(request)
+            subtype = request['subtype']
+            if subtype == 'get_settings':
+                flag = self.state['flag']
+                return {'applied': {'model': self.state['model'], 'effort': self.state['effort']},
+                        'sources': [{'source': 'flagSettings', 'settings': {'effortLevel': flag}}]
+                        if flag else []}
+            if subtype == 'list_models':
+                return {'models': self.native_models}
+            if subtype == 'set_model':
+                choice = request['model']
+                self.state['model'] = next((row['resolvedModel'] for row in self.native_models
+                                            if row['value'] == choice), choice)
+                return {}
+            if subtype == 'apply_flag_settings':
+                self.state['flag'] = request['settings']['effortLevel']
+                self.state['effort'] = self.state['flag'] or 'medium'
+                return {}
+            raise AssertionError(request)
+
+        self.owner = SimpleNamespace(catalog={'models': list(self.native_models)}, model=None,
+                                     control=control)
+
+    def test_concrete_ids_and_supported_efforts_from_native_rows(self):
+        rows = _model_catalog(self.owner.catalog)
+        self.assertEqual([row['id'] for row in rows],
+                         ['default', 'claude-opus-5-5', 'claude-sonnet-5-5', 'claude-haiku-4-5-20251001'])
+        self.assertIn('claude-opus-5-5', rows[0]['name'])
+        self.assertEqual(rows[2]['efforts'], ['auto', 'low', 'medium', 'high'])
+        self.assertEqual(rows[2]['defaultEffort'], 'auto')
+        self.assertEqual(rows[3]['efforts'], [])
+        self.assertEqual(_cli_catalog(self.owner, {'model': 'historical'})['currentModel'], 'claude-opus-5-5')
+        self.assertTrue(_cli_catalog(self.owner, {'model': 'historical'})['capabilities']['effort'])
+
+    def test_refresh_reads_native_model_list_and_updates_snapshot(self):
+        self.native_models = self.native_models[:2]
+        result = _cli_catalog(self.owner, {'model': 'historical'}, refresh=True)
+        self.assertEqual(len(result['models']), 2)
+        self.assertEqual(len(self.owner.catalog['models']), 2)
+        self.assertEqual(self.calls[0], {'subtype': 'list_models'})
+
+    def test_model_and_effort_change_are_checked_against_applied_settings(self):
+        _set_cli_settings(self.owner, {'model': 'claude-sonnet-5-5', 'effort': 'high'})
+        self.assertEqual(self.state['model'], 'claude-sonnet-5-5')
+        self.assertEqual(self.state['effort'], 'high')
+        self.assertEqual(self.owner.model, 'claude-sonnet-5-5')
+        self.assertIn({'subtype': 'set_model', 'model': 'claude-sonnet-5-5'}, self.calls)
+        self.assertIn({'subtype': 'apply_flag_settings', 'settings': {'effortLevel': 'high'}}, self.calls)
+        _set_cli_settings(self.owner, {'model': 'default', 'effort': 'auto'})
+        self.assertEqual(_cli_catalog(self.owner, {'model': 'historical'})['currentModel'], 'claude-opus-5-5')
+        self.assertIn({'subtype': 'set_model', 'model': 'default'}, self.calls)
+        self.assertIn({'subtype': 'apply_flag_settings', 'settings': {'effortLevel': None}}, self.calls)
+
+    def test_rejected_effort_and_unconfirmed_model_do_not_claim_success(self):
+        with self.assertRaisesRegex(ValueError, '不支持'):
+            _set_cli_settings(self.owner, {'model': 'claude-haiku-4-5-20251001', 'effort': 'high'})
+        self.assertEqual(self.calls, [])
+        original = self.owner.control
+        def ignored_switch(request):
+            if request['subtype'] == 'set_model':
+                self.calls.append(request)
+                return {}
+            return original(request)
+        self.owner.control = ignored_switch
+        with self.assertRaisesRegex(BridgeUnavailable, '未确认'):
+            _set_cli_settings(self.owner, {'model': 'claude-sonnet-5-5'})
+        self.assertIsNone(self.owner.model)

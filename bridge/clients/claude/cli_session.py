@@ -69,6 +69,88 @@ def _skill_catalog(catalog):
         rows[name] = {'id': name, 'name': name, 'description': item.get('description') or '',
                       'kind': 'skill', 'selectable': True}
     return sorted(rows.values(), key=lambda row: row['id'])
+
+
+def _model_catalog(catalog):
+    """Expose the CLI's resolved provider IDs, retaining its follow-default choice."""
+    rows = {}
+    for item in catalog.get('models') or []:
+        if not isinstance(item, dict):
+            continue
+        value = item.get('value') or item.get('id')
+        resolved = item.get('resolvedModel')
+        if not isinstance(value, str) or not value:
+            continue
+        identifier = 'default' if value == 'default' else resolved or value
+        if not isinstance(identifier, str) or not identifier:
+            continue
+        name = item.get('displayName') or item.get('name') or value
+        if resolved and resolved not in name:
+            name += ' · ' + resolved
+        levels = item.get('supportedEffortLevels')
+        efforts = ([level for level in levels if level in ('low', 'medium', 'high', 'xhigh', 'max')]
+                   if isinstance(levels, list) and item.get('supportsEffort') is True else [])
+        rows[identifier] = {'id': identifier, 'name': name,
+                            'efforts': ['auto', *dict.fromkeys(efforts)] if efforts else [],
+                            **({'defaultEffort': 'auto'} if efforts else {})}
+    return list(rows.values())
+
+
+def _applied_settings(owned):
+    settings = owned.control({'subtype': 'get_settings'})
+    applied = settings.get('applied') if isinstance(settings, dict) else None
+    if not isinstance(applied, dict) or not isinstance(applied.get('model'), str):
+        raise BridgeUnavailable('Claude Code 未报告当前模型设置')
+    return settings
+
+
+def _cli_catalog(owned, public, refresh=False):
+    if refresh:
+        models = owned.control({'subtype': 'list_models'}).get('models')
+        if not isinstance(models, list):
+            raise BridgeUnavailable('Claude Code 未返回模型列表')
+        owned.catalog['models'] = models
+    rows = _model_catalog(owned.catalog)
+    try:
+        applied = _applied_settings(owned)['applied']
+    except BridgeUnavailable:
+        applied = {}
+    return {'models': rows, 'currentModel': applied.get('model') or public['model'],
+            'currentEffort': applied.get('effort') or '',
+            'capabilities': {'models': bool(rows and applied),
+                             'effort': bool(applied and any(row['efforts'] for row in rows)),
+                             'skills': True}, 'skills': _skill_catalog(owned.catalog)}
+
+
+def _set_cli_settings(owned, body):
+    rows = _model_catalog(owned.catalog)
+    selected = next((row for row in rows if row['id'] == body.get('model')), None)
+    if selected is None:
+        raise ValueError('请选择 Claude Code 提供的模型')
+    effort = body.get('effort')
+    if effort is not None and effort not in selected['efforts']:
+        raise ValueError('该模型不支持此思考强度')
+    _applied_settings(owned)
+    target = next((item for item in owned.catalog.get('models') or []
+                   if isinstance(item, dict) and (item.get('value') == 'default' and selected['id'] == 'default'
+                   or item.get('resolvedModel') == selected['id'] or item.get('value') == selected['id'])), None)
+    expected = (target.get('resolvedModel') or target.get('value')) if target else selected['id']
+    owned.control({'subtype': 'set_model', 'model': selected['id']})
+    if effort is not None:
+        owned.control({'subtype': 'apply_flag_settings',
+                       'settings': {'effortLevel': None if effort == 'auto' else effort}})
+    settings = _applied_settings(owned)
+    applied = settings['applied']
+    if applied.get('model') != expected or (effort not in (None, 'auto') and applied.get('effort') != effort):
+        raise BridgeUnavailable('Claude Code 未确认模型或思考强度设置，请刷新检查')
+    sources = settings.get('sources')
+    if effort == 'auto' and (not isinstance(sources, list) or
+                            any(source.get('source') == 'flagSettings' and
+                                source.get('settings', {}).get('effortLevel') is not None
+                                for source in sources if isinstance(source, dict))):
+        raise BridgeUnavailable('Claude Code 未确认默认思考强度，请刷新检查')
+    owned.model = applied['model']
+
 IMAGE_URL = re.compile(r'data:(image/(?:png|jpeg|gif|webp));base64,([A-Za-z0-9+/]+={0,2})\Z')
 
 
@@ -560,13 +642,7 @@ class ClaudeCli:
             if action == 'catalog':
                 if not live:
                     return {'models': [], 'capabilities': {'models': False}, 'notice': '请先继续这条 Claude Code 会话'}
-                models = owned.catalog.get('models') or []
-                return {'models': [{'id': item.get('value') or item.get('id'),
-                                    'name': item.get('displayName') or item.get('name') or item.get('value') or item.get('id'),
-                                    'efforts': []} for item in models if isinstance(item, dict) and (item.get('value') or item.get('id'))],
-                        'currentModel': public['model'], 'currentEffort': '', 'capabilities': {'models': True, 'effort': False,
-                                                                                             'skills': True},
-                        'skills': _skill_catalog(owned.catalog)}
+                return _cli_catalog(owned, public, body.get('refresh') is True)
             if action == 'access' and 'mode' not in body:
                 options = [{'value': mode, 'label': label, 'description': description}
                            for mode, label, description in PERMISSION_OPTIONS]
@@ -645,12 +721,7 @@ class ClaudeCli:
             elif action == 'stop':
                 owned.control({'subtype': 'interrupt'})
             elif action == 'settings':
-                selection = body.get('model')
-                offered = {item['id'] for item in self.call('catalog', sid, {}).get('models', [])}
-                if selection not in offered:
-                    raise ValueError('请选择 Claude Code 提供的模型')
-                owned.control({'subtype': 'set_model', 'model': selection})
-                owned.model = selection
+                _set_cli_settings(owned, body)
             elif action == 'access':
                 mode = body.get('mode')
                 if mode not in MODES:

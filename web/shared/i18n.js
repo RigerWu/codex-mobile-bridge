@@ -3,6 +3,7 @@
 const BridgeI18n=(()=>{
 const en={
 "全部会话":"All chats",
+"当前聊天模型不在可用列表中，请选择模型后应用。":"The current chat model is unavailable. Select an offered model to apply.",
 "会话类型":"Chat type",
 "同时应用到本机 CLI":"Also apply to local CLI",
 "桌面版与本机 CLI 共用账号配置；切换后 CLI 也会使用新接入。勾选后额外核验 CLI 是否生效。":"Desktop and local CLI share account settings. The CLI will use the new access after switching; select this to verify it took effect.",

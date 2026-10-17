@@ -60,7 +60,7 @@ function renderHostErrors(hosts){
   root.hidden=!root.childElementCount;
 }
 function clearListSnapshot(){
-  for(let i=sessionStorage.length-1;i>=0;i--){const key=sessionStorage.key(i);if(key?.startsWith('codex-list-v1:'))sessionStorage.removeItem(key);}
+  for(let i=sessionStorage.length-1;i>=0;i--){const key=sessionStorage.key(i);if(key?.startsWith('codex-list-v1:')||key?.startsWith('desktop-list-v1:'))sessionStorage.removeItem(key);}
   listIdentity='';listFilterKey='';listHostIds=[];listRows=[];listOffset=0;listHasMore=false;listComplete=false;listReadFinished=false;availableSources=[];listRenderStamp='';listGeneration++;
 }
 function authLost(){clearListSnapshot();if(!$('app').hidden)document.dispatchEvent(new Event('bridge-auth-lost'));showLogin();}
@@ -136,6 +136,7 @@ async function enter(authInfo){
   const verified=authInfo?.authenticated?authInfo:await api('/api/auth');
   if(!verified.authenticated)throw Error(t('登录状态暂不可用'));
   listIdentity=await listAuthIdentity(verified);
+  desktopSessions.bindListCache(listIdentity,window.BridgeRelayBase||location.host);
   restoreListSnapshot();
   refreshComputer();$('login').hidden=true;$('app').hidden=false;$('bootstrap-status').hidden=true;window.BridgeBootstrap?.ready();document.dispatchEvent(new Event('bridge-authenticated'));
   const clientsReady=clientNavigation.refresh();accountsPanel?.refresh();

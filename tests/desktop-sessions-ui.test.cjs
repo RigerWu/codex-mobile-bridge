@@ -1,7 +1,7 @@
 'use strict';
 const test=require('node:test'),assert=require('node:assert/strict'),fs=require('node:fs'),vm=require('node:vm'),path=require('node:path'),{webcrypto}=require('node:crypto');
-function fixture(){
- const listeners={},storage=new Map();let document;
+function fixture({storage=new Map()}={}){
+ const listeners={};let document;
  class Node {
   constructor(tag='div'){this.tagName=tag.toUpperCase();this.children=[];this.parentElement=null;this.dataset={};this.attributes={};this.hidden=false;this.disabled=false;this.value='';this.className='';this._text='';this.style={setProperty(){}};this.scrollHeight=100;this.scrollTop=0;this.clientHeight=100;this.clientWidth=1000;this.open=false;this.options=this.children;this.classList={contains:n=>this.className.split(' ').includes(n),add:(...ns)=>this.className=[...new Set([...this.className.split(' ').filter(Boolean),...ns])].join(' '),remove:(...ns)=>this.className=this.className.split(' ').filter(n=>!ns.includes(n)).join(' '),toggle:(n,v)=>{v=v??!this.classList.contains(n);this.classList[v?'add':'remove'](n);return v;}};}
   get textContent(){return this._text+this.children.map(n=>n.textContent).join('');}set textContent(v){this._text=String(v??'');this.children=[];this.options=this.children;}
@@ -27,9 +27,31 @@ function fixture(){
  vm.runInContext(fs.readFileSync(path.join(__dirname,'../web/shell/app.js'),'utf8').match(/^function uuid\(\).*$/m)[0],context);
  for(const file of ['web/layouts/viewport.js','web/features/chat/activity.js','web/features/chat/attachments.js','web/shared/i18n.js','web/features/clients/client-lifecycle.js','web/features/chat/message-actions.js','web/features/chat/permissions.js','web/features/workspace/workbench.js','web/features/chat/list-sync.js','web/features/clients/desktop-sessions.js'])vm.runInContext(fs.readFileSync(path.join(__dirname,'..',file),'utf8'),context);
  const View=vm.runInContext('DesktopSessionsView',context),view=new View({root,select,request:(url,body)=>{calls.push({url,body});return handler(url,body);},notify:text=>notices.push(text),onSelect(){},csrf:()=>'csrf-test',onUnauthorized(){}});
- return {view,root,document,calls,notices,setHandler:fn=>handler=fn,setUploadHandler:fn=>uploadHandler=fn,run:s=>vm.runInContext(s,context),text:n=>n.textContent};
+ return {view,root,document,calls,notices,storage,setHandler:fn=>handler=fn,setUploadHandler:fn=>uploadHandler=fn,run:s=>vm.runInContext(s,context),text:n=>n.textContent};
 }
 async function opened(){const ui=fixture();await ui.view.choose('claude');await ui.view.open('a');return ui;}
+
+test('Claude list reentry paints a bounded identity-scoped snapshot before the live read',async()=>{
+ const storage=new Map(),identity='a'.repeat(64),first=fixture({storage});first.view.bindListCache(identity,'gateway.test');
+ first.setHandler(async()=>({sessions:[{id:'saved',title:'Saved chat',backend:'code',cwd:'/work',updatedAt:9,capabilities:{send:true}}]}));
+ await first.view.choose('claude');first.view.search.value='Saved';first.view.archived.checked=true;first.view.listMode.value='project';first.view.renderList();first.view.rowsRoot.scrollTop=40;first.view.saveListSnapshot('claude');
+ const key=first.view.listSnapshotKey('claude'),saved=JSON.parse(storage.get(key));assert.equal(saved.rows.length,1);assert.equal(saved.rows[0].capabilities,undefined);
+ const second=fixture({storage});second.view.bindListCache(identity,'gateway.test');let finish;second.setHandler(()=>new Promise(resolve=>finish=resolve));
+ const entering=second.view.choose('claude');assert.equal(second.view.rowsRoot.querySelector('.session').dataset.id,'saved');assert.equal(second.view.search.value,'Saved');assert.equal(second.view.archived.checked,true);assert.equal(second.view.listMode.value,'project');assert.equal(second.view.rowsRoot.scrollTop,40);assert.equal(second.view.canMutate(),false);
+ finish({sessions:[{id:'fresh',title:'Fresh chat',backend:'code',cwd:'/work',updatedAt:10}]});await entering;assert.equal(second.view.rows[0].id,'fresh');
+ const wrongLogin=fixture({storage});wrongLogin.view.bindListCache('b'.repeat(64),'gateway.test');assert.equal(wrongLogin.view.providerViews.size,0);
+ const wrongHost=fixture({storage});wrongHost.view.bindListCache(identity,'other.test');assert.equal(wrongHost.view.providerViews.size,0);
+ let finishAccountRead;first.setHandler(()=>new Promise(resolve=>finishAccountRead=resolve));const switching=first.view.accountChanged('claude',{activeId:'old'},{activeId:'new'});assert.equal(storage.has(key),false);
+ finishAccountRead({sessions:[]});await switching;assert.deepEqual(JSON.parse(storage.get(key)).rows,[]);
+});
+test('DeepSeek stores only complete list reads and restores its own provider rows',async()=>{
+ const storage=new Map(),view=fixture({storage});view.view.bindListCache('a'.repeat(64),'gateway.test');
+ view.setHandler(async()=>({sessions:[{id:'partial',title:'Partial'}],complete:false}));await view.view.choose('deepseek');
+ const key=view.view.listSnapshotKey('deepseek');assert.equal(storage.has(key),false);
+ view.setHandler(async()=>({sessions:[{id:'dsh',title:'Harness chat',backend:'chat'}],complete:true}));await view.view.refreshList();
+ assert.equal(JSON.parse(storage.get(key)).rows[0].id,'dsh');assert.equal(storage.has(view.view.listSnapshotKey('claude')),false);
+ const restored=fixture({storage});restored.view.bindListCache('a'.repeat(64),'gateway.test');assert.equal(restored.view.providerViews.get('deepseek').rows[0].id,'dsh');assert.equal(restored.view.providerViews.has('claude'),false);
+});
 
 test('search stays short in both languages while its accessible name stays specific',()=>{
  const ui=fixture();

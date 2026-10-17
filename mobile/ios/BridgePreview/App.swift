@@ -55,6 +55,7 @@ final class BridgeNavigationController: UINavigationController {
 final class AppDelegate: UIResponder, UIApplicationDelegate, UNUserNotificationCenterDelegate {
     let controller = BridgeController()
     private var pendingNotification: UNNotificationResponse?
+    private var lastNotificationRoute: (response: UNNotificationResponse, fromScene: Bool)?
     func application(_ application: UIApplication, didFinishLaunchingWithOptions options: [UIApplication.LaunchOptionsKey: Any]?) -> Bool {
         UNUserNotificationCenter.current().delegate = self
         return true
@@ -65,9 +66,18 @@ final class AppDelegate: UIResponder, UIApplicationDelegate, UNUserNotificationC
     }
     func application(_ application: UIApplication, didFailToRegisterForRemoteNotificationsWithError error: Error) { controller.info(MobileStrings.text("系统推送注册失败，请检查推送签名与网络。")) }
     func userNotificationCenter(_ center: UNUserNotificationCenter, didReceive response: UNNotificationResponse, withCompletionHandler completion: @escaping () -> Void) {
+        DispatchQueue.main.async { self.receiveNotification(response, fromScene: false) }
+        completion()
+    }
+    func receiveNotification(_ response: UNNotificationResponse, fromScene: Bool) {
+        if let last = lastNotificationRoute,
+           last.response === response, last.fromScene != fromScene {
+            lastNotificationRoute = nil
+            return
+        }
+        lastNotificationRoute = (response, fromScene)
         pendingNotification = response
         openPendingNotification()
-        completion()
     }
     func openPendingNotification() {
         guard controller.viewIfLoaded?.window != nil, let response = pendingNotification else { return }
@@ -88,6 +98,7 @@ final class SceneDelegate: UIResponder, UIWindowSceneDelegate {
         self.window = window
         window.makeKeyAndVisible()
         DispatchQueue.main.async {
+            if let response = connectionOptions.notificationResponse { app.receiveNotification(response, fromScene: true) }
             app.openPendingNotification()
             if let url = connectionOptions.urlContexts.first?.url { app.controller.openLink(url) }
         }

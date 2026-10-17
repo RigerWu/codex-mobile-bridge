@@ -25,6 +25,8 @@ class IOSReleaseBuildTests(unittest.TestCase):
     def test_cold_launch_notification_is_retried_when_scene_becomes_active(self):
         source = (ROOT/'mobile/ios/BridgePreview/App.swift').read_text(encoding='utf-8')
         scene = source[source.index('final class SceneDelegate'):source.index('final class NoRedirect')]
+        will_connect = scene[scene.index('func scene(_ scene: UIScene, willConnectTo'):]
+        self.assertIn('connectionOptions.notificationResponse', will_connect[:will_connect.index('\n    }')])
         active = scene[scene.index('func sceneDidBecomeActive'):]
         self.assertIn('openPendingNotification()', active[:active.index('\n    }')])
 

@@ -497,6 +497,7 @@ class IntegrationTests(unittest.TestCase):
     def test_managed_catalog_uses_selected_access_instead_of_old_chat_provider(self):
         from unittest.mock import Mock
         from types import SimpleNamespace
+        self.bridge.session(THREAD)
         selected={'models':[{'id':'gemini-fixture','efforts':[]}],'modelSource':'api','modelAccessName':'Gemini access'}
         self.bridge.accounts=SimpleNamespace(current_models=Mock(return_value=selected))
         self.bridge.catalog_reader.get=Mock(side_effect=AssertionError('must not query old provider models'))
@@ -507,6 +508,27 @@ class IntegrationTests(unittest.TestCase):
             self.assertEqual(result['modelAccessName'],'Gemini access')
         self.assertEqual([c.args[0] for c in self.bridge.catalog_reader.get_kind.call_args_list],['skills'])
         self.bridge.accounts=None
+
+    def test_cold_model_catalog_reads_saved_settings_without_desktop_attach(self):
+        from unittest.mock import Mock, patch
+        saved = {**state(), 'cwd': '/saved/project', 'modelProvider': 'saved-api',
+                 'latestModel': 'saved-model', 'latestReasoningEffort': 'xhigh',
+                 'latestThreadSettings': {'effort': 'medium'}}
+        models = {'models': [{'id': 'saved-model', 'efforts': ['xhigh']}],
+                  'modelSource': 'api', 'fastMode': {'allowed': False}}
+        self.bridge.catalog_reader.get_kind = Mock(return_value=models)
+        with patch.object(self.bridge.store, 'history', return_value=saved) as history, \
+                patch.object(self.bridge, '_attach', side_effect=AssertionError('catalog attached desktop')), \
+                patch('bridge.app.service.open_in_desktop', side_effect=AssertionError('catalog opened desktop')):
+            result = self.bridge.catalog(THREAD, kind='models')
+        history.assert_called_once_with(THREAD, turn_limit=20)
+        self.bridge.catalog_reader.get_kind.assert_called_once_with(
+            'models', '/saved/project', refresh=False, provider='saved-api')
+        self.assertEqual(result['currentModel'], 'saved-model')
+        self.assertEqual(result['currentEffort'], 'xhigh')
+        self.assertIsNone(self.bridge.live[THREAD].owner)
+        self.assertFalse(self.bridge.live[THREAD].connected)
+        self.assertEqual(self.fixture.requests, [])
 
     def test_upstream_model_without_effort_metadata_uses_original_provider_and_owner(self):
         reads = []

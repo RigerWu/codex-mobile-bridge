@@ -305,3 +305,9 @@ for(const desktop of [false,true])test(`${desktop?'desktop':'web'} hides success
   ui.setValue({...ui.value(),switch:{phase}});await ui.panel.refresh();assert.equal(ui.panel.status.hidden,false);
  }
 });
+
+test('account models retain cached names and efforts when explicit refresh fails',async()=>{
+ const ui=fixture(),account={...ui.value().accounts[0],details:{models:{status:'error',error:'Refresh failed',cache:{updatedAt:1000},models:[{id:'route/model',name:'Concrete model',efforts:['low','high']}]}}};
+ ui.setValue({...ui.value(),accounts:[account]});ui.panel.expandedModels.add(account.id);await ui.panel.refresh();assert.match(ui.text(),/Concrete model/);assert.match(ui.text(),/low.*high/);assert.match(ui.text(),/Refresh failed/);
+ await ui.all().find(node=>node.tag==='button'&&node.textContent==='刷新模型').onclick();assert.equal(ui.requests.at(-1).refresh,true);assert.equal(ui.requests.at(-1).section,'models');
+});

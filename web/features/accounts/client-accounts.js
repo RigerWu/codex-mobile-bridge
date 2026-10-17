@@ -138,15 +138,18 @@ class DesktopClientAccountsPanel {
     this.modelsOpen=!this.modelsOpen;if(!this.modelsOpen||this.models){this.render();return;}
     return this.loadModels();
   }
-  async loadModels(){
+  async loadModels(refresh=false){
     const generation=this.generation,revision=++this.modelsRevision;this.modelsError='';this.modelsLoading=true;this.render();
-    try{const value=await this.readModels();if(generation!==this.generation||revision!==this.modelsRevision)return;this.models=value;}
+    try{const value=await this.readModels(refresh);if(generation!==this.generation||revision!==this.modelsRevision)return;this.models=value;}
     catch(error){if(generation===this.generation&&revision===this.modelsRevision)this.modelsError=error.message;}
     finally{if(generation===this.generation&&revision===this.modelsRevision){this.modelsLoading=false;this.render();}}
   }
   renderModels(box){
-    if(this.modelsLoading){box.append(this.node('p','正在读取模型…','account-muted'));return;}
-    if(this.modelsError){box.append(this.node('p',this.modelsError,'error'),this.button('重试',()=>this.loadModels()));return;}
+    const controls=this.node('div',undefined,'accounts-model-controls'),refresh=this.button('刷新模型',()=>this.loadModels(true));refresh.disabled=this.modelsLoading;controls.append(refresh);
+    const updated=this.models?.cache?.updatedAt;if(Number.isFinite(updated))controls.append(this.node('small',this.text('更新于：')+new Date(updated*1000).toLocaleString(BridgeI18n.locale()),'account-muted'));box.append(controls);
+    if(this.modelsLoading)box.append(this.node('p','正在读取模型…','account-muted'));
+    if(this.modelsError||this.models?.modelError)box.append(this.node('p',this.modelsError||this.models.modelError,'error'));
+    if(!this.models&&(this.modelsLoading||this.modelsError))return;
     let count=0;const groups=this.models?.groups?.length?this.models.groups:[{models:this.models?.models||this.models?.catalog?.models||[]}];
     for(const group of groups){
       if(!group.models?.length)continue;count+=group.models.length;

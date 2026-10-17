@@ -7,7 +7,7 @@ function fixture({desktop=false,provider='deepseek',toolbar=false}={}){
   class Clock extends Date{static now(){return time;}}
   const context=vm.createContext({document,Date:Clock,CustomEvent:class{constructor(type){this.type=type;}},localStorage:{getItem(){return null;},setItem(){}},window:{confirm(message){prompts.push(message);return confirmed;}},setTimeout(fn,ms){timers.set(++tid,{fn,due:time+ms});return tid;},clearTimeout:id=>timers.delete(id)});
   for(const path of ['web/shared/i18n.js','web/features/accounts/client-accounts.js'])vm.runInContext(fs.readFileSync(path,'utf8'),context);
-  const Panel=vm.runInContext('DesktopClientAccountsPanel',context),panel=new Panel({root,provider,desktop,toolbar:outerToolbar,read:()=>{calls.push({action:'list'});return readHandler();},request:body=>{calls.push(body);return handler(body);},readModels:()=>handler({action:'models'}),visible:()=>visible,onUpdate:result=>updates.push(result)});
+  const Panel=vm.runInContext('DesktopClientAccountsPanel',context),panel=new Panel({root,provider,desktop,toolbar:outerToolbar,read:()=>{calls.push({action:'list'});return readHandler();},request:body=>{calls.push(body);return handler(body);},readModels:(refresh=false)=>handler({action:'models',refresh}),visible:()=>visible,onUpdate:result=>updates.push(result)});
   const all=node=>[node,...node.children.flatMap(all)];
   return {panel,root,outerToolbar,calls,prompts,updates,timers,setValue:next=>value=next,setHandler:next=>handler=next,setRead:next=>readHandler=next,setVisible:next=>visible=next,confirm:next=>confirmed=next,advance:async ms=>{time+=ms;for(const [id,timer]of [...timers])if(timer.due<=time){timers.delete(id);await timer.fn();}},tick:ms=>time+=ms,now:()=>time,all:()=>all(root),text:()=>all(root).map(row=>row.textContent).join('\n'),english:()=>vm.runInContext("BridgeI18n.setLanguage('en')",context)};
 }
@@ -141,7 +141,7 @@ test('flat model responses are preserved when the backend has no groups',async()
  const ui=fixture();ui.setHandler(async()=>({groups:[],models:[{id:'flat/model',name:'Flat model'}]}));await ui.panel.toggleModels();assert.match(ui.text(),/Flat model/);
 });
 test('model read errors are retryable and are not presented as a successful empty catalog',async()=>{
- const ui=fixture();ui.setHandler(async()=>{throw Error('model catalog unavailable');});await ui.panel.toggleModels();assert.match(ui.text(),/model catalog unavailable/);assert.doesNotMatch(ui.text(),/未返回可用模型|进入会话/);ui.setHandler(async()=>({models:[{id:'recovered-model'}]}));await ui.all().find(node=>node.tag==='button'&&node.textContent==='重试').onclick();assert.match(ui.text(),/recovered-model/);assert.doesNotMatch(ui.text(),/model catalog unavailable/);
+ const ui=fixture();ui.setHandler(async()=>{throw Error('model catalog unavailable');});await ui.panel.toggleModels();assert.match(ui.text(),/model catalog unavailable/);assert.doesNotMatch(ui.text(),/未返回可用模型|进入会话/);ui.setHandler(async()=>({models:[{id:'recovered-model'}]}));await ui.all().find(node=>node.tag==='button'&&node.textContent==='刷新模型').onclick();assert.match(ui.text(),/recovered-model/);assert.doesNotMatch(ui.text(),/model catalog unavailable/);
 });
 
 test('API editor exists only in desktop and sends a native gateway draft without applying it',async()=>{
@@ -159,4 +159,12 @@ test('official account edit is a name-only operation and deletion requires confi
 });
 test('closing account panel discards a late edit response and erases typed key',async()=>{
  const ui=fixture({desktop:true});ui.panel.openEditor({kind:'api',api:{}});ui.panel.editKey.input.value='private-key';ui.panel.closeEditor();assert.equal(ui.panel.editKey.input.value,'');let finish;ui.setHandler(()=>new Promise(resolve=>finish=resolve));const pending=ui.panel.editAccount(row('saved'));ui.panel.dispose();finish({id:'saved',name:'Saved',kind:'api',api:{hasKey:true}});await pending;assert.equal(ui.panel.editor.hidden,true);assert.equal(ui.panel.editing,null);
+});
+
+test('model catalog reopens from cache; only explicit refresh forces upstream and preserves old rows',async()=>{
+ const ui=fixture({provider:'claude'}),calls=[];
+ ui.panel.accept(snapshot([row('current')]));ui.setHandler(async body=>{calls.push(body);return {cache:{updatedAt:1000},models:[{id:'concrete-model',efforts:['low','high']}]};});
+ await ui.panel.toggleModels();await ui.panel.toggleModels();await ui.panel.toggleModels();assert.equal(calls.length,1);assert.equal(calls[0].refresh,false);assert.match(ui.text(),/concrete-model/);assert.match(ui.text(),/更新于：/);
+ ui.setHandler(async body=>{calls.push(body);throw Error('upstream temporarily unavailable');});await ui.all().find(n=>n.tag==='button'&&n.textContent==='刷新模型').onclick();assert.equal(calls.at(-1).refresh,true);assert.match(ui.text(),/concrete-model/);assert.match(ui.text(),/upstream temporarily unavailable/);assert.equal(ui.calls.some(c=>c.action==='details'),false);
+ ui.english();assert.match(ui.text(),/Refresh models/);
 });

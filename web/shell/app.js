@@ -1002,7 +1002,7 @@ function openCurrentAccounts(){
   const panel=new DesktopClientAccountsPanel({root:content,provider,toolbar,
     read:()=>api('/api/desktop-sessions/'+provider+'/accounts'),
     request:value=>api('/api/desktop-sessions/'+provider+'/accounts',value),
-    readModels:()=>api('/api/desktop-sessions/'+provider+'/account'),
+    readModels:(refresh=false)=>api('/api/desktop-sessions/'+provider+'/account'+(refresh?'?refresh=true':'')),
     onChanged:(value,previous)=>desktopSessions.accountChanged(provider,previous,value)
   });
   if(provider==='claude'&&typeof CliAccessPanel!=='undefined'){

@@ -173,3 +173,24 @@ class InfoTests(unittest.TestCase):
             identity = self.manager.info.read_identity()
         self.assertEqual(identity['kind'], 'chatgpt')
         self.assertEqual([call.args[0] for call in rpc.request.call_args_list].count('account/read'), 1)
+
+    def test_transient_current_login_models_use_only_matching_native_chatgpt_catalog(self):
+        info = self.manager.info
+        account_key = 'a' * 64
+        identity = {'kind': 'chatgpt', 'name': 'ChatGPT',
+                    'login': {'owner': None, 'context': {'accountKey': account_key, 'email': 'fixture@example.test'}}}
+        info.identity = identity
+        info.stamp = info.source_stamp()
+        info.checked_at = time.time()
+        row = info.current_login()
+        self.assertTrue(row['transient'])
+        with patch.object(info, 'read_identity', return_value=identity), patch.object(
+                self.bridge.catalog_reader, 'get_kind', return_value={'models': [{'id': 'fixture-model'}]}, create=True) as catalog:
+            info.read(row, 'models')
+        self.assertEqual(info.entries[row['id']]['models']['models'], [{'id': 'fixture-model'}])
+        catalog.assert_called_once_with('models', str(self.home), refresh=False, provider='openai')
+        with patch.object(info, 'read_identity', return_value={**identity, 'kind': 'api'}), patch.object(
+                self.bridge.catalog_reader, 'get_kind', create=True) as catalog:
+            info.read(row, 'models', refresh=True)
+        catalog.assert_not_called()
+        self.assertEqual(info.entries[row['id']]['models']['status'], 'error')

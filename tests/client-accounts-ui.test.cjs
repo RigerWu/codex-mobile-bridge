@@ -1,7 +1,7 @@
 'use strict';
 const test=require('node:test'),assert=require('node:assert/strict'),fs=require('node:fs'),vm=require('node:vm');
 function fixture({desktop=false,provider='deepseek',toolbar=false}={}){
-  function node(tag){return {tag,children:[],dataset:{},textContent:'',hidden:false,disabled:false,attributes:{},classList:{add(){}},append(...nodes){for(const child of nodes){if(child.parent)child.parent.children=child.parent.children.filter(value=>value!==child);child.parent=this;this.children.push(child);}},replaceChildren(...nodes){this.children=nodes;},setAttribute(key,value){this.attributes[key]=value;},closest(){return null;},querySelectorAll(selector){return this.children.flatMap(child=>[...(selector==='[data-i18n]'&&child.dataset.i18n?[child]:[]),...child.querySelectorAll(selector)]);}};}
+  function node(tag){return {tag,children:[],dataset:{},textContent:'',hidden:false,disabled:false,scrollTop:0,attributes:{},classList:{add(){}},append(...nodes){for(const child of nodes){child.remove();child.parent=this;child.parentNode=this;this.children.push(child);}},insertBefore(child,before){child.remove();const index=before?this.children.indexOf(before):-1;child.parent=this;child.parentNode=this;this.children.splice(index<0?this.children.length:index,0,child);},replaceChildren(...nodes){for(const child of [...this.children])child.remove();this.append(...nodes);if(this.className==='accounts-models')this.scrollTop=0;},remove(){if(this.parent){this.parent.children=this.parent.children.filter(value=>value!==this);this.parent=null;this.parentNode=null;}},setAttribute(key,value){this.attributes[key]=value;},closest(){return null;},querySelectorAll(selector){return this.children.flatMap(child=>[...(selector==='[data-i18n]'&&child.dataset.i18n?[child]:[]),...child.querySelectorAll(selector)]);}};}
   const root=node('div'),outerToolbar=toolbar?node('div'):null,listeners={},timers=new Map(),calls=[],prompts=[],updates=[];let time=1000000,tid=0,visible=true,confirmed=true,value={accounts:[],activeId:null,canSwitch:true},handler=async()=>value,readHandler=async()=>value;
   const document={hidden:false,documentElement:{},createElement:node,querySelectorAll:()=>[],addEventListener:(type,fn)=>(listeners[type]??=[]).push(fn),removeEventListener:(type,fn)=>listeners[type]=listeners[type].filter(row=>row!==fn),dispatchEvent(event){for(const fn of listeners[event.type]||[])fn(event);}};
   class Clock extends Date{static now(){return time;}}
@@ -175,4 +175,13 @@ test('same saved account ID with changed model identity clears rows and rejects 
  finish({cache:{identity:a,updatedAt:1000},models:[{id:'model-a'}]});await pending;assert.equal(ui.panel.models,null);
  ui.panel.modelsOpen=true;ui.setHandler(async()=>({cache:{identity:b,updatedAt:2000},models:[{id:'model-b'}]}));await ui.panel.loadModels();assert.match(ui.text(),/model-b/);
  ui.setHandler(async()=>({cache:{identity:a,updatedAt:1000},models:[{id:'model-a'}]}));await ui.panel.loadModels();assert.equal(ui.panel.models,null);assert.doesNotMatch(ui.text(),/model-a|model-b/);
+});
+
+for(const provider of ['claude','deepseek'])test(`${provider} model scroller survives status reads and manual refresh`,async()=>{
+ const ui=fixture({provider}),identity='a'.repeat(64),value={...snapshot([row('current')]),modelCatalogIdentity:identity};
+ ui.setValue(value);ui.panel.accept(value);ui.setHandler(async()=>({cache:{identity,updatedAt:1000},models:[{id:'model-a'},{id:'model-b'}]}));
+ await ui.panel.toggleModels();const box=ui.panel.modelsBox,card=box.parent;box.scrollTop=83;
+ await ui.panel.refresh(false);assert.equal(ui.panel.modelsBox,box);assert.equal(box.parent,card);assert.equal(box.scrollTop,83);
+ ui.setHandler(async()=>({cache:{identity,updatedAt:2000},models:[{id:'model-c'},{id:'model-d'}]}));
+ await ui.all().find(n=>n.tag==='button'&&n.textContent==='刷新模型').onclick();assert.equal(box.scrollTop,83);assert.match(ui.text(),/model-d/);
 });

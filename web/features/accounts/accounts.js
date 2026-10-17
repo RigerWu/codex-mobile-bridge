@@ -1,7 +1,7 @@
 /* Shared account selector; enrollment controls exist only in the desktop host. */
 class AccountsPanel {
   constructor({root,read,request,desktop=false,toolbar=null,onChanged=()=>{},onUpdate=()=>{}}){
-    Object.assign(this,{root,read,request,desktop,toolbar,onChanged,onUpdate});this.value=null;this.busy=false;this.timer=null;this.generation=0;this.operationError=false;this.expandedModels=new Set();this.syncLocalCliIds=new Set();this.expandedSubscriptions=new Set();
+    Object.assign(this,{root,read,request,desktop,toolbar,onChanged,onUpdate});this.value=null;this.busy=false;this.timer=null;this.generation=0;this.operationError=false;this.expandedModels=new Set();this.modelBoxes=new Map();this.syncLocalCliIds=new Set();this.expandedSubscriptions=new Set();
     this.build();
   }
   text(value){return typeof BridgeI18n==='undefined'?value:BridgeI18n.t(value);}
@@ -80,13 +80,19 @@ class AccountsPanel {
     if(this.busy)return false;clearTimeout(this.timer);this.generation++;this.loading=false;this.busy=true;this.operationError=false;this.error.textContent='';this.render();const generation=this.generation;
     try{const value=await this.request(payload);if(generation===this.generation){this.accept(value);return true;}return false;}
     catch(error){if(generation===this.generation){this.operationError=true;this.error.textContent=this.text(String(error.message).replace(/^Error invoking remote method '[^']+': (?:Error: )?/,''));}return false;}
-    finally{if(generation===this.generation){this.busy=false;this.render();this.timer=setTimeout(()=>this.refresh(),2000);}}
+    finally{if(generation===this.generation){this.busy=false;this.render();this.schedule();}}
   }
   async refresh(){
     clearTimeout(this.timer);if(this.loading||this.busy)return;this.loading=true;const generation=this.generation;
     try{const value=await this.read();if(generation===this.generation){if(!this.operationError)this.error.textContent='';this.accept(value);await this.loadUsage(generation);}}
     catch(error){if(generation===this.generation)this.error.textContent=this.text(String(error.message).replace(/^Error invoking remote method '[^']+': (?:Error: )?/,''));}
-    finally{if(generation===this.generation){this.loading=false;this.render();this.timer=setTimeout(()=>{const dialog=this.root.closest('dialog');if(!this.root.closest('[hidden]')&&!document.hidden&&(!dialog||dialog.open))this.refresh();},2000);}}
+    finally{if(generation===this.generation){this.loading=false;this.render();this.schedule();}}
+  }
+  schedule(){
+    clearTimeout(this.timer);const value=this.value;if(!value)return;
+    const phase=value.switch?.phase||'idle',enrollment=value.enrollment?.phase,update=value.desktopUpdate?.state;
+    const pending=!['idle','complete','restored','failed','interrupted'].includes(phase)||['starting','waiting'].includes(enrollment)||['checking','requesting','needsDesktop'].includes(update)||value.current?.status==='checking'||this.accountRows().some(row=>row.details?.usage?.status==='loading'||row.details?.models?.status==='loading');
+    this.timer=setTimeout(()=>{if(this.visible())return this.refresh();},pending?2000:300000);
   }
   visible(){const dialog=this.root.closest('dialog');return !this.root.closest('[hidden]')&&!document.hidden&&(!dialog||dialog.open);}
   accountRows(){const login=this.value?.loginAccount,rows=this.value?.accounts||[];return login?[login,...rows.filter(row=>row.id!==login.id)]:rows;}
@@ -174,13 +180,18 @@ class AccountsPanel {
   accountActions(card,row,footer){
     const models=row.details?.models,opened=this.expandedModels.has(row.id);
     {const show=this.button(opened?'收起模型':'查看可用模型',()=>{if(opened){this.expandedModels.delete(row.id);this.render();}else{this.expandedModels.add(row.id);this.perform({action:'details',id:row.id,section:'models'});}});show.disabled=this.busy;footer.append(show);}
-    if(opened){const box=this.node('div',undefined,'accounts-models');
-      const controls=this.node('div',undefined,'accounts-model-controls'),refresh=this.button('刷新模型',()=>this.perform({action:'details',id:row.id,section:'models',refresh:true}));refresh.disabled=this.busy||models?.status==='loading';controls.append(refresh);
-      const updated=models?.cache?.updatedAt;if(Number.isFinite(updated)&&updated>0)controls.append(this.node('small',this.text('更新于：')+this.shortTime(updated),'account-muted'));box.append(controls);
-      if((!models||models.status==='loading')&&!models?.models?.length)box.append(this.node('p','正在读取模型…'));
-      if(models?.status==='error')box.append(this.node('p',models.error,'error'));
-      if(models?.models?.length)for(const model of models.models){const line=this.node('div');line.textContent=!model.name||model.name===model.id?model.id:model.name+' · '+model.id;if(model.efforts?.length)line.append(this.node('small',' · '+model.efforts.map(effort=>this.text(effort)).join(' / '),'account-muted'));box.append(line);}
-      else if(models?.status==='ready')box.append(this.node('p','暂未提供可用模型'));card.append(box);
+    if(opened){const identity=row.accountKey||JSON.stringify([row.kind,row.baseUrl,row.model,row.email]);let box=this.modelBoxes.get(row.id);
+      if(box?.identity!==identity){this.modelBoxes.delete(row.id);box=null;}
+      if(!box){box=this.node('div',undefined,'accounts-models');box.identity=identity;box.controls=this.node('div',undefined,'accounts-model-controls');box.refresh=this.button('刷新模型',()=>this.perform({action:'details',id:row.id,section:'models',refresh:true}));box.updated=this.node('small',undefined,'account-muted');box.content=this.node('div');box.controls.append(box.refresh,box.updated);box.append(box.controls,box.content);this.modelBoxes.set(row.id,box);}
+      box.refresh.disabled=this.busy||models?.status==='loading';
+      const updated=models?.cache?.updatedAt;box.updated.hidden=!(Number.isFinite(updated)&&updated>0);box.updated.textContent=box.updated.hidden?'':this.text('更新于：')+this.shortTime(updated);
+      const key=JSON.stringify([models?.status,models?.error,models?.models,BridgeI18n.locale()]);
+      if(box.modelKey!==key){box.modelKey=key;box.content.replaceChildren();
+        if((!models||models.status==='loading')&&!models?.models?.length)box.content.append(this.node('p','正在读取模型…'));
+        if(models?.status==='error')box.content.append(this.node('p',models.error,'error'));
+        if(models?.models?.length)for(const model of models.models){const line=this.node('div');line.textContent=!model.name||model.name===model.id?model.id:model.name+' · '+model.id;if(model.efforts?.length)line.append(this.node('small',' · '+model.efforts.map(effort=>this.text(effort)).join(' / '),'account-muted'));box.content.append(line);}
+        else if(models?.status==='ready')box.content.append(this.node('p','暂未提供可用模型'));
+      }if(!box.parentNode)card.append(box);
     }
   }
   accountUsageControls(row){
@@ -193,7 +204,7 @@ class AccountsPanel {
     controls.append(refresh);return controls;
   }
   accept(value){const old=this.value;if(!this.desktop&&old?.canSwitch===false&&value.canSwitch===undefined)value={...value,canSwitch:false};this.value=value;if(old&&(old.activeId!==value.activeId||old.current?.kind!==value.current?.kind||old.current?.name!==value.current?.name||old.switch?.phase!==value.switch?.phase))this.onChanged(value);this.onUpdate(value);this.render();}
-  clear(){this.resetDialog?.close();clearTimeout(this.timer);this.generation++;this.value=null;this.loading=false;this.busy=false;this.operationError=false;this.error.textContent='';this.rows.replaceChildren();}
+  clear(){this.resetDialog?.close();clearTimeout(this.timer);this.generation++;this.value=null;this.loading=false;this.busy=false;this.operationError=false;this.modelBoxes.clear();this.error.textContent='';this.rows.replaceChildren();}
   requestId(){
     if(typeof crypto.randomUUID==='function')return crypto.randomUUID();
     const bytes=crypto.getRandomValues(new Uint8Array(16));bytes[6]=(bytes[6]&15)|64;bytes[8]=(bytes[8]&63)|128;
@@ -229,6 +240,21 @@ class AccountsPanel {
         this.perform({action:'requestDesktopUpdate',requestId:this.requestId(),currentBuild:update.currentBuild,confirmed:true,tasksConfirmed:true});
     });request.disabled=this.busy||checking||denied;this.updates.append(request);}
   }
+  reconcileRows(cards){
+    const previous=new Map([...this.rows.children].filter(card=>card.accountRowId).map(card=>[card.accountRowId,card]));
+    const next=cards.map(card=>{
+      const old=previous.get(card.accountRowId);if(!old)return card;
+      const box=this.modelBoxes.get(card.accountRowId),keep=box?.parentNode===old?box:null;
+      for(const child of [...old.children])if(child!==keep)child.remove();
+      for(const child of [...card.children])old.insertBefore(child,keep);
+      if(keep&&!this.expandedModels.has(card.accountRowId))keep.remove();
+      old.className=card.className;return old;
+    });
+    for(const child of [...this.rows.children])if(!next.includes(child))child.remove();
+    next.forEach((card,index)=>{if(this.rows.children[index]!==card)this.rows.insertBefore(card,this.rows.children[index]||null);});
+    const identities=new Map(this.accountRows().map(row=>[row.id,row.accountKey||JSON.stringify([row.kind,row.baseUrl,row.model,row.email])]));
+    for(const [id,box] of this.modelBoxes)if(identities.get(id)!==box.identity)this.modelBoxes.delete(id);
+  }
   render(){
     const value=this.value;if(!value)return;
     const phase=value.switch?.phase||'idle',labels={idle:'请选择已保存的接入',preparing:'正在准备账号',stopping:'正在退出 Codex 桌面应用',applying:'正在应用接入配置',starting:'正在启动 Codex 桌面应用',verifying:'正在核验账号与桌面连接',complete:'切换完成',restoring:'正在恢复原接入',restored:'已恢复原接入',failed:'切换未完成',interrupted:'需要在桌面端恢复原接入'};
@@ -245,10 +271,10 @@ class AccountsPanel {
       const ignore=this.button('忽略',()=>{if(window.confirm(this.text('忽略只会移除未确认提示，不会撤回或重发消息。请先检查聊天记录。')))return this.perform({action:'ignoreSubmission',threadId:row.id,submissionId:row.submissionId,host:row.host||'local'});});
       ignore.disabled=this.busy||switching;line.append(ignore);
     }this.blocked.append(line);}
-    this.refreshButton.disabled=this.loading;this.rows.replaceChildren();this.renderTools();
-    if(!this.accountRows().length)this.rows.append(this.node('p','尚未添加账号。请在电脑端添加官方账号或自定义 API。'));
+    this.refreshButton.disabled=this.loading;this.renderTools();const cards=[];
+    if(!this.accountRows().length)cards.push(this.node('p','尚未添加账号。请在电脑端添加官方账号或自定义 API。'));
     for(const row of [...this.accountRows()].sort((a,b)=>Number(b.id===value.loginAccount?.id)-Number(a.id===value.loginAccount?.id)||Number(b.id===value.activeId)-Number(a.id===value.activeId))){
-      const card=this.node('section',undefined,'account-bucket'),active=value.activeId===row.id;
+      const card=this.node('section',undefined,'account-bucket'),active=value.activeId===row.id;card.accountRowId=row.id;
       if(active)card.classList.add('is-current');
       const actions=this.node('div',undefined,'accounts-actions');
       const identity=this.node('div',undefined,'accounts-identity'),name=this.node('div',undefined,'accounts-name');
@@ -271,9 +297,10 @@ class AccountsPanel {
         const remove=this.button('删除',()=>{if(window.confirm(this.text('删除此账号档案？')+'\n'+row.name))this.perform({action:'delete',id:row.id});});remove.hidden=active;remove.disabled=this.busy||switching||active;
         actions.append(edit,rename,remove);
       }
-      card.append(actions);const footer=this.node('div',undefined,'accounts-card-footer');card.append(footer);this.accountActions(card,row,footer);if(row.kind==='chatgpt')footer.append(this.accountUsageControls(row));this.rows.append(card);
+      card.append(actions);const footer=this.node('div',undefined,'accounts-card-footer');card.append(footer);this.accountActions(card,row,footer);if(row.kind==='chatgpt')footer.append(this.accountUsageControls(row));cards.push(card);
     }
-    if(!this.desktop&&value.canSwitch===false)this.rows.append(this.node('p','免密访问不能切换账号，请在桌面端操作'));
+    if(!this.desktop&&value.canSwitch===false)cards.push(this.node('p','免密访问不能切换账号，请在桌面端操作'));
+    this.reconcileRows(cards);
     if(this.desktop){
       this.scanDesktop.disabled=this.busy||switching;this.renameSave.disabled=this.busy||switching;this.scanButton.disabled=this.busy||switching;this.modelsButton.disabled=this.busy||switching;
       this.scanSource.input.placeholder=value.codexHome||this.text('留空使用当前 Codex 数据目录');this.scanRows.replaceChildren();

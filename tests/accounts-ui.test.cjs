@@ -1,17 +1,17 @@
 'use strict';
 const test=require('node:test'),assert=require('node:assert/strict'),fs=require('node:fs'),vm=require('node:vm'),path=require('node:path');
 function fixture(desktop=false){
-  function node(tag){return {tag,textContent:'',value:'',hidden:false,disabled:false,children:[],attributes:{},classList:{add(){}},
-    append(...children){for(const child of children){child.parent=this;this.children.push(child);}},replaceChildren(...children){this.children=children;},setAttribute(k,v){this.attributes[k]=v;},closest(){return null;},reset(){},focus(){},showModal(){this.open=true;},close(){this.open=false;this.onclose?.();},remove(){if(this.parent)this.parent.children=this.parent.children.filter(n=>n!==this);}};}
+  function node(tag){return {tag,textContent:'',value:'',hidden:false,disabled:false,scrollTop:0,children:[],attributes:{},classList:{add(){}},
+    append(...children){for(const child of children){child.remove();child.parent=this;child.parentNode=this;this.children.push(child);}},insertBefore(child,before){child.remove();const index=before?this.children.indexOf(before):-1;child.parent=this;child.parentNode=this;this.children.splice(index<0?this.children.length:index,0,child);},replaceChildren(...children){for(const child of [...this.children])child.remove();this.append(...children);if(this.className==='accounts-models')this.scrollTop=0;},setAttribute(k,v){this.attributes[k]=v;},closest(){return null;},reset(){},focus(){},showModal(){this.open=true;},close(){this.open=false;this.onclose?.();},remove(){if(this.parent){this.parent.children=this.parent.children.filter(n=>n!==this);this.parent=null;this.parentNode=null;}}};}
   const root=node('div'),requests=[],prompts=[];let confirmed=true,value={accounts:[{id:'a',name:'API <script>',kind:'api',baseUrl:'https://example.test/v1',model:'model'}],activeId:null,switch:{phase:'idle'},canSwitch:true};
-  let request=async()=>structuredClone(value),read=async()=>structuredClone(value),timers=[],now=Date.now();
+  let request=async()=>structuredClone(value),read=async()=>structuredClone(value),readCalls=0,timers=[],now=Date.now();
   class Clock extends Date{static now(){return now;}}
   const context=vm.createContext({document:{createElement:node,body:node('body'),hidden:false,activeElement:null},root,Date:Clock,crypto:{randomUUID:()=> '11111111-1111-4111-8111-111111111111'},
-    setTimeout:fn=>{timers.push(fn);return timers.length;},clearTimeout(){},localStorage:{getItem(){return null;},setItem(){}},window:{confirm:message=>{prompts.push(message);return confirmed;},prompt:()=>null}});
+    setTimeout:(fn,ms)=>{timers.push({fn,ms});return timers.length;},clearTimeout:id=>{if(timers[id-1])timers[id-1].cancelled=true;},localStorage:{getItem(){return null;},setItem(){}},window:{confirm:message=>{prompts.push(message);return confirmed;},prompt:()=>null}});
   for(const f of ['web/shared/i18n.js','web/features/accounts/account.js','web/features/accounts/accounts.js'])vm.runInContext(fs.readFileSync(path.join(__dirname,'..',f),'utf8'),context);
-  const Class=vm.runInContext('AccountsPanel',context),panel=new Class({root,desktop,read:()=>read(),request:v=>{requests.push(v);return request(v);}});
+  const Class=vm.runInContext('AccountsPanel',context),panel=new Class({root,desktop,read:()=>{readCalls++;return read();},request:v=>{requests.push(v);return request(v);}});
   const all=(n=root)=>[n,...n.children.flatMap(all)];
-  return {panel,root,requests,prompts,all,now:()=>now,advance:ms=>now+=ms,hidden:value=>context.document.hidden=value,noRandomUUID:()=>{context.crypto={getRandomValues:bytes=>require("node:crypto").randomFillSync(bytes)};},text:()=>all().map(n=>n.textContent).join('\n'),setValue:v=>value=v,value:()=>value,setRequest:v=>request=v,setRead:v=>read=v,confirm:v=>confirmed=v,
+  return {panel,root,requests,prompts,all,timers,readCalls:()=>readCalls,now:()=>now,advance:ms=>now+=ms,hidden:value=>context.document.hidden=value,noRandomUUID:()=>{context.crypto={getRandomValues:bytes=>require("node:crypto").randomFillSync(bytes)};},text:()=>all().map(n=>n.textContent).join('\n'),setValue:v=>value=v,value:()=>value,setRequest:v=>request=v,setRead:v=>read=v,confirm:v=>confirmed=v,
     language:()=>{vm.runInContext("BridgeI18n.setLanguage('en')",context);panel.render();}};
 }
 test('native login card survives an empty saved list without enrollment or switching actions',async()=>{
@@ -310,4 +310,26 @@ test('account models retain cached names and efforts when explicit refresh fails
  const ui=fixture(),account={...ui.value().accounts[0],details:{models:{status:'error',error:'Refresh failed',cache:{updatedAt:1000},models:[{id:'route/model',name:'Concrete model',efforts:['low','high']}]}}};
  ui.setValue({...ui.value(),accounts:[account]});ui.panel.expandedModels.add(account.id);await ui.panel.refresh();assert.match(ui.text(),/Concrete model/);assert.match(ui.text(),/low.*high/);assert.match(ui.text(),/Refresh failed/);
  await ui.all().find(node=>node.tag==='button'&&node.textContent==='刷新模型').onclick();assert.equal(ui.requests.at(-1).refresh,true);assert.equal(ui.requests.at(-1).section,'models');
+});
+
+test('idle account reads do not poll every two seconds; pending account work does',async()=>{
+ const ui=fixture(true),delay=()=>ui.timers[ui.panel.timer-1]?.ms;
+ await ui.panel.refresh();assert.equal(delay(),300000);const idle=ui.timers[ui.panel.timer-1];assert.equal(ui.readCalls(),1);
+ ui.advance(2000);assert.equal(ui.readCalls(),1);
+ ui.setValue({...ui.value(),enrollment:{phase:'waiting'}});await idle.fn();assert.equal(ui.readCalls(),2);assert.equal(delay(),2000);
+ const pending=ui.timers[ui.panel.timer-1];ui.setValue({...ui.value(),enrollment:{phase:'complete'}});await pending.fn();assert.equal(ui.readCalls(),3);assert.equal(delay(),300000);
+ ui.setValue({...ui.value(),enrollment:{phase:'complete'},switch:{phase:'verifying'}});await ui.panel.refresh();assert.equal(delay(),2000);
+ ui.setValue({...ui.value(),switch:{phase:'idle'},accounts:[{...ui.value().accounts[0],details:{models:{status:'loading'}}}]});await ui.panel.refresh();assert.equal(delay(),2000);
+ ui.setValue({...ui.value(),accounts:[{...ui.value().accounts[0],details:{models:{status:'ready',models:[]}}}]});await ui.panel.refresh();assert.notEqual(delay(),2000);
+ ui.setValue({...ui.value(),switch:{phase:'interrupted'}});await ui.panel.refresh();assert.equal(delay(),300000);
+});
+
+test('Codex model scroller survives status reads and model timestamp changes',async()=>{
+ const ui=fixture(),row={...ui.value().accounts[0],details:{models:{status:'ready',cache:{updatedAt:1000},models:[{id:'model-a'},{id:'model-b'}]}}};
+ ui.setValue({...ui.value(),accounts:[row]});ui.panel.expandedModels.add(row.id);await ui.panel.refresh();
+ const box=ui.all().find(node=>node.className==='accounts-models'),card=box.parent;box.scrollTop=74;
+ ui.setValue({...ui.value(),switch:{phase:'verifying'},accounts:[{...row,details:{models:{...row.details.models,cache:{updatedAt:2000}}}}]});await ui.panel.refresh();
+ assert.equal(ui.all().find(node=>node.className==='accounts-models'),box);assert.equal(box.parent,card);assert.equal(box.scrollTop,74);assert.match(ui.text(),/model-b/);
+ ui.setValue({...ui.value(),accounts:[{...row,accountKey:'new-profile'}],switch:{phase:'idle'}});await ui.panel.refresh();
+ assert.notEqual(ui.all().find(node=>node.className==='accounts-models'),box);
 });

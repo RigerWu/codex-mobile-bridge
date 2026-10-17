@@ -8,7 +8,7 @@
   var originalUrl = location.href;
   var originalPairing = location.hash.indexOf('#pair=') === 0;
   var complete = false, timer = null, phase = 'loading';
-  var started = Date.now(), lastFailure = null;
+  var started = Date.now(), lastFailure = null, pendingResources = [];
   var english = false;
   try { english = localStorage.getItem('bridge-language') === 'en'; } catch (_) {}
   if (/(?:^|[?&])lang=en(?:&|$)/.test(location.search)) english = true;
@@ -33,6 +33,7 @@
       text('阶段：', 'Phase: ') + phase + ' / ' + Math.round((Date.now() - started) / 1000) + 's'];
     if (lastFailure) lines.push(text('错误：', 'Error: ') + lastFailure.kind +
       (lastFailure.path ? ' @ ' + lastFailure.path : '') + (lastFailure.line ? ':' + lastFailure.line : ''));
+    if (pendingResources.length) lines.push(text('等待资源：', 'Waiting for: ') + pendingResources.map(assetPath).filter(Boolean).join(', '));
     if (missing.length) lines.push(text('浏览器缺少能力：', 'Missing browser features: ') + missing.join(', '));
     if (typeof navigator !== 'undefined') lines.push(String(navigator.userAgent || '').slice(0, 256));
     return lines.join('\n');
@@ -80,9 +81,11 @@
       var url = placeholder.getAttribute(attribute), node = scripts ? document.createElement('script') : placeholder;
       var settled = false;
       active++;
+      pendingResources.push(url);
       function finish(failed) {
         if (settled) return;
         settled = true;
+        pendingResources.splice(pendingResources.indexOf(url), 1);
         node.onload = node.onerror = null;
         if (failed) {
           if (!lastFailure) lastFailure = {kind: 'resource', path: assetPath(url)};

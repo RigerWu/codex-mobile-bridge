@@ -55,18 +55,19 @@ test('HTML provides visible status before the independent CSP-safe bootstrap, wi
 });
 
 function resourceFixture(){
-  const started=[],pending=[],listeners=new Map(),nodes=new Map();let domReady,peak=0;
+  const started=[],pending=[],listeners=new Map(),nodes=new Map(),timers=[];let domReady,peak=0;
   for(const id of ['bootstrap-status','bootstrap-title','bootstrap-message','bootstrap-retry'])nodes.set(id,{style:{},setAttribute(){}});
   function record(node,url,kind){started.push({url,kind,async:node.async});pending.push(node);peak=Math.max(peak,pending.length);}
   const styles=[...html.matchAll(/<link[^>]*data-bridge-href="([^"]+)"/g)].map(([,url])=>({getAttribute(){return url;},removeAttribute(){},set href(value){record(this,value,'style');}}));
   const scripts=[...html.matchAll(/<script[^>]*data-bridge-src="([^"]+)"/g)].map(([,url])=>({getAttribute(){return url;},parentNode:{replaceChild(node){record(node,node.src,'script');}}}));
   const window={addEventListener(name,fn){listeners.set(name,fn);},removeEventListener(){}};
   const context=vm.createContext({window,navigator:{userAgent:'resource-fixture'},location:{href:'https://gateway.test/',hash:'',search:''},
-    localStorage:{getItem(){return null;}},setTimeout(){return 1;},clearTimeout(){},
+    localStorage:{getItem(){return null;}},setTimeout(fn,delay){timers.push({fn,delay});return timers.length;},clearTimeout(){},
     document:{readyState:'loading',getElementById:id=>nodes.get(id),createElement(){return {};},
       querySelectorAll:selector=>selector.startsWith('link')?styles:scripts,addEventListener(name,fn){if(name==='DOMContentLoaded')domReady=fn;}}});
   vm.runInContext(fs.readFileSync(path.join(root,'web/shared/bootstrap.js'),'utf8'),context);
   return {started,pending,nodes,styles,scripts,ready(){domReady();},get peak(){return peak;},
+    timeout(){timers.find(timer=>timer.delay===12000).fn();},
     finish(index=0,failed=false){const node=pending.splice(index,1)[0];node[failed?'onerror':'onload']();}};
 }
 
@@ -77,18 +78,25 @@ test('startup bounds resource concurrency and preserves style and classic-script
   assert.deepEqual(ui.started.filter(row=>row.kind==='style').map(row=>row.url),[...html.matchAll(/data-bridge-href="([^"]+)"/g)].map(match=>match[1]));
   while(ui.pending.length)ui.finish(ui.pending.length-1);
   const loadedScripts=ui.started.filter(row=>row.kind==='script');
-  assert.equal(ui.peak,4);assert.equal(ui.styles.length,9);assert.equal(loadedScripts.length,40);
+  assert.equal(ui.peak,4);assert.equal(ui.styles.length,9);assert.equal(loadedScripts.length,39);
   assert.ok(loadedScripts.every(row=>row.async===false));
   assert.deepEqual(loadedScripts.map(row=>row.url),[...html.matchAll(/data-bridge-src="([^"]+)"/g)].map(match=>match[1]));
-  assert.equal([...html.matchAll(/<script\s+src=/g)].length,1);
+  assert.equal([...html.matchAll(/<script\s+src=/g)].length,2);
   assert.equal([...html.matchAll(/<link rel="stylesheet" href=/g)].length,1);
 });
 
 test('a failed queued resource is reported once and does not stall or replay the queue',()=>{
   const ui=resourceFixture();ui.ready();ui.finish(0,true);
   while(ui.pending.length)ui.finish();
-  assert.equal(ui.started.length,49);assert.equal(new Set(ui.started.map(row=>row.url)).size,49);
+  assert.equal(ui.started.length,48);assert.equal(new Set(ui.started.map(row=>row.url)).size,48);
   assert.match(ui.nodes.get('bootstrap-message').textContent,/resource @ \/vendor\/katex\/katex\.min\.css/);
+});
+
+test('a hanging resource timeout names only pending resource paths',()=>{
+  const ui=resourceFixture();ui.ready();ui.finish();ui.timeout();
+  const diagnostic=ui.nodes.get('bootstrap-message').textContent;
+  assert.match(diagnostic,/等待资源：\/account\.css, \/client-lifecycle\.css/);
+  assert.doesNotMatch(diagnostic,/gateway\.test|\?/);
 });
 
 test('missing dependency fails in the real synchronous app chain before auth and produces a visible error',async()=>{

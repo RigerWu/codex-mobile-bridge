@@ -104,9 +104,9 @@ class DesktopClientAccountsPanel {
     const refresh=this.button('',()=>this.perform({action:'details',id:row.id,refresh:true}));
     refresh.title=label;refresh.setAttribute('aria-label',label);refresh.className='accounts-usage-refresh';
     refresh.innerHTML='<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="M20 12a8 8 0 1 1-2.34-5.66L20 8M20 3v5h-5"/></svg>';
-    refresh.disabled=this.busy||this.loading;controls.append(refresh);
+    refresh.disabled=this.busy||this.loading;
     if(usage?.checkedAt)controls.append(this.node('small',this.text(this.provider==='claude'?'查询时间：':'更新于：')+(this.provider==='claude'?this.queryTime(usage.checkedAt):new Date(usage.checkedAt*1000).toLocaleString(BridgeI18n.locale())),'account-updated'));
-    return controls;
+    controls.append(refresh);return controls;
   }
   usage(box,row){
     const usage=row.usage||row.quota;
@@ -177,12 +177,12 @@ class DesktopClientAccountsPanel {
       const active=activeIds.has(row.id),card=this.node('section',undefined,'account-bucket accounts-client-card'+(active?' is-current':'')),identity=this.node('div',undefined,'accounts-identity'),name=this.node('div',undefined,'accounts-name'),heading=this.node('div',undefined,'accounts-name-heading');
       heading.append(this.node('h3',row.name||row.email||row.id));if(active)heading.append(this.node('span','当前接入','accounts-plan'));if(row.saved===false)heading.append(this.node('span','尚未保存','account-muted'));name.append(heading);
       name.append(this.node('p',row.kind==='api'?'API 接入':'官方账号','account-muted'));if(row.email)name.append(this.node('p',row.email,'account-muted'));identity.append(name);
-      if(row.kind!=='api'||(row.usage||row.quota)?.balance)identity.append(this.usageControls(row));card.append(identity);
+      card.append(identity);
       if(row.kind!=='api'||(row.usage||row.quota)?.balance){const usage=this.node('div',undefined,'accounts-usage accounts-client-usage');this.usage(usage,row);if(usage.children.length)card.append(usage);}
       const actions=this.node('div',undefined,'accounts-actions'),switcher=this.button(active?'当前接入':'切换到此接入',()=>this.choose(row));switcher.disabled=active||this.busy||this.loading||value.canSwitch!==true;actions.append(switcher);
       if(this.provider==='claude'&&!active){const label=this.node('label',undefined,'account-reminder'),checkbox=this.node('input');checkbox.type='checkbox';checkbox.checked=row.kind==='api'&&this.syncLocalCliIds.has(row.id);checkbox.disabled=row.kind!=='api'||this.busy||this.loading;checkbox.onchange=()=>{if(checkbox.checked)this.syncLocalCliIds.add(row.id);else this.syncLocalCliIds.delete(row.id);};label.append(checkbox,this.node('span','同时应用到本机 CLI'));actions.append(label);if(row.kind!=='api')actions.append(this.node('small','官方 Claude Desktop 登录不能直接同步到 Claude Code CLI','account-muted'));}
       if(this.desktop&&row.saved!==false){for(const [label,fn] of [['编辑',()=>this.editAccount(row)],['删除',()=>this.removeAccount(row)]]){const button=this.button(label,fn);button.disabled=this.busy||this.loading;actions.append(button);}}
-      card.append(actions);this.rows.append(card);
+      card.append(actions);if(row.kind!=='api'||(row.usage||row.quota)?.balance){const footer=this.node('div',undefined,'accounts-card-footer');footer.append(this.usageControls(row));card.append(footer);}this.rows.append(card);
     }
   }
 }

@@ -17,6 +17,7 @@ from bridge.clients.claude.adapter import Claude
 from bridge.clients.claude.cli_session import ResumePreflightBlocked
 from bridge.clients.deepseek.adapter import DeepSeek, BRIDGE_REVISION, LIFECYCLE_REVISIONS, UPDATE_REASON
 from bridge.clients.errors import BridgeUnavailable
+from bridge.clients.codex.catalog import ModelStore, MODEL_REFRESH_SECONDS
 from bridge.app.lifecycle import private_json
 from bridge.platforms.windows import session as windows_session
 
@@ -58,6 +59,12 @@ class DesktopSessions:
         self.claude_quit = None
         self.directory = Path(directory)/'desktop-sessions'
         self.directory.mkdir(parents=True, exist_ok=True, mode=0o700)
+        self.model_store = ModelStore(self.directory)
+        self.model_locks = {}
+        self.model_refreshing = set()
+        self.model_retry_at = {}
+        self.model_timers = {}
+        self.model_lock = threading.Lock()
         self.config_path = self.directory/'settings.json'
         self.config = json.loads(self.config_path.read_text()) if self.config_path.exists() else {}
         self.adapters = {'deepseek': DeepSeek(self.directory/'deepseek', self.config.get('deepseekHome')),
@@ -169,6 +176,109 @@ class DesktopSessions:
         # Consumers may annotate rows. Sharing a result object crosses requests.
         return result
 
+    def _model_identity(self, provider, sid):
+        adapter = self.adapters[provider]
+        paths = [self.config_path, adapter.directory/'connection.json']
+        if provider == 'claude':
+            paths.append(adapter.directory/'discovery.json')
+            profile = adapter.cli.profile_resolver()
+            if profile:
+                paths.extend(Path(profile[key]) for key in ('authPath', 'configPath') if profile.get(key))
+            profile_stamp = ModelStore.key(profile) if profile else None
+        else:
+            paths.append(adapter.home/'profiles/desktop/cordis.patch.yml')
+            profile_stamp = None
+        stamps = []
+        for path in paths:
+            try:
+                stamps.append(hashlib.sha256(path.read_bytes()).hexdigest())
+            except OSError:
+                stamps.append(None)
+        return ModelStore.key('desktop', provider, sid, profile_stamp, stamps)
+
+    def _catalog_models(self, provider, sid, body):
+        identity = self._model_identity(provider, sid)
+        refresh = body.get('refresh') is True
+        try:
+            persisted = self.model_store.read(identity)
+        except (OSError, sqlite3.DatabaseError, ValueError):
+            persisted = None
+        if persisted and not refresh:
+            if time.time() - persisted[0] >= MODEL_REFRESH_SECONDS:
+                self._start_model_refresh(provider, sid, identity)
+            else:
+                self._schedule_model_refresh(provider, sid, identity, persisted[0])
+            return _copy_read(persisted[1])
+        with self.model_lock:
+            lock = self.model_locks.setdefault(identity, threading.Lock())
+        with lock:
+            if not refresh:
+                try:
+                    persisted = self.model_store.read(identity)
+                except (OSError, sqlite3.DatabaseError, ValueError):
+                    persisted = None
+                if persisted:
+                    return _copy_read(persisted[1])
+            try:
+                value = self._read(provider, 'catalog', sid, body)
+            except (OSError, ValueError, BridgeUnavailable):
+                if persisted:
+                    return _copy_read(persisted[1])
+                raise
+            if self._model_identity(provider, sid) != identity:
+                raise BridgeUnavailable('客户端账号或配置已变化，请重试')
+            if value.get('modelError') and persisted:
+                return {**_copy_read(persisted[1]), 'modelError': value['modelError']}
+            if isinstance(value.get('models'), list) and value.get('capabilities', {}).get('models') is not False:
+                stable = {key: _copy_read(value[key]) for key in ('models', 'capabilities', 'notice') if key in value}
+                try:
+                    updated_at = self.model_store.write(identity, stable)
+                    self._schedule_model_refresh(provider, sid, identity, updated_at, replace=True)
+                except (OSError, sqlite3.DatabaseError):
+                    pass
+            return value
+
+    def _start_model_refresh(self, provider, sid, identity):
+        with self.model_lock:
+            if (self.closed.is_set() or identity in self.model_refreshing or
+                    time.time() < self.model_retry_at.get(identity, 0)):
+                return
+            self.model_refreshing.add(identity)
+        def update():
+            try:
+                if self._model_identity(provider, sid) == identity:
+                    self._catalog_models(provider, sid, {'section': 'models', 'refresh': True})
+            except (OSError, ValueError, BridgeUnavailable):
+                pass
+            finally:
+                with self.model_lock:
+                    self.model_retry_at[identity] = time.time() + 60
+                    self.model_refreshing.discard(identity)
+                if not self.closed.is_set() and self._model_identity(provider, sid) == identity:
+                    try:
+                        record = self.model_store.read(identity)
+                    except (OSError, sqlite3.DatabaseError, ValueError):
+                        record = None
+                    self._schedule_model_refresh(provider, sid, identity, record[0] if record else time.time(), retry=True)
+        threading.Thread(target=update, daemon=True, name='desktop-model-refresh-'+provider).start()
+
+    def _schedule_model_refresh(self, provider, sid, identity, updated_at, retry=False, replace=False):
+        with self.model_lock:
+            if replace and identity in self.model_timers:
+                self.model_timers.pop(identity).cancel()
+            if self.closed.is_set() or identity in self.model_timers:
+                return
+            delay = max(60 if retry else 1, updated_at + MODEL_REFRESH_SECONDS - time.time())
+            def due():
+                with self.model_lock:
+                    self.model_timers.pop(identity, None)
+                if not self.closed.is_set() and self._model_identity(provider, sid) == identity:
+                    self._start_model_refresh(provider, sid, identity)
+            timer = threading.Timer(delay, due)
+            timer.daemon = True
+            self.model_timers[identity] = timer
+            timer.start()
+
     def list_with_activity(self, provider):
         with self.read_lock:
             binding, adapter = self.binding_epochs[provider], self.adapters[provider]
@@ -233,6 +343,8 @@ class DesktopSessions:
             raise ValueError('会话标识无效')
         body = body or {}
         adapter = self.adapters[provider]
+        if action == 'catalog' and body.get('section') == 'models':
+            return self._catalog_models(provider, sid, body)
         if action in READS and not (action == 'access' and 'mode' in body):
             return self._read(provider, action, sid, body)
         rid = str(uuid.UUID(body.get('id', '')))
@@ -1367,6 +1479,10 @@ class DesktopSessions:
 
     def close(self):
         self.closed.set()
+        with self.model_lock:
+            for timer in self.model_timers.values():
+                timer.cancel()
+            self.model_timers.clear()
         if self.startup_thread:
             self.startup_thread.join(timeout=5)
         if self.bridge is not None and getattr(self.bridge.accounts, 'require_client_enabled', None) is self._codex_guard:

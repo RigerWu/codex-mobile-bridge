@@ -24,6 +24,7 @@ SKILL_CACHE = 'skill-cache.json'
 SKILL_DB = 'skills-v2.sqlite3'
 SKILL_PAGE_LIMIT = 200
 SKILL_MAX_PAGE_LIMIT = 500
+MODEL_REFRESH_SECONDS = 12 * 60 * 60
 
 
 class CatalogError(RuntimeError):
@@ -32,6 +33,54 @@ class CatalogError(RuntimeError):
 
 class SkillPathChanged(ValueError):
     pass
+
+
+class ModelStore:
+    """Durable catalog keyed by a digest of the execution identity."""
+
+    def __init__(self, home):
+        self.path = Path(home).resolve() / '.codex-mobile-bridge' / 'models-v1.sqlite3'
+
+    @staticmethod
+    def key(*parts):
+        return hashlib.sha256(json.dumps(parts, sort_keys=True, default=str).encode()).hexdigest()
+
+    def _connect(self):
+        self.path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+        db = sqlite3.connect(str(self.path), timeout=3)
+        db.execute('PRAGMA busy_timeout=3000')
+        db.execute('CREATE TABLE IF NOT EXISTS catalogs (identity TEXT PRIMARY KEY, updated_at REAL NOT NULL, value TEXT NOT NULL)')
+        self.path.chmod(0o600)
+        return db
+
+    def read(self, identity):
+        db = self._connect()
+        try:
+            row = db.execute('SELECT updated_at,value FROM catalogs WHERE identity=?', (identity,)).fetchone()
+        finally:
+            db.close()
+        if row:
+            return row[0], json.loads(row[1])
+        return None
+
+    def write(self, identity, value):
+        updated_at = time.time()
+        db = self._connect()
+        try:
+            db.execute('INSERT INTO catalogs VALUES (?,?,?) ON CONFLICT(identity) DO UPDATE SET updated_at=excluded.updated_at,value=excluded.value',
+                       (identity, updated_at, json.dumps(value, ensure_ascii=False)))
+            db.commit()
+        finally:
+            db.close()
+        return updated_at
+
+    def clear(self):
+        db = self._connect()
+        try:
+            db.execute('DELETE FROM catalogs')
+            db.commit()
+        finally:
+            db.close()
 
 
 class SkillStore:
@@ -260,6 +309,11 @@ class Catalog:
         self.lock = threading.Lock()
         self.kind_locks = {'models': threading.Lock(), 'skills': threading.Lock()}
         self.kind_caches = {'models': {}, 'skills': {}}
+        self.model_store = ModelStore(self.home)
+        self.model_refreshing = set()
+        self.model_retry_at = {}
+        self.model_refresh_lock = threading.Lock()
+        self.model_timers = {}
         self.skill_store = SkillStore(self.home)
         self.skill_refreshing = set()
         self.allow_background_refresh = allow_background_refresh
@@ -282,6 +336,71 @@ class Catalog:
             self.cache.clear()
         with self.kind_locks['models']:
             self.kind_caches['models'].clear()
+        with self.model_refresh_lock:
+            for timer in self.model_timers.values():
+                timer.cancel()
+            self.model_timers.clear()
+        try:
+            self.model_store.clear()
+        except (OSError, sqlite3.DatabaseError):
+            logger.warning('Could not invalidate persisted model cache', exc_info=True)
+
+    def model_identity(self, cwd, provider):
+        """Bind cached models to local/remote home, account and API configuration."""
+        files = []
+        for name in ('auth.json', 'config.toml'):
+            try:
+                files.append(hashlib.sha256((self.home / name).read_bytes()).hexdigest())
+            except OSError:
+                files.append(None)
+        variables = {name: hashlib.sha256(value.encode()).hexdigest()
+                     for name, value in os.environ.items()
+                     if name in ('CODEX_HOME', 'OPENAI_API_KEY', 'OPENAI_BASE_URL')
+                     or name.endswith(('_API_KEY', '_AUTH_TOKEN', '_BEARER_TOKEN', '_BASE_URL'))}
+        return ModelStore.key('codex', str(self.home.resolve()), str(Path(cwd).resolve()), provider, files, variables)
+
+    def _start_model_refresh(self, cwd, provider, identity):
+        if not self.allow_background_refresh:
+            return
+        with self.model_refresh_lock:
+            if identity in self.model_refreshing or time.time() < self.model_retry_at.get(identity, 0):
+                return
+            self.model_refreshing.add(identity)
+        def run():
+            try:
+                self.get_kind('models', cwd, refresh=True, provider=provider)
+            except (CatalogError, OSError, ValueError):
+                logger.warning('Background model refresh failed', exc_info=True)
+            finally:
+                with self.model_refresh_lock:
+                    self.model_retry_at[identity] = time.time() + 60
+                    self.model_refreshing.discard(identity)
+                if self.model_identity(cwd, provider) == identity:
+                    try:
+                        record = self.model_store.read(identity)
+                    except (OSError, sqlite3.DatabaseError, ValueError):
+                        record = None
+                    self._schedule_model_refresh(cwd, provider, identity, record[0] if record else time.time(), retry=True)
+        threading.Thread(target=run, daemon=True, name='codex-model-refresh').start()
+
+    def _schedule_model_refresh(self, cwd, provider, identity, updated_at, retry=False, replace=False):
+        if not self.allow_background_refresh:
+            return
+        with self.model_refresh_lock:
+            if replace and identity in self.model_timers:
+                self.model_timers.pop(identity).cancel()
+            if identity in self.model_timers:
+                return
+            delay = max(60 if retry else 1, updated_at + MODEL_REFRESH_SECONDS - time.time())
+            def due():
+                with self.model_refresh_lock:
+                    self.model_timers.pop(identity, None)
+                if self.model_identity(cwd, provider) == identity:
+                    self._start_model_refresh(cwd, provider, identity)
+            timer = threading.Timer(delay, due)
+            timer.daemon = True
+            self.model_timers[identity] = timer
+            timer.start()
 
     @staticmethod
     def find_runtime():
@@ -646,15 +765,34 @@ class Catalog:
         offset = max(0, int(offset))
         limit = min(SKILL_MAX_PAGE_LIMIT, max(1, int(limit)))
         if kind == 'models':
-            key = (cwd, provider)
+            identity = self.model_identity(cwd, provider)
+            try:
+                persisted = self.model_store.read(identity)
+            except (OSError, sqlite3.DatabaseError, ValueError):
+                persisted = None
+                logger.warning('Could not read model cache', exc_info=True)
+            if persisted and not refresh:
+                stale = time.time() - persisted[0] >= MODEL_REFRESH_SECONDS
+                if stale:
+                    self._start_model_refresh(cwd, provider, identity)
+                else:
+                    self._schedule_model_refresh(cwd, provider, identity, persisted[0])
+                return {**persisted[1], 'cache': {'state': 'stale' if stale else 'fresh', 'updatedAt': persisted[0]}}
             with self.kind_locks[kind]:
-                cached = self.kind_caches[kind].get(key)
-                if cached and not refresh and time.monotonic() - cached[0] < 300:
-                    return cached[1]
+                # A second request may have completed while this one waited.
+                if not refresh:
+                    try:
+                        persisted = self.model_store.read(identity)
+                    except (OSError, sqlite3.DatabaseError, ValueError):
+                        persisted = None
+                    if persisted:
+                        return {**persisted[1], 'cache': {'state': 'fresh', 'updatedAt': persisted[0]}}
                 try:
                     raw = self._fetch(cwd, provider, kind)
-                except CatalogError:
-                    self.kind_caches[kind].pop(key, None)
+                except CatalogError as exc:
+                    if persisted:
+                        return {**persisted[1], 'modelError': str(exc),
+                                'cache': {'state': 'stale', 'updatedAt': persisted[0]}}
                     raise
                 models = [{'id': m.get('model', m.get('id')), 'name': m.get('displayName') or m.get('name') or m.get('model') or m.get('id'),
                            'description': m.get('description', ''), 'efforts': [e['reasoningEffort'] for e in m.get('supportedReasoningEfforts', [])],
@@ -664,11 +802,18 @@ class Catalog:
                          'fastMode': raw.get('fastMode', {'allowed': False}),
                          'modelError': raw.get('modelError'), 'currentModel': raw.get('currentModel'),
                          'currentEffort': raw.get('currentEffort')}
+                if self.model_identity(cwd, provider) != identity:
+                    raise CatalogError('模型接入已变化，请重试')
                 if value.get('modelError'):
-                    self.kind_caches[kind].pop(key, None)
-                else:
-                    self.kind_caches[kind][key] = (time.monotonic(), value)
-                return value
+                    return ({**persisted[1], 'modelError': value['modelError'],
+                             'cache': {'state': 'stale', 'updatedAt': persisted[0]}} if persisted else value)
+                try:
+                    updated_at = self.model_store.write(identity, value)
+                except (OSError, sqlite3.DatabaseError):
+                    logger.warning('Could not persist model catalog', exc_info=True)
+                    updated_at = time.time()
+                self._schedule_model_refresh(cwd, provider, identity, updated_at, replace=True)
+                return {**value, 'cache': {'state': 'fresh', 'updatedAt': updated_at}}
 
         bucket = self.skill_store.bucket(cwd)
         with self.kind_locks['skills']:

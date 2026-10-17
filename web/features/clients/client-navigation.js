@@ -201,6 +201,7 @@ class ClientNavigation {
   async choose(id){
     this.cancelListSwipe();
     if(id===this.provider&&this.view.provider===(id||'codex'))return;
+    ++this.revision;
     const restoreCodex=id==='codex'&&this.provider===null&&this.view.provider==='codex'&&!this.pending.has('codex');
     this.rememberSwipeList();
     this.listReadDone=false;this.listVisit=(this.listVisit||0)+1;this.provider=id;if(id)localStorage.setItem('bridge-client',id);
@@ -261,9 +262,10 @@ class ClientNavigation {
     finally{this.pending.delete(id);this.reconnecting=null;++this.revision;this.paint();}
   }
   paint(){
-    this.cancelListSwipe();this.syncViewClients();
-    const provider=this.provider,row=this.clients.find(c=>c.id===provider);this.badge.replaceChildren();if(provider)this.badge.append(this.icon(provider),document.createTextNode(row?.name||'Codex'));
-    const target=provider&&provider!=='codex'?this.view.list:this.sidebar;target.prepend(this.heading);target.append(this.navigation);
+    if((this.listGesture||this.swipePreview)&&(!this.clients.some(c=>c.id===this.provider&&c.enabled)||this.swipePreview&&this.swipePreview.provider!==this.provider))this.cancelListSwipe();
+    this.syncViewClients();
+    const provider=this.provider,row=this.clients.find(c=>c.id===provider),badgeName=row?.name||'Codex';if(this.badge.dataset.provider!==provider||this.badge.dataset.name!==badgeName){this.badge.replaceChildren();if(provider)this.badge.append(this.icon(provider),document.createTextNode(badgeName));this.badge.dataset.provider=provider||'';this.badge.dataset.name=badgeName;}
+    const target=provider&&provider!=='codex'?this.view.list:this.sidebar;if(this.heading.parentElement!==target)target.prepend(this.heading);if(this.navigation.parentElement!==target)target.append(this.navigation);
     this.account.classList.toggle('navigation-hidden',!provider||(provider==='codex'&&!!window.BridgeSharedRelay));this.notifications.classList.toggle('navigation-hidden',!provider);this.manage.hidden=!this.preference('clients');
     this.account.textContent=BridgeI18n.t('账号管理');this.account.removeAttribute('data-i18n');this.notifications.textContent=BridgeI18n.language()==='en'?'Push alerts':'第三方通知';this.notifications.removeAttribute('data-i18n');this.notifications.setAttribute('aria-label',BridgeI18n.t('第三方通知'));this.home.textContent=BridgeI18n.language()==='en'?'Computers':'返回电脑列表';
     this.switcher.replaceChildren();const enabled=this.clients.filter(c=>c.enabled),visible=this.visibleClients();const collapsed=this.preference('switch-collapsed',undefined,false);this.switchToggle.hidden=enabled.length<2||!visible.length;this.paintSettingsActions();this.switchDock.hidden=this.switchToggle.hidden||collapsed;this.navigation.classList.toggle('switch-dock-hidden',this.switchDock.hidden);this.switchToggle.textContent=BridgeI18n.t(collapsed?'显示底部 APP 图标':'隐藏底部 APP 图标');this.switchToggle.setAttribute('aria-expanded',String(!collapsed));this.switchToggle.setAttribute('aria-label',BridgeI18n.t(collapsed?'展开应用图标':'收起应用图标'));this.switchToggle.title=this.switchToggle.getAttribute('aria-label');this.settingsNotifications.textContent=BridgeI18n.language()==='en'?'Push alerts':'第三方通知';

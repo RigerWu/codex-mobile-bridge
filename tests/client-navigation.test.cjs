@@ -27,6 +27,15 @@ test('changing provider paints the shell before its slow read resolves',async()=
   const pending=nav.choose('deepseek');assert.equal(nav.provider,'deepseek');assert.equal(painted.length,1);
   resolve();await pending;
 });
+test('an older client status reply cannot undo a later provider choice',async()=>{
+  const {nav}=fixture();let finish,applied=0;
+  nav.request=()=>new Promise(resolve=>{finish=resolve;});
+  const reading=nav.refresh();
+  nav.applyClients=()=>{applied++;};
+  await nav.choose('deepseek');
+  finish({clients:[{id:'claude',enabled:true}]});await reading;
+  assert.equal(nav.provider,'deepseek');assert.equal(applied,0);
+});
 
 test('clicking the selected provider does not reset its view or issue another read',async()=>{
  const {nav}=fixture();let calls=0;nav.view.choose=async()=>{calls++;};await nav.choose('claude');assert.equal(calls,0);

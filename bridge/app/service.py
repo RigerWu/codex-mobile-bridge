@@ -1910,7 +1910,7 @@ class Bridge:
     def catalog(self, thread_id, refresh=False, kind=None, query='', offset=0, limit=200, ids=None):
         session = self.session(thread_id, attach=False, background=True)
         if session.origin != 'cli':
-            session = self.session(thread_id)
+            session = self.session(thread_id, attach=False)
         with session.condition:
             state = session.state or {}
             native = session.origin == 'cli' and session.runtime == 'cli' and session.connected

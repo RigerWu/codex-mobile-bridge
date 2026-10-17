@@ -479,6 +479,26 @@ class CliBridgeTests(CliBridgeFixture):
         self.cli.get_kind.assert_not_called()
         self.bridge.catalog_reader.get_kind.assert_not_called()
 
+    def test_connected_cli_model_catalog_stays_on_native_daemon(self):
+        session = self.bridge.activate(self.thread_id)
+        with session.condition:
+            session.state['latestReasoningEffort'] = 'high'
+        self.bridge.ipc.connect.reset_mock()
+        self.bridge.ipc.owner.reset_mock()
+        self.bridge.ipc.follow.reset_mock()
+        self.bridge.catalog_reader.get_kind = Mock(side_effect=AssertionError('desktop catalog read'))
+        self.cli.get_kind.return_value = {'models': [{'id': 'test-model', 'efforts': ['high']}],
+                                          'modelSource': 'codex'}
+        result = self.bridge.catalog(self.thread_id, kind='models')
+        self.assertEqual(result['currentModel'], 'test-model')
+        self.assertEqual(result['currentEffort'], 'high')
+        self.cli.get_kind.assert_called_once_with(
+            self.thread_id, 'models', refresh=False, query='', offset=0, limit=200, ids=None)
+        self.bridge.catalog_reader.get_kind.assert_not_called()
+        self.bridge.ipc.connect.assert_not_called()
+        self.bridge.ipc.owner.assert_not_called()
+        self.bridge.ipc.follow.assert_not_called()
+
     def test_native_permissions_use_daemon_policy_and_effective_state(self):
         session = self.bridge.activate(self.thread_id)
         facts = {'requirements': {}, 'config': {'guardian': True},

@@ -101,7 +101,7 @@ function renderLoginStatus(status=loginStatus){
   $('login-attempts').textContent=loginStatus.blocked?t('此 IP 已被封禁，请在电脑网关 App 的“登录设备”中解除。'):t('剩余尝试次数：')+loginStatus.attemptsRemaining+'/'+loginStatus.attemptLimit+t('；连续输错 5 次将封禁此 IP。');
   $('login-button').disabled=loginStatus.blocked;
 }
-function showLogin(passwordless=false,status){window.BridgeDownloads?.clear();$('mobile-binding-status').hidden=true;if(typeof codexCliAccessPanel!=='undefined')codexCliAccessPanel?.clear();claudeCliAccessPanel?.clear();if(window.BridgeSharedRelay){location.replace((window.BridgeRelayBase||'')+'/relay/');return;}desktopSessions.clear();modelCatalogs.clear();catalogData.models=null;catalogResults.models=null;workbench.reset();if(typeof accountsPanel!=='undefined')accountsPanel?.clear();chatTimeline?.dispose();chatTimeline=null;document.querySelectorAll('dialog[open]').forEach(d=>d.close());$('app').hidden=true;$('login').hidden=false;$('credentials').hidden=passwordless;$('noauth').hidden=!passwordless;$('username').required=!passwordless;$('password').value='';$('remember-login').parentElement.hidden=passwordless||BridgeHost.isNativeApp();$('login-attempts').hidden=passwordless;renderLoginStatus(status);$('bootstrap-status').hidden=true;window.BridgeBootstrap?.ready();}
+function showLogin(passwordless=false,status){window.BridgeDownloads?.clear();$('mobile-binding-status').hidden=true;if(typeof codexCliAccessPanel!=='undefined')codexCliAccessPanel?.clear();claudeCliAccessPanel?.clear();if(window.BridgeSharedRelay){location.replace((window.BridgeRelayBase||'')+'/relay/');return;}desktopSessions.clear();modelCatalogGeneration++;modelCatalogs.clear();catalogData.models=null;catalogResults.models=null;catalogTasks.models=null;workbench.reset();if(typeof accountsPanel!=='undefined')accountsPanel?.clear();chatTimeline?.dispose();chatTimeline=null;document.querySelectorAll('dialog[open]').forEach(d=>d.close());$('app').hidden=true;$('login').hidden=false;$('credentials').hidden=passwordless;$('noauth').hidden=!passwordless;$('username').required=!passwordless;$('password').value='';$('remember-login').parentElement.hidden=passwordless||BridgeHost.isNativeApp();$('login-attempts').hidden=passwordless;renderLoginStatus(status);$('bootstrap-status').hidden=true;window.BridgeBootstrap?.ready();}
 async function start(pairingToken=null){
   window.BridgeBootstrap?.waitingForAuth();
   const auth=await api('/api/auth');
@@ -599,11 +599,11 @@ async function loadCatalogKind(kind,refresh=false){
   if(kind!=='models')throw Error(t('未知目录类型'));
   if(refresh)modelCatalogGeneration++;
   const target=currentId,targetHost=currentHost,provider=state?.provider,generation=modelCatalogGeneration;
-  const accountIdentity=state?.modelCatalogIdentity||'';
-  const identity=JSON.stringify([listIdentity,target,targetHost,provider,accountIdentity]);
+  const accountIdentity=state?.modelCatalogIdentity||'',gatewayIdentity=listIdentity;
+  const identity=JSON.stringify([gatewayIdentity,target,targetHost,provider,accountIdentity]);
   if(!refresh&&catalogTasks[kind]?.identity===identity)return catalogTasks[kind];
   const request=api('/api/sessions/'+target+'/catalog?kind='+kind+(refresh?'&refresh=true':'')).then(value=>{
-    if(currentId!==target||currentHost!==targetHost||state?.provider!==provider||(state?.modelCatalogIdentity||'')!==accountIdentity||generation!==modelCatalogGeneration)throw Error(t('聊天已切换'));
+    if(currentId!==target||currentHost!==targetHost||state?.provider!==provider||(state?.modelCatalogIdentity||'')!==accountIdentity||listIdentity!==gatewayIdentity||generation!==modelCatalogGeneration)throw Error(t('聊天已切换'));
     if(accountIdentity&&value?.cache?.identity!==accountIdentity)throw Error(t('账号已切换，请重新打开模型设置'));
     const payload=value?.[kind]??value?.data??value;
     if(!Array.isArray(payload)){
@@ -617,7 +617,7 @@ async function loadCatalogKind(kind,refresh=false){
     }).filter(Boolean);
     const result={...value,kind,[kind]:catalogData[kind],_scope:identity};
     catalogResults[kind]=result;
-    if(accountIdentity&&value?.cache?.identity===accountIdentity)modelCatalogs.set(JSON.stringify([listIdentity,targetHost,provider,sessionAccess(state?.access).source,accountIdentity]),result);
+    if(accountIdentity&&value?.cache?.identity===accountIdentity)modelCatalogs.set(JSON.stringify([gatewayIdentity,targetHost,provider,sessionAccess(state?.access).source,accountIdentity]),result);
     return result;
   }).finally(()=>{if(catalogTasks[kind]===request)catalogTasks[kind]=null;});
   request.identity=identity;catalogTasks[kind]=request;

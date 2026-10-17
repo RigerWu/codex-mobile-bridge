@@ -356,6 +356,12 @@ test('same chat reopens model rows before a delayed catalog read',async()=>{
  ui.run("releaseCatalog({models:[{id:'ready',name:'Ready',efforts:['low']}],modelSource:'codex',cache:{identity:'"+'a'.repeat(64)+"',updatedAt:1000}})");await pending;
  assert.match(ui.nodes.get('model-updated').textContent,/更新于：/);
 });
+test('a late catalog from another gateway cannot populate the current cache',async()=>{
+ const identity='a'.repeat(64),catalog={models:[{id:'ready',efforts:['low']}],cache:{identity,updatedAt:1000}},ui=await fixture(r=>r(official),'chatgpt',catalog);
+ ui.run("currentId='11111111-1111-4111-8111-111111111111';listIdentity='gateway-a';state={connected:true,provider:'chatgpt',model:'ready',modelCatalogIdentity:'"+identity+"'};var releaseGateway;const originalApi=api;api=(url,body)=>url.includes('catalog?kind=models')?new Promise(resolve=>releaseGateway=resolve):originalApi(url,body)");
+ const pending=ui.nodes.get('model-button').onclick();ui.run("listIdentity='gateway-b';releaseGateway({models:[{id:'ready',efforts:['low']}],cache:{identity:'"+identity+"',updatedAt:1000}})");await pending;
+ assert.equal(ui.run('modelCatalogs.size'),0);assert.equal(ui.run('catalogResults.models'),null);
+});
 
 test('legacy model fields are normalized and a failed directory ends the loading state',async()=>{
  const ui=await fixture(r=>r(official),'api',{modelSource:'api',models:[{model:'legacy',displayName:'Legacy name'},'string-model']});

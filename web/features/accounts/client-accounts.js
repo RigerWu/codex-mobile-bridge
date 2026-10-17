@@ -64,7 +64,7 @@ class DesktopClientAccountsPanel {
   activeIds(value=this.value){return new Set(value?.activeIds||[value?.activeId].filter(Boolean));}
   accept(value,notifyChange=true){
     if(!value||!Array.isArray(value.accounts))throw Error(this.text('账号信息暂不可用'));
-    const previous=this.value,changed=this.value&&JSON.stringify([...this.activeIds()].sort())!==JSON.stringify([...this.activeIds(value)].sort());this.value=value;
+    const previous=this.value,changed=this.value&&(JSON.stringify([...this.activeIds()].sort())!==JSON.stringify([...this.activeIds(value)].sort())||(this.value.modelCatalogIdentity||'')!==(value.modelCatalogIdentity||''));this.value=value;
     if(changed){this.modelsRevision++;this.modelsLoading=false;this.models=null;this.modelsOpen=false;if(notifyChange)this.onChanged(value,previous);}this.onUpdate(value);this.render();
   }
   async refresh(force=true){
@@ -135,12 +135,13 @@ class DesktopClientAccountsPanel {
     box.append(results);
   }
   async toggleModels(){
-    this.modelsOpen=!this.modelsOpen;if(!this.modelsOpen||this.models){this.render();return;}
+    this.modelsOpen=!this.modelsOpen;if(!this.modelsOpen){this.render();return;}
+    if(!this.value?.modelCatalogIdentity)this.models=null;
     return this.loadModels();
   }
   async loadModels(refresh=false){
-    const generation=this.generation,revision=++this.modelsRevision;this.modelsError='';this.modelsLoading=true;this.render();
-    try{const value=await this.readModels(refresh);if(generation!==this.generation||revision!==this.modelsRevision)return;this.models=value;}
+    const generation=this.generation,revision=++this.modelsRevision,identity=this.value?.modelCatalogIdentity||'';this.modelsError='';this.modelsLoading=true;this.render();
+    try{const value=await this.readModels(refresh);if(generation!==this.generation||revision!==this.modelsRevision)return;if(identity&&value.cache?.identity!==identity){this.models=null;throw Error(this.text('账号已切换，请重新打开模型设置'));}this.models=value;}
     catch(error){if(generation===this.generation&&revision===this.modelsRevision)this.modelsError=error.message;}
     finally{if(generation===this.generation&&revision===this.modelsRevision){this.modelsLoading=false;this.render();}}
   }

@@ -247,7 +247,8 @@ class DesktopSessions:
                     if (row and row['kind'] == 'api' and
                             profile['origin'].startswith(row['originBase']+':')):
                         key = json.loads(Path(row['secretPath']).read_text(encoding='utf-8')).get('key')
-                        return draft_identity('claude', 'local-cli', row['id'], key) if key else ''
+                        return draft_identity('claude', 'local-cli', row['id'], row.get('baseUrl'),
+                                              row.get('authScheme'), key) if key and row.get('baseUrl') else ''
                 owner = claude_draft_account_identity(profile['directory'], local.get('cwd'))
                 if owner:
                     return draft_identity('claude', 'local-cli', owner)
@@ -258,11 +259,17 @@ class DesktopSessions:
             with store.lock:
                 kind, fingerprint, gateway = store._current()
                 if kind == 'api' and gateway:
-                    owner = ('api', gateway['id'], fingerprint)
-                else:
+                    config = gateway['config']
+                    endpoint = config.get('inferenceGatewayBaseUrl')
+                    credential = config.get('inferenceGatewayApiKey')
+                    owner = ('api', gateway['id'], endpoint,
+                             config.get('inferenceGatewayAuthScheme', 'bearer'), credential) if endpoint and credential else None
+                elif kind == 'official' and fingerprint:
                     row = next((item for item in store._index()['accounts']
                                 if item['kind'] == kind and item.get('fingerprint') == fingerprint), None)
                     owner = ('saved', row['id'], fingerprint) if row else ('current', fingerprint)
+                else:
+                    owner = None
             return draft_identity('claude', 'desktop', *owner) if owner else ''
 
         session = detail.get('session') or {}

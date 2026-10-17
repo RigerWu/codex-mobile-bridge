@@ -200,7 +200,8 @@ class DraftIdentityTests(unittest.TestCase):
         manager.adapters = {'claude': SimpleNamespace(cli=cli, remote_cli=remote, index={})}
         access = SimpleNamespace(lock=threading.RLock(), index={'activeClaude': 'saved-api',
             'claude': [{'id': 'saved-api', 'kind': 'api', 'originBase': 'gateway:saved-api:/profile',
-                        'secretPath': str(credential)}]})
+                        'secretPath': str(credential), 'baseUrl': 'https://api.example/v1',
+                        'authScheme': 'bearer'}]})
         manager.bridge = SimpleNamespace(cli_access=access)
         first = manager._draft_account_identity('claude', 'session', {'session': {}})
         self.assertEqual(len(first), 64)
@@ -208,6 +209,9 @@ class DraftIdentityTests(unittest.TestCase):
         cli.index['session']['origin'] = profile['origin']
         self.assertEqual(manager._draft_account_identity('claude', 'session', {'session': {}}), first)
         credential.write_text(json.dumps({'key': 'other-account-key'}))
+        self.assertNotEqual(manager._draft_account_identity('claude', 'session', {'session': {}}), first)
+        credential.write_text(json.dumps({'key': 'api-key'}))
+        access.index['claude'][0]['baseUrl'] = 'https://other.example/v1'
         self.assertNotEqual(manager._draft_account_identity('claude', 'session', {'session': {}}), first)
         remote.index['session'] = {'host': 'remote'}
         self.assertEqual(manager._draft_account_identity('claude', 'session', {'session': {}}), '')
@@ -227,6 +231,26 @@ class DraftIdentityTests(unittest.TestCase):
         first = manager._draft_account_identity('claude', 'session', {'session': {}})
         self.assertEqual(len(first), 64)
         current[1] = 'token-fingerprint-two'
+        self.assertNotEqual(manager._draft_account_identity('claude', 'session', {'session': {}}), first)
+        current[1] = ''
+        self.assertEqual(manager._draft_account_identity('claude', 'session', {'session': {}}), '')
+
+    def test_claude_desktop_api_identity_excludes_model_list(self):
+        manager = DesktopSessions.__new__(DesktopSessions)
+        cli = SimpleNamespace(lock=threading.RLock(), index={})
+        remote = SimpleNamespace(lock=threading.RLock(), index={})
+        manager.adapters = {'claude': SimpleNamespace(cli=cli, remote_cli=remote,
+                                                     index={'session': {'backend': 'desktop'}})}
+        config = {'inferenceGatewayBaseUrl': 'https://api.example/v1',
+                  'inferenceGatewayApiKey': 'first-key',
+                  'inferenceGatewayAuthScheme': 'bearer', 'inferenceModels': ['model-a']}
+        gateway = {'id': 'profile-id', 'config': config}
+        manager._account_store = lambda provider: SimpleNamespace(lock=threading.RLock(),
+            _current=lambda: ('api', 'whole-config-fingerprint', gateway))
+        first = manager._draft_account_identity('claude', 'session', {'session': {}})
+        config['inferenceModels'] = ['model-b']
+        self.assertEqual(manager._draft_account_identity('claude', 'session', {'session': {}}), first)
+        config['inferenceGatewayApiKey'] = 'second-key'
         self.assertNotEqual(manager._draft_account_identity('claude', 'session', {'session': {}}), first)
 
 

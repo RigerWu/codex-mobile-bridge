@@ -39,7 +39,7 @@
 .accounts-panel .account-bucket.is-current{border-color:var(--accent,#4664ed);background:var(--soft,#f3f6ff)}
 .accounts-actions{display:flex;align-items:center;gap:6px;flex-wrap:wrap;border-top:1px solid var(--line,#dfe3eb);padding-top:10px;margin-top:12px}
 .accounts-panel .accounts-actions button{font-size:12px;margin:0}.accounts-actions .accounts-models{flex-basis:100%}
-.accounts-card-footer{display:flex;align-items:center;gap:12px;margin-top:12px}.accounts-usage-controls{display:flex;align-items:center;gap:10px;min-width:0;max-width:100%;margin-left:auto}
+.accounts-card-footer{display:flex;align-items:center;gap:12px;margin-top:12px;min-width:0}.accounts-panel .accounts-card-footer>button{flex:none;margin:0;font-size:12px;padding:8px}.accounts-card-footer>.accounts-usage-controls{flex:1;justify-content:flex-end}.accounts-card-footer .account-updated{flex:1;text-align:center}.accounts-model-fallback:empty{display:none}.accounts-usage-controls{display:flex;align-items:center;gap:10px;min-width:0;max-width:100%;margin-left:auto}
 .accounts-panel .accounts-usage-controls .accounts-usage-refresh{display:grid;place-items:center;flex:none;width:32px;height:32px;margin:0;padding:0;border:0;border-radius:8px;cursor:pointer}
 .accounts-usage-refresh svg{display:block;width:18px;height:18px}
 .accounts-usage-refresh:hover{background:var(--line,#e3e6df)}

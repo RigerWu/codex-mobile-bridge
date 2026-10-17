@@ -21,8 +21,9 @@ test('native login card survives an empty saved list without enrollment or switc
  await ui.panel.refresh();
  assert.match(ui.text(),/current@example.test/);assert.match(ui.text(),/已登录/);assert.match(ui.text(),/2 张可用/);
  assert.equal(ui.all().filter(n=>n.tag==='section'&&n.className==='account-bucket').length,1);
- assert.equal(ui.all().some(n=>['切换到此接入','删除','修改','查看可用模型'].includes(n.textContent)),false);
+ assert.equal(ui.all().some(n=>['切换到此接入','删除','修改'].includes(n.textContent)),false);
  assert.ok(ui.all().find(n=>n.tag==='button'&&n.textContent==='使用重置卡'));
+ const modelsButton=ui.all().find(n=>n.textContent==='查看可用模型');assert.equal(modelsButton.parent.className,'accounts-card-footer');
  ui.panel.accept({...ui.value(),accounts:[{...login,transient:false}],loginAccount:{...login,transient:false}});
  assert.equal(ui.all().filter(n=>n.tag==='section'&&n.className==='account-bucket').length,1);
 });

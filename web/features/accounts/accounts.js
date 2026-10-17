@@ -171,9 +171,9 @@ class AccountsPanel {
     if(usage?.resetCredits)panel.accept({visible:true,email:row.email,limits:[],resetCredits:usage.resetCredits,updatedAt:usage.updatedAt,canReset:false});
     await panel.refresh(false);
   }
-  accountActions(card,row){
+  accountActions(card,row,footer){
     const models=row.details?.models,opened=this.expandedModels.has(row.id);
-    if(!row.transient){const show=this.button(opened?'收起模型':'查看可用模型',()=>{if(opened){this.expandedModels.delete(row.id);this.render();}else{this.expandedModels.add(row.id);this.perform({action:'details',id:row.id,section:'models'});}});show.disabled=this.busy;card.append(show);}
+    {const show=this.button(opened?'收起模型':'查看可用模型',()=>{if(opened){this.expandedModels.delete(row.id);this.render();}else{this.expandedModels.add(row.id);this.perform({action:'details',id:row.id,section:'models'});}});show.disabled=this.busy;footer.append(show);}
     if(opened){const box=this.node('div',undefined,'accounts-models');
       if(!models||models.status==='loading')box.append(this.node('p','正在读取模型…'));
       else if(models.status==='error'){box.append(this.node('p',models.error));box.append(this.button('重试',()=>this.perform({action:'details',id:row.id,section:'models',refresh:true})));}
@@ -269,7 +269,7 @@ class AccountsPanel {
         const remove=this.button('删除',()=>{if(window.confirm(this.text('删除此账号档案？')+'\n'+row.name))this.perform({action:'delete',id:row.id});});remove.hidden=active;remove.disabled=this.busy||switching||active;
         actions.append(edit,rename,remove);
       }
-      this.accountActions(actions,row);card.append(actions);if(row.kind==='chatgpt'){const footer=this.node('div',undefined,'accounts-card-footer');footer.append(this.accountUsageControls(row));card.append(footer);}this.rows.append(card);
+      card.append(actions);const footer=this.node('div',undefined,'accounts-card-footer');card.append(footer);this.accountActions(card,row,footer);if(row.kind==='chatgpt')footer.append(this.accountUsageControls(row));this.rows.append(card);
     }
     if(!this.desktop&&value.canSwitch===false)this.rows.append(this.node('p','免密访问不能切换账号，请在桌面端操作'));
     if(this.desktop){

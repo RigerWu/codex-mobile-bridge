@@ -1,7 +1,7 @@
 'use strict';
 const test=require('node:test'),assert=require('node:assert/strict'),fs=require('node:fs'),vm=require('node:vm');
 function fixture({desktop=false,provider='deepseek',toolbar=false}={}){
-  function node(tag){return {tag,children:[],dataset:{},textContent:'',hidden:false,disabled:false,attributes:{},classList:{add(){}},append(...nodes){this.children.push(...nodes);},replaceChildren(...nodes){this.children=nodes;},setAttribute(key,value){this.attributes[key]=value;},closest(){return null;},querySelectorAll(selector){return this.children.flatMap(child=>[...(selector==='[data-i18n]'&&child.dataset.i18n?[child]:[]),...child.querySelectorAll(selector)]);}};}
+  function node(tag){return {tag,children:[],dataset:{},textContent:'',hidden:false,disabled:false,attributes:{},classList:{add(){}},append(...nodes){for(const child of nodes){if(child.parent)child.parent.children=child.parent.children.filter(value=>value!==child);child.parent=this;this.children.push(child);}},replaceChildren(...nodes){this.children=nodes;},setAttribute(key,value){this.attributes[key]=value;},closest(){return null;},querySelectorAll(selector){return this.children.flatMap(child=>[...(selector==='[data-i18n]'&&child.dataset.i18n?[child]:[]),...child.querySelectorAll(selector)]);}};}
   const root=node('div'),outerToolbar=toolbar?node('div'):null,listeners={},timers=new Map(),calls=[],prompts=[],updates=[];let time=1000000,tid=0,visible=true,confirmed=true,value={accounts:[],activeId:null,canSwitch:true},handler=async()=>value,readHandler=async()=>value;
   const document={hidden:false,documentElement:{},createElement:node,querySelectorAll:()=>[],addEventListener:(type,fn)=>(listeners[type]??=[]).push(fn),removeEventListener:(type,fn)=>listeners[type]=listeners[type].filter(row=>row!==fn),dispatchEvent(event){for(const fn of listeners[event.type]||[])fn(event);}};
   class Clock extends Date{static now(){return time;}}
@@ -38,7 +38,7 @@ test('Claude list, timer, and return visits only read saved quota snapshots',asy
 test('Claude explicit quota query is single-flight and failed refresh keeps the last success time',async()=>{
   const ui=fixture({provider:'claude'}),saved={status:'ready',checkedAt:1000,limits:[{name:'5h',windows:[{remainingPercent:70}]}]};
   ui.panel.accept(snapshot([row('current','account',saved)]));assert.match(ui.text(),/查询时间：/);assert.match(ui.text(),/1970-01-01 \d\d:16/);
-  const card=ui.panel.rows.children[0],controls=card.children.at(-1).children[0];
+  const card=ui.panel.rows.children[0],controls=card.children.find(n=>n.className==='accounts-card-footer').children.at(-1);
   assert.equal(controls.className,'accounts-usage-controls');assert.equal(controls.children.at(-1).attributes['aria-label'],'查看剩余额度');
   assert.match(controls.children[0].textContent,/查询时间：/);assert.equal(card.children[1].children[1].children.some(node=>node.className==='account-updated'),false);
   let finish;ui.setHandler(()=>new Promise(resolve=>finish=resolve));
@@ -66,38 +66,38 @@ test('DSH wallet amounts stay separate from percent quota and never invent missi
   const ui=fixture();ui.panel.accept(snapshot([row('current','account',{status:'ready',limits:[],balance:{wallets:[{currency:'CNY',remaining:'12.30',toppedUp:'10.00',granted:'2.30'},{currency:'USD',remaining:'4.00'}]}})]));
   assert.match(ui.text(),/CNY 12.30/);assert.match(ui.text(),/USD 4.00/);assert.match(ui.text(),/10.00/);assert.equal(ui.all().filter(node=>node.tag==='progress').length,0);
   const card=ui.panel.rows.children[0];assert.match(card.className,/accounts-client-card is-current/);assert.match(card.children[1].className,/accounts-client-usage/);
-  assert.equal(card.children[1].children[0].children[0].textContent,'账户余额');assert.equal(card.children.at(-1).children[0].children[0].attributes['aria-label'],'刷新余额');
+  assert.equal(card.children[1].children[0].children[0].textContent,'账户余额');assert.equal(card.children.find(n=>n.className==='accounts-card-footer').children.at(-1).children[0].attributes['aria-label'],'刷新余额');
   ui.panel.accept(snapshot([row('current','account',{status:'unsupported',limits:[]})]));assert.match(ui.text(),/余额信息暂不可用/);assert.doesNotMatch(ui.text(),/0%|12.30|USD/);
 });
 test('DeepSeek balance time stays beside its refresh control',()=>{
   const ui=fixture(),checkedAt=1000;
   ui.panel.accept(snapshot([row('current','account',{status:'ready',checkedAt,balance:{wallets:[{currency:'CNY',remaining:'12.30'}]}})]));
-  const controls=ui.panel.rows.children[0].children.at(-1).children[0];
+  const controls=ui.panel.rows.children[0].children.find(n=>n.className==='accounts-card-footer').children.at(-1);
   assert.equal(controls.className,'accounts-usage-controls');assert.equal(controls.children.at(-1).attributes['aria-label'],'刷新余额');
   assert.match(controls.children[0].textContent,/更新于：/);
 });
 test('client cards keep provider usage and API actions distinct',async()=>{
   const claude=fixture({provider:'claude'});claude.panel.accept(snapshot([row('current'),row('api','api')]));
   assert.match(claude.panel.rows.children[0].children[1].className,/accounts-client-usage/);
-  assert.equal(claude.panel.rows.children[0].children.at(-1).children[0].children[0].attributes['aria-label'],'查看剩余额度');
+  assert.equal(claude.panel.rows.children[0].children.find(n=>n.className==='accounts-card-footer').children.at(-1).children[0].attributes['aria-label'],'查看剩余额度');
   assert.equal(claude.panel.rows.children[1].children.length,2,'API card has identity and actions, no invented quota');
   const dsh=fixture();dsh.panel.accept(snapshot([row('current'),row('api','api')]));
   assert.equal(dsh.panel.rows.children[1].children.length,2);
   dsh.english();assert.ok(dsh.all().some(node=>node.attributes['aria-label']==='Refresh balance'));assert.doesNotMatch(dsh.text(),/[\u4e00-\u9fff]/);
-  await dsh.panel.rows.children[0].children.at(-1).children[0].children[0].onclick();
+  await dsh.panel.rows.children[0].children.find(n=>n.className==='accounts-card-footer').children.at(-1).children[0].onclick();
   assert.deepEqual(JSON.parse(JSON.stringify(dsh.calls)),[{action:'details',id:'current',refresh:true}]);
 });
 test('DSH API wallet appears only when the backend supplies a balance',()=>{
   const ui=fixture();ui.panel.accept(snapshot([row('api','api',{status:'ready',balance:{wallets:[{currency:'CNY',remaining:'9.50'}]}})],['api']));
-  assert.match(ui.text(),/CNY 9.50/);assert.equal(ui.panel.rows.children[0].children.length,4);
+  assert.match(ui.text(),/CNY 9.50/);assert.equal(ui.panel.rows.children[0].children.length,5);
   ui.panel.accept(snapshot([row('api','api',{status:'unsupported'})],['api']));
-  assert.equal(ui.panel.rows.children[0].children.length,2);assert.doesNotMatch(ui.text(),/CNY 9.50|余额信息暂不可用/);
+  assert.equal(ui.panel.rows.children[0].children.length,4);assert.doesNotMatch(ui.text(),/CNY 9.50|余额信息暂不可用/);
 });
-test('external toolbar places refresh beside the title and models below cards',async()=>{
+test('current account models share footer with quota time and refresh',async()=>{
   const ui=fixture({toolbar:true});ui.setValue(snapshot([row('current')]));ui.panel.accept(snapshot([row('current')]));
   assert.equal(ui.outerToolbar.children.length,1);assert.equal(ui.outerToolbar.children[0].textContent,'刷新');
   assert.equal(ui.root.children.some(node=>node.className==='accounts-toolbar'),false);
-  assert.ok(ui.root.children.indexOf(ui.panel.modelsButton)>ui.root.children.indexOf(ui.panel.rows));
+  assert.equal(ui.panel.modelsButton.parent.className,'accounts-card-footer');assert.equal(ui.panel.modelsButton.parent.children[0],ui.panel.modelsButton);assert.equal(ui.panel.modelsBox.parent,ui.panel.rows.children[0]);
   await ui.outerToolbar.children[0].onclick();assert.deepEqual(ui.calls.map(call=>call.action),['list','details']);
 });
 test('Claude enrollment confirms restart while DSH API import remains a read-only native snapshot',async()=>{

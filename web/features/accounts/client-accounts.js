@@ -100,8 +100,11 @@ class DesktopClientAccountsPanel {
   queryTime(seconds){const date=new Date(seconds*1000),pad=value=>String(value).padStart(2,'0');return `${date.getFullYear()}-${pad(date.getMonth()+1)}-${pad(date.getDate())} ${pad(date.getHours())}:${pad(date.getMinutes())}`;}
   usageControls(row){
     const usage=row.usage||row.quota,controls=this.node('div',undefined,'accounts-usage-controls');
-    const refresh=this.button(this.queryingId===row.id?'查询中…':this.provider==='claude'?'查看剩余额度':'刷新余额',()=>this.perform({action:'details',id:row.id,refresh:true}));
-    refresh.className='accounts-client-usage-refresh';refresh.disabled=this.busy||this.loading;controls.append(refresh);
+    const label=this.text(this.queryingId===row.id?'查询中…':this.provider==='claude'?'查看剩余额度':'刷新余额');
+    const refresh=this.button('',()=>this.perform({action:'details',id:row.id,refresh:true}));
+    refresh.title=label;refresh.setAttribute('aria-label',label);refresh.className='accounts-usage-refresh';
+    refresh.innerHTML='<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="M20 12a8 8 0 1 1-2.34-5.66L20 8M20 3v5h-5"/></svg>';
+    refresh.disabled=this.busy||this.loading;controls.append(refresh);
     if(usage?.checkedAt)controls.append(this.node('small',this.text(this.provider==='claude'?'查询时间：':'更新于：')+(this.provider==='claude'?this.queryTime(usage.checkedAt):new Date(usage.checkedAt*1000).toLocaleString(BridgeI18n.locale())),'account-updated'));
     return controls;
   }

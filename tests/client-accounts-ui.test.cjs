@@ -39,25 +39,25 @@ test('Claude explicit quota query is single-flight and failed refresh keeps the 
   const ui=fixture({provider:'claude'}),saved={status:'ready',checkedAt:1000,limits:[{name:'5h',windows:[{remainingPercent:70}]}]};
   ui.panel.accept(snapshot([row('current','account',saved)]));assert.match(ui.text(),/查询时间：/);assert.match(ui.text(),/1970-01-01 \d\d:16/);
   const card=ui.panel.rows.children[0],controls=card.children[0].children[1];
-  assert.equal(controls.className,'accounts-usage-controls');assert.equal(controls.children[0].textContent,'查看剩余额度');
+  assert.equal(controls.className,'accounts-usage-controls');assert.equal(controls.children[0].attributes['aria-label'],'查看剩余额度');
   assert.match(controls.children[1].textContent,/查询时间：/);assert.equal(card.children[1].children[1].children.some(node=>node.className==='account-updated'),false);
   let finish;ui.setHandler(()=>new Promise(resolve=>finish=resolve));
-  const button=ui.all().find(node=>node.tag==='button'&&node.textContent==='查看剩余额度');const pending=button.onclick();
+  const button=ui.all().find(node=>node.tag==='button'&&node.attributes['aria-label']==='查看剩余额度');const pending=button.onclick();
   assert.equal(ui.calls.length,1);assert.equal(ui.calls[0].refresh,true);
-  assert.equal(ui.all().find(node=>node.tag==='button'&&node.textContent==='查询中…').disabled,true);
+  assert.equal(ui.all().find(node=>node.tag==='button'&&node.attributes['aria-label']==='查询中…').disabled,true);
   await ui.panel.perform({action:'details',id:'current',refresh:true});assert.equal(ui.calls.length,1);
   finish(snapshot([row('current','account',{...saved,status:'error',error:'无法查询 Claude 剩余额度，请确认客户端登录有效并解锁系统凭据存储后重试'})]));await pending;
-  assert.equal(ui.all().find(node=>node.tag==='button'&&node.textContent==='查看剩余额度').disabled,false);
+  assert.equal(ui.all().find(node=>node.tag==='button'&&node.attributes['aria-label']==='查看剩余额度').disabled,false);
   assert.match(ui.text(),/70%/);assert.match(ui.text(),/无法查询 Claude 剩余额度/);assert.match(ui.text(),/保留上次结果/);assert.match(ui.text(),/1970-01-01 \d\d:16/);
   ui.english();assert.match(ui.text(),/Queried at: /);assert.match(ui.text(),/Showing the last result/);assert.match(ui.text(),/Cannot check Claude remaining usage/);
 });
 test('Claude quota button shows an English pending state',async()=>{
   const ui=fixture({provider:'claude'});ui.english();ui.panel.accept(snapshot([row('current')]));
   let finish;ui.setHandler(()=>new Promise(resolve=>finish=resolve));
-  const pending=ui.all().find(node=>node.tag==='button'&&node.textContent==='View remaining quota').onclick();
-  assert.equal(ui.all().find(node=>node.tag==='button'&&node.textContent==='Checking…').disabled,true);
+  const pending=ui.all().find(node=>node.tag==='button'&&node.attributes['aria-label']==='View remaining quota').onclick();
+  assert.equal(ui.all().find(node=>node.tag==='button'&&node.attributes['aria-label']==='Checking…').disabled,true);
   finish(snapshot([row('current')]));await pending;
-  assert.equal(ui.all().find(node=>node.tag==='button'&&node.textContent==='View remaining quota').disabled,false);
+  assert.equal(ui.all().find(node=>node.tag==='button'&&node.attributes['aria-label']==='View remaining quota').disabled,false);
 });
 test('closing a panel discards its late account response and refresh timers',async()=>{
   const ui=fixture();let finish;ui.setRead(()=>new Promise(resolve=>finish=resolve));const pending=ui.panel.resume();ui.panel.dispose();finish(snapshot([row('current')]));await pending;assert.equal(ui.panel.value,null);assert.equal(ui.timers.size,0);assert.equal(ui.updates.length,0);
@@ -66,24 +66,24 @@ test('DSH wallet amounts stay separate from percent quota and never invent missi
   const ui=fixture();ui.panel.accept(snapshot([row('current','account',{status:'ready',limits:[],balance:{wallets:[{currency:'CNY',remaining:'12.30',toppedUp:'10.00',granted:'2.30'},{currency:'USD',remaining:'4.00'}]}})]));
   assert.match(ui.text(),/CNY 12.30/);assert.match(ui.text(),/USD 4.00/);assert.match(ui.text(),/10.00/);assert.equal(ui.all().filter(node=>node.tag==='progress').length,0);
   const card=ui.panel.rows.children[0];assert.match(card.className,/accounts-client-card is-current/);assert.match(card.children[1].className,/accounts-client-usage/);
-  assert.equal(card.children[1].children[0].children[0].textContent,'账户余额');assert.equal(card.children[0].children[1].children[0].textContent,'刷新余额');
+  assert.equal(card.children[1].children[0].children[0].textContent,'账户余额');assert.equal(card.children[0].children[1].children[0].attributes['aria-label'],'刷新余额');
   ui.panel.accept(snapshot([row('current','account',{status:'unsupported',limits:[]})]));assert.match(ui.text(),/余额信息暂不可用/);assert.doesNotMatch(ui.text(),/0%|12.30|USD/);
 });
 test('DeepSeek balance time stays beside its refresh control',()=>{
   const ui=fixture(),checkedAt=1000;
   ui.panel.accept(snapshot([row('current','account',{status:'ready',checkedAt,balance:{wallets:[{currency:'CNY',remaining:'12.30'}]}})]));
   const controls=ui.panel.rows.children[0].children[0].children[1];
-  assert.equal(controls.className,'accounts-usage-controls');assert.equal(controls.children[0].textContent,'刷新余额');
+  assert.equal(controls.className,'accounts-usage-controls');assert.equal(controls.children[0].attributes['aria-label'],'刷新余额');
   assert.match(controls.children[1].textContent,/更新于：/);
 });
 test('client cards keep provider usage and API actions distinct',async()=>{
   const claude=fixture({provider:'claude'});claude.panel.accept(snapshot([row('current'),row('api','api')]));
   assert.match(claude.panel.rows.children[0].children[1].className,/accounts-client-usage/);
-  assert.equal(claude.panel.rows.children[0].children[0].children[1].children[0].textContent,'查看剩余额度');
+  assert.equal(claude.panel.rows.children[0].children[0].children[1].children[0].attributes['aria-label'],'查看剩余额度');
   assert.equal(claude.panel.rows.children[1].children.length,2,'API card has identity and actions, no invented quota');
   const dsh=fixture();dsh.panel.accept(snapshot([row('current'),row('api','api')]));
   assert.equal(dsh.panel.rows.children[1].children.length,2);
-  dsh.english();assert.match(dsh.text(),/Refresh balance/);assert.doesNotMatch(dsh.text(),/[\u4e00-\u9fff]/);
+  dsh.english();assert.ok(dsh.all().some(node=>node.attributes['aria-label']==='Refresh balance'));assert.doesNotMatch(dsh.text(),/[\u4e00-\u9fff]/);
   await dsh.panel.rows.children[0].children[0].children[1].children[0].onclick();
   assert.deepEqual(JSON.parse(JSON.stringify(dsh.calls)),[{action:'details',id:'current',refresh:true}]);
 });

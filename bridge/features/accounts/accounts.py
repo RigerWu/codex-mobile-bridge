@@ -23,7 +23,7 @@ from urllib.parse import urlsplit
 from bridge.features.accounts.account import AccountRPC, AccountError, Account
 from bridge.clients.desktop_app import DesktopApp
 from bridge.features.accounts.models import model_catalog, model_ids
-from bridge.clients.codex.catalog import ModelStore, MODEL_REFRESH_SECONDS
+from bridge.clients.codex.catalog import Catalog, ModelStore, MODEL_REFRESH_SECONDS
 from bridge.features.accounts.info import AccountInfo
 from bridge.clients.codex.transport import connect_stream
 from bridge.features.notifications.channels import read_json
@@ -132,6 +132,7 @@ class Accounts:
         self.gate = threading.RLock()
         self.api_models_locks = {}
         self.api_model_store = ModelStore(bridge.data_dir)
+        self.saved_model_catalogs = {}
         self.api_model_refreshing = set()
         self.api_model_timers = {}
         self.api_model_retry_at = {}
@@ -160,6 +161,15 @@ class Accounts:
         self.root.mkdir(parents=True, exist_ok=True, mode=0o700)
         self.root.chmod(0o700)
         return self.root/identifier
+
+    def saved_model_catalog(self, identifier):
+        with self.lock:
+            home = self.directory(identifier)
+            catalog = self.saved_model_catalogs.get(identifier)
+            if catalog is None:
+                catalog = Catalog(home, self.runtime)
+                self.saved_model_catalogs[identifier] = catalog
+            return catalog
 
     def row(self, identifier):
         self.directory(identifier)
@@ -582,6 +592,9 @@ class Accounts:
                                 self.index['accounts'].remove(replacing)
                             self.save()
                             if replacing:
+                                catalog = self.saved_model_catalogs.pop(replacing['id'], None)
+                                if catalog:
+                                    catalog.stop_model_refresh()
                                 shutil.rmtree(self.directory(replacing['id']), ignore_errors=True)
                             accepted = True
                             self.enrollment = {'phase': 'complete', 'name': name}
@@ -730,6 +743,9 @@ class Accounts:
                         raise ValueError('请先切换到其他接入，再删除此账号')
                     self.index['accounts'].remove(row)
                     self.api_models_locks.pop(row['id'], None)
+                    catalog = self.saved_model_catalogs.pop(row['id'], None)
+                    if catalog:
+                        catalog.stop_model_refresh()
                     self.save()
                     shutil.rmtree(self.directory(row['id']), ignore_errors=True)
             else:

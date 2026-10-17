@@ -2648,6 +2648,8 @@ class Bridge:
                 for timer in self.accounts.api_model_timers.values():
                     timer.cancel()
                 self.accounts.api_model_timers.clear()
+                for catalog in self.accounts.saved_model_catalogs.values():
+                    catalog.stop_model_refresh()
         for bridge in list(self.remote_bridges.values()):
             bridge.close()
         with self.lock:

@@ -96,7 +96,7 @@ class InfoTests(unittest.TestCase):
         row,_=self.official();before=self.manager.snapshot_files();info=self.manager.info
         info.read_identity=Mock(return_value={'kind':'api','name':'other','key':'unrelated','baseUrl':'https://other.test'})
         with patch('bridge.features.accounts.accounts.ManagedRPC') as rpc, \
-             patch.object(self.bridge.catalog_reader, 'get_kind', create=True, return_value={
+             patch('bridge.clients.codex.catalog.Catalog.get_kind', return_value={
                  'models':[{'id':'fixture-model','name':'Fixture model'}],
                  'cache':{'state':'fresh','updatedAt':123}}):
             rpc.return_value.__enter__.return_value=self.rpc()
@@ -108,6 +108,36 @@ class InfoTests(unittest.TestCase):
         self.assertEqual(data['models']['cache']['updatedAt'],123)
         self.assertEqual(self.manager.snapshot_files(),before)
         self.assertNotIn('access-fixture',json.dumps(result));self.assertNotIn('refresh-fixture',json.dumps(result))
+
+    def test_saved_official_accounts_use_distinct_native_catalog_homes(self):
+        first, _ = self.official()
+        second = {**first, 'id':'b'*32, 'email':'second@example.test',
+                  'tokenOwner':['other-org','second-user','second@example.test']}
+        self.manager.index['accounts'].append(second)
+        claims = base64.urlsafe_b64encode(b'{"sub":"second-user","email":"second@example.test"}').decode().rstrip('=')
+        private_json(self.manager.directory(second['id'])/'auth.json', {
+            'auth_mode':'chatgpt', 'tokens':{'account_id':'other-org', 'id_token':'e30.'+claims+'.sig',
+                                            'access_token':'second-access'}})
+        info = self.manager.info
+        info.read_identity = Mock(return_value={'kind':'api','name':'other'})
+        class Native:
+            def __init__(self, home): self.home = home
+            def __enter__(self): return self
+            def __exit__(self, *args): return False
+        calls = []
+        def catalog(reader, kind, cwd, **kwargs):
+            calls.append((reader.home, cwd))
+            return {'models':[{'id':reader.home.name}], 'cache':{'state':'fresh','updatedAt':123}}
+        with patch('bridge.features.accounts.accounts.ManagedRPC', side_effect=lambda home, runtime: Native(home)), \
+             patch('bridge.features.accounts.info.Account.context', side_effect=lambda rpc: {
+                 'loginType':'chatgpt', 'email':'second@example.test' if rpc.home.name == second['id'] else first['email']}), \
+             patch('bridge.clients.codex.catalog.Catalog.get_kind', new=catalog):
+            info.read(first, 'models')
+            info.read(second, 'models')
+        self.assertEqual(info.entries[first['id']]['models']['models'], [{'id':first['id']}])
+        self.assertEqual(info.entries[second['id']]['models']['models'], [{'id':second['id']}])
+        self.assertEqual({home for home, _ in calls}, {self.manager.directory(first['id']),
+                                                        self.manager.directory(second['id'])})
 
     def test_active_account_uses_live_credentials_and_syncs_back_to_saved_copy(self):
         row,auth=self.official();auth['tokens']['refresh_token']='new-refresh'

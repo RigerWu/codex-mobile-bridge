@@ -268,8 +268,9 @@ class AccountInfo:
                                         current['accountKey'] != context['accountKey']):
                                     raise ValueError('账号身份已变化')
                         else:
-                            catalog = manager.bridge.catalog_reader.get_kind('models', str(home), refresh=refresh,
-                                                                              provider='openai')
+                            reader = (manager.bridge.catalog_reader if home == manager.home
+                                      else manager.saved_model_catalog(row['id']))
+                            catalog = reader.get_kind('models', str(home), refresh=refresh, provider='openai')
                             result = {'models': catalog.get('models', []), 'cache': catalog.get('cache'),
                                       **({'error': catalog['modelError']} if catalog.get('modelError') else {})}
                     if token_owner(read_json(home/'auth.json', {})) != row.get('tokenOwner'):

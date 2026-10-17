@@ -53,6 +53,20 @@ test('DeepSeek stores only complete list reads and restores its own provider row
  const restored=fixture({storage});restored.view.bindListCache('a'.repeat(64),'gateway.test');assert.equal(restored.view.providerViews.get('deepseek').rows[0].id,'dsh');assert.equal(restored.view.providerViews.has('claude'),false);
 });
 
+test('cached provider previews stay inert until client discovery confirms selection',async()=>{
+ for(const provider of ['claude','deepseek']){
+  const identity='a'.repeat(64),storage=new Map([[`desktop-list-v1:${identity}:gateway.test:${provider}`,JSON.stringify({rows:[{id:'cached',title:'Cached chat',backend:'code',cwd:'/work',updatedAt:9}]})]]),ui=fixture({storage});
+  let selected=0,finish;ui.view.onSelect=()=>selected++;ui.view.bindListCache(identity,'gateway.test');ui.setHandler(()=>new Promise(resolve=>finish=resolve));
+  assert.equal(ui.view.previewCachedList(provider),true);
+  const row=ui.view.rowsRoot.querySelector('.session');assert.equal(row?.textContent.includes('Cached chat'),true);assert.equal(row.disabled,true);assert.equal(ui.view.container.hidden,false);assert.equal(ui.view.sid,null);assert.equal(selected,0);assert.equal(ui.calls.length,0);
+  await ui.view.open('cached');await ui.view.create();await ui.view.refresh();await ui.view.refreshList();assert.equal(ui.calls.length,0);
+  ui.view.confirmCachedList();assert.equal(ui.view.rowsRoot.querySelector('.session').disabled,false);assert.equal(ui.calls.length,1);
+  finish({sessions:[{id:'fresh',title:'Fresh chat',backend:'code'}]});await new Promise(setImmediate);
+  assert.equal(ui.view.rowsRoot.querySelector('.session').dataset.id,'fresh');
+  await ui.view.choose('codex');assert.equal(ui.view.previewOnly,false);assert.equal(ui.view.container.hidden,true);
+ }
+});
+
 test('search stays short in both languages while its accessible name stays specific',()=>{
  const ui=fixture();
  assert.equal(ui.view.search.placeholder,'搜索');

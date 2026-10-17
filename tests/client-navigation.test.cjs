@@ -32,6 +32,15 @@ test('clicking the selected provider does not reset its view or issue another re
  const {nav}=fixture();let calls=0;nav.view.choose=async()=>{calls++;};await nav.choose('claude');assert.equal(calls,0);
 });
 
+test('discovery confirms a cached preview only while its provider remains enabled',async()=>{
+ const {nav}=fixture();let confirmations=0;
+ nav.view.previewOnly=true;nav.view.confirmCachedList=function(){this.previewOnly=false;confirmations++;};
+ nav.applyClients({clients:nav.clients});assert.equal(confirmations,1);assert.equal(nav.provider,'claude');
+ nav.view.previewOnly=true;nav.view.choose=async function(id){this.provider=id;this.previewOnly=false;};
+ nav.applyClients({clients:nav.clients.map(client=>({...client,enabled:false}))});await Promise.resolve();
+ assert.equal(nav.provider,null);assert.equal(nav.view.provider,'codex');assert.equal(nav.view.previewOnly,false);assert.equal(confirmations,1);
+});
+
 test('turning the last client off and re-enabling Codex refreshes its list',async()=>{
  const {nav}=fixture(),selected=[];nav.clients=[{id:'codex',enabled:true,configured:true}];nav.provider=nav.view.provider='codex';
  nav.view.onSelect=id=>selected.push(id);

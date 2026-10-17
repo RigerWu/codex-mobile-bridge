@@ -8,7 +8,30 @@ import re
 import secrets
 import threading
 import time
+from contextlib import contextmanager
 from pathlib import Path
+
+
+@contextmanager
+def session_file_lock(path):
+    """Serialize session-file replacements across gateway and desktop processes."""
+    lock_path = path.with_name(path.name + '.lock')
+    with os.fdopen(os.open(lock_path, os.O_RDWR | os.O_CREAT, 0o600), 'r+b') as stream:
+        if os.name == 'nt':
+            import msvcrt
+            stream.seek(0)
+            msvcrt.locking(stream.fileno(), msvcrt.LK_LOCK, 1)
+        else:
+            import fcntl
+            fcntl.flock(stream, fcntl.LOCK_EX)
+        try:
+            yield
+        finally:
+            if os.name == 'nt':
+                stream.seek(0)
+                msvcrt.locking(stream.fileno(), msvcrt.LK_UNLCK, 1)
+            else:
+                fcntl.flock(stream, fcntl.LOCK_UN)
 
 
 def session_hours(value):
@@ -80,8 +103,9 @@ class Auth:
         self.failures = {}
         self.auto_blocks = {}
         self.lock = threading.RLock()
+        self._loaded = self.path.read_bytes() if self.path and self.path.exists() else None
         if self.path and self.path.exists():
-            saved = json.loads(self.path.read_text(encoding='utf-8'))
+            saved = json.loads(self._loaded)
             self.cookie_name = saved.get('cookieName') or self.cookie_name
             self.policy = access_policy(saved['policy'])
             self.failures = saved.get('failures', {})
@@ -108,13 +132,38 @@ class Auth:
     def persist(self):
         if self.path is None:
             return
-        temporary = self.path.with_name(self.path.name + '.' + secrets.token_hex(8) + '.tmp')
-        try:
-            with os.fdopen(os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600), 'w', encoding='utf-8') as stream:
-                json.dump({'identity': self.identity, 'cookieName': self.cookie_name, 'policy': self.policy, 'sessions': self.sessions, 'failures': self.failures, 'autoBlocks': self.auto_blocks}, stream)
-            temporary.replace(self.path)
-        finally:
-            temporary.unlink(missing_ok=True)
+        with session_file_lock(self.path):
+            current = self.path.read_bytes() if self.path.exists() else None
+            if current != self._loaded:
+                raise ValueError('设备授权已变化，请刷新后重试')
+            temporary = self.path.with_name(self.path.name + '.' + secrets.token_hex(8) + '.tmp')
+            try:
+                with os.fdopen(os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600), 'w', encoding='utf-8') as stream:
+                    json.dump({'identity': self.identity, 'cookieName': self.cookie_name, 'policy': self.policy, 'sessions': self.sessions, 'failures': self.failures, 'autoBlocks': self.auto_blocks}, stream)
+                temporary.replace(self.path)
+                self._loaded = self.path.read_bytes()
+            finally:
+                temporary.unlink(missing_ok=True)
+
+    @classmethod
+    def preserve_trusted_on_password_change(cls, old_config, new_config, data_dir):
+        """Move only current native-client sessions to the new credential identity.
+
+        Call while the gateway is stopped, before publishing the new config. A
+        crash between these writes fails closed under either credential set.
+        """
+        old = cls(old_config, data_dir)
+        changed = cls(new_config)
+        if old.path and old.path.exists():
+            # persist rejects a stale snapshot under the shared file lock.
+            saved = json.loads(old._loaded)
+            if saved['identity'] != old.identity:
+                raise ValueError('设备授权已变化，请刷新后重试')
+            old.sessions = {key: session for key, session in saved['sessions'].items()
+                            if cls.valid(session) and session.get('trustedDevice') is True
+                            and cls.mobile_client(session.get('userAgent', ''))}
+            old.identity = changed.identity
+            old.persist()
 
     def permitted(self, address):
         with self.lock:

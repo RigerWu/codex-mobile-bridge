@@ -11,6 +11,8 @@ import time
 from contextlib import contextmanager
 from pathlib import Path
 
+from bridge.features.accounts.draft_identity import draft_identity
+
 
 @contextmanager
 def session_file_lock(path):
@@ -130,6 +132,12 @@ class Auth:
                 self.persist()
         elif self.path:
             self.persist()
+
+    @property
+    def draft_identity(self):
+        # The persisted cookie namespace follows the data directory. Neither
+        # renewable session tokens nor password hashes belong in a draft key.
+        return draft_identity('gateway', self.cookie_name, self.config.get('username') or '')
 
     @staticmethod
     def valid(session):

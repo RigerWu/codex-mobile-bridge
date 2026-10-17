@@ -35,6 +35,7 @@ from bridge.features.sessions.timeline import Timeline
 from bridge.features.sessions.tool_images import TOOL_IMAGE_CACHE, public_turns
 from bridge.features.accounts.account import Account
 from bridge.features.accounts.accounts import Accounts, operation
+from bridge.features.accounts.draft_identity import codex_account_identity, draft_identity
 from bridge.features.accounts.cli_access import CliAccess
 from bridge.features.sessions.goal import GoalRPC, GoalError, GoalUnavailable, GoalUnsupported, goal_activation, goal_identity, normalize_goal_result, normalize_ui_locale, goal_command_fingerprint, goal_state_confirms_command, native_goal_absent, normalize_goal, plan_goal_command, read_native_goal
 from bridge.features.workspace.uploads import Uploads, image_type
@@ -152,6 +153,8 @@ class Bridge:
     def __init__(self, codex_home, data_dir, host="local", alias=None, ipc_path=None, codex_bin=None, goal_rpc=None, owner_goal=None, cli_sessions=None):
         self.host = host
         self.codex_home = Path(codex_home)
+        self._draft_remote_lock = threading.Lock()
+        self._draft_remote_cache = {}
         self.data_dir = Path(data_dir)
         self.hosts = AppHosts(codex_home)
         self.remote_bridges = {}
@@ -1599,6 +1602,48 @@ class Bridge:
         target.chmod(0o600)
         target.replace(self.ledger_path)
 
+    def _draft_account_identity(self, view):
+        provider = view.get('provider')
+        if not isinstance(provider, str) or not provider:
+            return ''
+        if self.host != 'local':
+            alias = self.cli_sessions.alias
+            if not alias:
+                return ''
+            home = str(self.cli_sessions.remote_home) if self.cli_sessions.remote_home else None
+            key = (self.host, alias, home, provider)
+            with self._draft_remote_lock:
+                cached = self._draft_remote_cache.get(key)
+                if cached and time.monotonic() - cached[0] < 30:
+                    return cached[1]
+            source = source_text('features/accounts/draft_identity.py')
+            source += '\nimport json, os\nfrom pathlib import Path\n'
+            source += 'request = ' + payload({'home': home, 'provider': provider}) + '\n'
+            source += 'home = request["home"] or os.environ.get("CODEX_HOME") or str(Path.home()/".codex")\n'
+            source += 'print(json.dumps({"identity": codex_account_identity(home, request["provider"])}))\n'
+            try:
+                owner = ssh_read(alias, source, timeout=12).get('identity')
+            except (OSError, ValueError, RemoteUnavailable):
+                owner = ''
+            identity = draft_identity('codex', self.host, provider, owner) if owner else ''
+            with self._draft_remote_lock:
+                self._draft_remote_cache[key] = (time.monotonic(), identity)
+            return identity
+        try:
+            if provider in ('openai', 'bridge_api') and self.accounts:
+                with self.accounts.lock:
+                    if self.accounts.active_matches():
+                        row = self.accounts.row(self.accounts.index['activeId'])
+                        if row['kind'] == 'api':
+                            key = json.loads((self.accounts.directory(row['id'])/'api.json').read_text(encoding='utf-8')).get('key')
+                            return draft_identity('codex', self.host, provider, row['id'], row['baseUrl'], key) if key else ''
+                        return draft_identity('codex', self.host, provider, 'chatgpt', row['id'])
+            owner = codex_account_identity(self.codex_home, provider)
+            return draft_identity('codex', self.host, provider, owner) if owner else ''
+        except (OSError, ValueError, KeyError, TypeError, AttributeError):
+            pass
+        return ''
+
     def view(self, thread_id, attach=True, background=False, force=False):
         session = self.session(thread_id, attach=attach, background=background, force=force)
         goal_available = self._refresh_session_goal(session)
@@ -1610,6 +1655,7 @@ class Bridge:
             with session.condition:
                 view["permissionMode"] = linux_permissions.current_mode(session.state)
         view["host"] = self.host
+        view['draftAccountIdentity'] = self._draft_account_identity(view)
         view["hostLabel"] = "此电脑" if self.host == "local" else self.hosts.hosts().get(self.host, {}).get("displayName", self.host)
         if self.host == 'local' and session.origin != 'cli':
             cwd = view.get('cwd')

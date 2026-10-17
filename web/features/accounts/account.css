@@ -39,13 +39,13 @@
 .accounts-panel .account-bucket.is-current{border-color:var(--accent,#4664ed);background:var(--soft,#f3f6ff)}
 .accounts-actions{display:flex;align-items:center;gap:6px;flex-wrap:wrap;border-top:1px solid var(--line,#dfe3eb);padding-top:10px;margin-top:12px}
 .accounts-panel .accounts-actions button{font-size:12px;margin:0}.accounts-actions .accounts-models{flex-basis:100%}
-.accounts-usage-controls{display:flex;flex-direction:column;align-items:flex-end;gap:3px;min-width:0;max-width:100%;margin-left:auto}
+.accounts-card-footer{display:flex;align-items:center;gap:12px;margin-top:12px}.accounts-usage-controls{display:flex;align-items:center;gap:10px;min-width:0;max-width:100%;margin-left:auto}
 .accounts-panel .accounts-usage-controls .accounts-usage-refresh{display:grid;place-items:center;flex:none;width:32px;height:32px;margin:0;padding:0;border:0;border-radius:8px;cursor:pointer}
 .accounts-usage-refresh svg{display:block;width:18px;height:18px}
 .accounts-usage-refresh:hover{background:var(--line,#e3e6df)}
 .accounts-usage-refresh:disabled{opacity:.4;cursor:default}
 .accounts-panel .accounts-reset{color:var(--accent,#4664ed);border-color:var(--accent,#4664ed);font-size:12px}
-.accounts-identity.accounts-official{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,40%);gap:8px 12px}
+.accounts-identity.accounts-official{display:grid;grid-template-columns:minmax(0,1fr);gap:8px 12px}
 .accounts-official .accounts-name{min-width:0;overflow-wrap:anywhere}
 .accounts-official .accounts-usage{display:grid;grid-column:1/-1;grid-template-columns:minmax(0,1fr);align-items:start;gap:12px;min-width:0;margin:12px 0 0}
 .accounts-official .accounts-window{grid-template-columns:minmax(0,1fr) auto;min-width:0;max-width:none;width:100%}
@@ -81,7 +81,7 @@
 @media(pointer:coarse){.account-reset-dialog .account-card>button,.account-reset-dialog .account-heading button{min-height:44px}}
 
 .accounts-panel .accounts-import-name{max-width:320px}
-.accounts-panel .accounts-client-card .accounts-identity{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,40%);gap:8px 12px}
+.accounts-panel .accounts-client-card .accounts-identity{display:grid;grid-template-columns:minmax(0,1fr);gap:8px 12px}
 .accounts-client-card .accounts-name{min-width:0;overflow-wrap:anywhere}
 .accounts-panel .accounts-client-card .accounts-name>p{margin:2px 0 0}
 .accounts-client-card .accounts-usage-controls{align-self:start}

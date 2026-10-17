@@ -77,10 +77,10 @@ class AccountsPanel {
     this.url.input.value=row.baseUrl;this.model.input.value=row.model||'';this.url.input.disabled=true;this.key.input.disabled=true;this.model.input.focus();
   }
   async perform(payload){
-    if(this.busy)return false;clearTimeout(this.timer);this.generation++;this.loading=false;this.busy=true;this.operationError=false;this.error.textContent='';this.render();const generation=this.generation;
+    if(this.busy)return false;const focused=[...this.modelBoxes.values()].find(box=>box.refresh===document.activeElement);clearTimeout(this.timer);this.generation++;this.loading=false;this.busy=true;this.operationError=false;this.error.textContent='';this.render();const generation=this.generation;
     try{const value=await this.request(payload);if(generation===this.generation){this.accept(value);return true;}return false;}
     catch(error){if(generation===this.generation){this.operationError=true;this.error.textContent=this.text(String(error.message).replace(/^Error invoking remote method '[^']+': (?:Error: )?/,''));}return false;}
-    finally{if(generation===this.generation){this.busy=false;this.render();this.schedule();}}
+    finally{if(generation===this.generation){this.busy=false;this.render();this.schedule();if(focused?.refresh.isConnected&&(document.activeElement===document.body||document.activeElement===focused.refresh)&&!focused.touching)focused.refresh.focus({preventScroll:true});}}
   }
   async refresh(){
     clearTimeout(this.timer);if(this.loading||this.busy)return;this.loading=true;const generation=this.generation;
@@ -182,7 +182,7 @@ class AccountsPanel {
     {const show=this.button(opened?'收起模型':'查看可用模型',()=>{if(opened){this.expandedModels.delete(row.id);this.render();}else{this.expandedModels.add(row.id);this.perform({action:'details',id:row.id,section:'models'});}});show.disabled=this.busy;footer.append(show);}
     if(opened){const identity=row.accountKey||JSON.stringify([row.kind,row.baseUrl,row.model,row.email]);let box=this.modelBoxes.get(row.id);
       if(box?.identity!==identity){this.modelBoxes.delete(row.id);box=null;}
-      if(!box){box=this.node('div',undefined,'accounts-models');box.identity=identity;box.controls=this.node('div',undefined,'accounts-model-controls');box.refresh=this.button('刷新模型',()=>this.perform({action:'details',id:row.id,section:'models',refresh:true}));box.updated=this.node('small',undefined,'account-muted');box.content=this.node('div');box.controls.append(box.refresh,box.updated);box.append(box.controls,box.content);this.modelBoxes.set(row.id,box);}
+      if(!box){box=this.node('div',undefined,'accounts-models');box.identity=identity;box.ontouchstart=()=>{box.touching=true;};box.ontouchend=box.ontouchcancel=()=>{box.touching=false;};box.controls=this.node('div',undefined,'accounts-model-controls');box.refresh=this.button('刷新模型',()=>this.perform({action:'details',id:row.id,section:'models',refresh:true}));box.updated=this.node('small',undefined,'account-muted');box.content=this.node('div');box.controls.append(box.refresh,box.updated);box.append(box.controls,box.content);this.modelBoxes.set(row.id,box);}
       box.refresh.disabled=this.busy||models?.status==='loading';
       const updated=models?.cache?.updatedAt;box.updated.hidden=!(Number.isFinite(updated)&&updated>0);box.updated.textContent=box.updated.hidden?'':this.text('更新于：')+this.shortTime(updated);
       const key=JSON.stringify([models?.status,models?.error,models?.models,BridgeI18n.locale()]);

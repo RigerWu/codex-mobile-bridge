@@ -2,7 +2,7 @@
 const test=require('node:test'),assert=require('node:assert/strict'),fs=require('node:fs'),vm=require('node:vm'),path=require('node:path');
 function fixture(desktop=false){
   function node(tag){return {tag,textContent:'',value:'',hidden:false,disabled:false,scrollTop:0,children:[],attributes:{},classList:{add(){}},
-    append(...children){for(const child of children){child.remove();child.parent=this;child.parentNode=this;this.children.push(child);}},insertBefore(child,before){child.remove();const index=before?this.children.indexOf(before):-1;child.parent=this;child.parentNode=this;this.children.splice(index<0?this.children.length:index,0,child);},replaceChildren(...children){for(const child of [...this.children])child.remove();this.append(...children);if(this.className==='accounts-models')this.scrollTop=0;},setAttribute(k,v){this.attributes[k]=v;},closest(){return null;},reset(){},focus(){},showModal(){this.open=true;},close(){this.open=false;this.onclose?.();},remove(){if(this.parent){this.parent.children=this.parent.children.filter(n=>n!==this);this.parent=null;this.parentNode=null;}}};}
+    append(...children){for(const child of children){child.remove();child.parent=this;child.parentNode=this;this.children.push(child);}},insertBefore(child,before){child.remove();const index=before?this.children.indexOf(before):-1;child.parent=this;child.parentNode=this;this.children.splice(index<0?this.children.length:index,0,child);},replaceChildren(...children){for(const child of [...this.children])child.remove();this.append(...children);if(this.className==='accounts-models')this.scrollTop=0;},setAttribute(k,v){this.attributes[k]=v;},closest(){return null;},reset(){},get isConnected(){for(let parent=this;parent;parent=parent.parent)if(parent===root)return true;return false;},focus(){context.document.activeElement=this;},showModal(){this.open=true;},close(){this.open=false;this.onclose?.();},remove(){if(this.parent){this.parent.children=this.parent.children.filter(n=>n!==this);this.parent=null;this.parentNode=null;}}};}
   const root=node('div'),requests=[],prompts=[];let confirmed=true,value={accounts:[{id:'a',name:'API <script>',kind:'api',baseUrl:'https://example.test/v1',model:'model'}],activeId:null,switch:{phase:'idle'},canSwitch:true};
   let request=async()=>structuredClone(value),read=async()=>structuredClone(value),readCalls=0,timers=[],now=Date.now();
   class Clock extends Date{static now(){return now;}}
@@ -11,7 +11,7 @@ function fixture(desktop=false){
   for(const f of ['web/shared/i18n.js','web/features/accounts/account.js','web/features/accounts/accounts.js'])vm.runInContext(fs.readFileSync(path.join(__dirname,'..',f),'utf8'),context);
   const Class=vm.runInContext('AccountsPanel',context),panel=new Class({root,desktop,read:()=>{readCalls++;return read();},request:v=>{requests.push(v);return request(v);}});
   const all=(n=root)=>[n,...n.children.flatMap(all)];
-  return {panel,root,requests,prompts,all,timers,readCalls:()=>readCalls,now:()=>now,advance:ms=>now+=ms,hidden:value=>context.document.hidden=value,noRandomUUID:()=>{context.crypto={getRandomValues:bytes=>require("node:crypto").randomFillSync(bytes)};},text:()=>all().map(n=>n.textContent).join('\n'),setValue:v=>value=v,value:()=>value,setRequest:v=>request=v,setRead:v=>read=v,confirm:v=>confirmed=v,
+  return {panel,root,requests,prompts,all,timers,readCalls:()=>readCalls,focus:node=>context.document.activeElement=node,blur:()=>context.document.activeElement=context.document.body,active:()=>context.document.activeElement,now:()=>now,advance:ms=>now+=ms,hidden:value=>context.document.hidden=value,noRandomUUID:()=>{context.crypto={getRandomValues:bytes=>require("node:crypto").randomFillSync(bytes)};},text:()=>all().map(n=>n.textContent).join('\n'),setValue:v=>value=v,value:()=>value,setRequest:v=>request=v,setRead:v=>read=v,confirm:v=>confirmed=v,
     language:()=>{vm.runInContext("BridgeI18n.setLanguage('en')",context);panel.render();}};
 }
 test('native login card survives an empty saved list without enrollment or switching actions',async()=>{
@@ -330,6 +330,7 @@ test('Codex model scroller survives status reads and model timestamp changes',as
  const box=ui.all().find(node=>node.className==='accounts-models'),card=box.parent;box.scrollTop=74;
  ui.setValue({...ui.value(),switch:{phase:'verifying'},accounts:[{...row,details:{models:{...row.details.models,cache:{updatedAt:2000}}}}]});await ui.panel.refresh();
  assert.equal(ui.all().find(node=>node.className==='accounts-models'),box);assert.equal(box.parent,card);assert.equal(box.scrollTop,74);assert.match(ui.text(),/model-b/);
+ let finish;ui.setRequest(()=>new Promise(resolve=>finish=resolve));ui.focus(box.refresh);const pending=box.refresh.onclick();ui.blur();finish(ui.value());await pending;assert.equal(ui.active(),box.refresh);
  ui.setValue({...ui.value(),accounts:[{...row,accountKey:'new-profile'}],switch:{phase:'idle'}});await ui.panel.refresh();
  assert.notEqual(ui.all().find(node=>node.className==='accounts-models'),box);
 });

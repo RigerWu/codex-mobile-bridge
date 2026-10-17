@@ -246,8 +246,9 @@ class DesktopSessions:
                         row = next((item for item in access.index['claude'] if item['id'] == identifier), None)
                     if (row and row['kind'] == 'api' and
                             profile['origin'].startswith(row['originBase']+':')):
-                        return draft_identity('claude', 'local-cli', row['id'])
-                owner = claude_draft_account_identity(profile['directory'])
+                        key = json.loads(Path(row['secretPath']).read_text(encoding='utf-8')).get('key')
+                        return draft_identity('claude', 'local-cli', row['id'], key) if key else ''
+                owner = claude_draft_account_identity(profile['directory'], local.get('cwd'))
                 if owner:
                     return draft_identity('claude', 'local-cli', owner)
                 return ''
@@ -257,11 +258,11 @@ class DesktopSessions:
             with store.lock:
                 kind, fingerprint, gateway = store._current()
                 if kind == 'api' and gateway:
-                    owner = ('api', gateway['id'])
+                    owner = ('api', gateway['id'], fingerprint)
                 else:
                     row = next((item for item in store._index()['accounts']
                                 if item['kind'] == kind and item.get('fingerprint') == fingerprint), None)
-                    owner = ('saved', row['id']) if row else None
+                    owner = ('saved', row['id'], fingerprint) if row else ('current', fingerprint)
             return draft_identity('claude', 'desktop', *owner) if owner else ''
 
         session = detail.get('session') or {}
@@ -273,13 +274,16 @@ class DesktopSessions:
         store = self._account_store('deepseek')
         with store.lock:
             snapshot = store.public()
+            from bridge.clients.deepseek.accounts import _read, _document, _credential, _fingerprint
+            current = _credential(_document(_read(store.path)), kind)
+            fingerprint = _fingerprint(kind, current) if current is not None else None
         active = [row for row in snapshot['accounts']
                   if row['id'] in snapshot['activeIds'] and row['kind'] == kind]
         if len(active) != 1:
             return ''
         row = active[0]
         owner = row.get('accountId') if kind == 'official' else None
-        owner = owner or row['id'] if row.get('saved') else owner
+        owner = owner or fingerprint
         return draft_identity('deepseek', 'desktop', kind, owner) if owner else ''
 
     def _model_live(self, provider, sid):

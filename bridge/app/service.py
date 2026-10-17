@@ -1630,11 +1630,14 @@ class Bridge:
                 self._draft_remote_cache[key] = (time.monotonic(), identity)
             return identity
         try:
-            if provider == 'openai' and self.accounts:
+            if provider in ('openai', 'bridge_api') and self.accounts:
                 with self.accounts.lock:
                     if self.accounts.active_matches():
                         row = self.accounts.row(self.accounts.index['activeId'])
-                        return draft_identity('codex', self.host, provider, row['kind'], row['id'])
+                        if row['kind'] == 'api':
+                            key = json.loads((self.accounts.directory(row['id'])/'api.json').read_text(encoding='utf-8')).get('key')
+                            return draft_identity('codex', self.host, provider, row['id'], row['baseUrl'], key) if key else ''
+                        return draft_identity('codex', self.host, provider, 'chatgpt', row['id'])
             owner = codex_account_identity(self.codex_home, provider)
             return draft_identity('codex', self.host, provider, owner) if owner else ''
         except (OSError, ValueError, KeyError, TypeError, AttributeError):

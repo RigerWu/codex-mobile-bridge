@@ -2,7 +2,6 @@
 
 import hashlib
 import json
-import os
 from pathlib import Path
 
 
@@ -11,9 +10,10 @@ def draft_identity(*parts):
                                      separators=(',', ':')).encode('utf-8')).hexdigest()
 
 
-def codex_account_identity(home, provider):
+def codex_account_identity(home, provider, environment=None):
     """Read the selected home without contacting or activating a Codex runtime."""
     home = Path(home)
+    environment = environment or {}
     try:
         auth = json.loads((home/'auth.json').read_text(encoding='utf-8'))
     except (OSError, ValueError, TypeError):
@@ -22,8 +22,10 @@ def codex_account_identity(home, provider):
         account_id = (auth.get('tokens') or {}).get('account_id')
         if auth.get('auth_mode') != 'apikey' and isinstance(account_id, str) and account_id:
             return draft_identity('chatgpt', account_id)
-        key = auth.get('OPENAI_API_KEY') or os.environ.get('OPENAI_API_KEY')
-        endpoint = os.environ.get('OPENAI_BASE_URL') or 'https://api.openai.com/v1'
+        if auth.get('auth_mode') == 'chatgpt':
+            return ''
+        key = auth.get('OPENAI_API_KEY') or environment.get('OPENAI_API_KEY')
+        endpoint = environment.get('OPENAI_BASE_URL') or 'https://api.openai.com/v1'
         return draft_identity('api', provider, endpoint, key) if isinstance(key, str) and key else ''
     try:
         try:
@@ -34,7 +36,7 @@ def codex_account_identity(home, provider):
         profile = (config.get('profiles') or {}).get(config.get('profile')) or {}
         effective = {**config, **profile}
         definition = (effective.get('model_providers') or {}).get(provider) or {}
-        key = (os.environ.get(definition['env_key']) if definition.get('env_key')
+        key = (environment.get(definition['env_key']) if definition.get('env_key')
                else definition.get('experimental_bearer_token'))
         endpoint = definition.get('base_url')
         if isinstance(key, str) and key and isinstance(endpoint, str) and endpoint:

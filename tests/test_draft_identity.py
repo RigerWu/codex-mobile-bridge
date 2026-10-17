@@ -11,6 +11,7 @@ from unittest.mock import patch
 from bridge.app.service import Bridge
 from bridge.clients.manager import DesktopSessions
 from bridge.clients.claude.remote_worker import draft_account_identity as claude_account_identity
+from bridge.features.accounts.draft_identity import codex_account_identity
 from bridge.features.auth.auth import Auth
 
 
@@ -63,6 +64,36 @@ class DraftIdentityTests(unittest.TestCase):
             (home/'auth.json').write_text(json.dumps({'OPENAI_API_KEY': 'key-two'}))
             self.assertNotEqual(first, bridge._draft_account_identity({'provider': 'openai'}))
 
+    def test_codex_never_uses_gateway_ambient_key_for_joined_home(self):
+        with tempfile.TemporaryDirectory() as root, patch.dict('os.environ', {'OPENAI_API_KEY': 'wrong-shell-key'}):
+            self.assertEqual(codex_account_identity(root, 'openai'), '')
+            (Path(root)/'auth.json').write_text(json.dumps({'auth_mode': 'apikey',
+                                                            'OPENAI_API_KEY': 'actual-home-key'}))
+            self.assertEqual(codex_account_identity(root, 'openai'),
+                             codex_account_identity(root, 'openai', {'OPENAI_API_KEY': 'wrong-shell-key'}))
+
+    def test_saved_codex_api_provider_uses_saved_key_and_endpoint(self):
+        with tempfile.TemporaryDirectory() as root:
+            home = Path(root)
+            saved = home/'saved'
+            saved.mkdir()
+            secret = saved/'api.json'
+            secret.write_text(json.dumps({'key': 'first-key'}))
+            row = {'id': 'saved-id', 'kind': 'api', 'baseUrl': 'https://api.example/v1'}
+            accounts = SimpleNamespace(lock=threading.RLock(), active_matches=lambda: True,
+                index={'activeId': 'saved-id'}, row=lambda identifier: row,
+                directory=lambda identifier: saved)
+            bridge = Bridge.__new__(Bridge)
+            bridge.host = 'local'
+            bridge.codex_home = home
+            bridge.accounts = accounts
+            first = bridge._draft_account_identity({'provider': 'bridge_api', 'model': 'model-a'})
+            self.assertEqual(first, bridge._draft_account_identity({'provider': 'bridge_api', 'model': 'model-b'}))
+            secret.write_text(json.dumps({'key': 'second-key'}))
+            self.assertNotEqual(first, bridge._draft_account_identity({'provider': 'bridge_api'}))
+            row['baseUrl'] = 'https://other.example/v1'
+            self.assertNotEqual(first, bridge._draft_account_identity({'provider': 'bridge_api'}))
+
     def test_codex_ssh_owner_comes_from_selected_remote(self):
         bridge = Bridge.__new__(Bridge)
         bridge.host = 'remote-one'
@@ -93,23 +124,74 @@ class DraftIdentityTests(unittest.TestCase):
             (directory/'.claude.json').write_text(json.dumps(metadata))
             self.assertNotEqual(claude_account_identity(directory), first)
 
+    def test_claude_selected_project_env_overrides_ambient_and_user_settings(self):
+        with tempfile.TemporaryDirectory() as root:
+            directory = Path(root)/'.claude'
+            directory.mkdir()
+            cwd = Path(root)/'project'
+            (cwd/'.claude').mkdir(parents=True)
+            (directory/'settings.json').write_text(json.dumps({'env': {'ANTHROPIC_API_KEY': 'user-key'}}))
+            (cwd/'.claude/settings.json').write_text(json.dumps({'env': {'ANTHROPIC_API_KEY': 'project-key'}}))
+            first = claude_account_identity(directory, cwd, {'ANTHROPIC_API_KEY': 'ambient-key'})
+            self.assertEqual(first, claude_account_identity(directory, cwd, {'ANTHROPIC_API_KEY': 'another-ambient-key'}))
+            (cwd/'.claude/settings.json').write_text(json.dumps({'env': {'ANTHROPIC_API_KEY': 'second-project-key'}}))
+            self.assertNotEqual(first, claude_account_identity(directory, cwd))
+
     def test_desktop_uses_verified_deepseek_account_and_fails_closed(self):
+        temp = tempfile.TemporaryDirectory()
+        self.addCleanup(temp.cleanup)
+        credential = Path(temp.name)/'deepseek.json'
+        credential.write_text(json.dumps({'version': 1, 'refs': {'DEEPSEEK_API_KEY': 'api-key'}, 'records': {}}))
+        credential.chmod(0o600)
         manager = DesktopSessions.__new__(DesktopSessions)
         manager.adapters = {'deepseek': SimpleNamespace()}
         snapshot = {'accounts': [{'id': 'saved-api', 'kind': 'api', 'saved': True}],
                     'activeIds': ['saved-api']}
-        manager._account_store = lambda provider: SimpleNamespace(lock=threading.RLock(), public=lambda: snapshot)
+        manager._account_store = lambda provider: SimpleNamespace(lock=threading.RLock(), public=lambda: snapshot,
+                                                                  path=credential)
         detail = {'session': {'model': 'deepseek-official/model-a'}}
         first = manager._draft_account_identity('deepseek', 'session', detail)
         self.assertEqual(len(first), 64)
         detail['session']['model'] = 'deepseek-official/model-b'
         self.assertEqual(manager._draft_account_identity('deepseek', 'session', detail), first)
+        credential.write_text(json.dumps({'version': 1, 'refs': {'DEEPSEEK_API_KEY': 'new-key'}, 'records': {}}))
+        self.assertNotEqual(manager._draft_account_identity('deepseek', 'session', detail), first)
         snapshot['activeIds'] = []
         self.assertEqual(manager._draft_account_identity('deepseek', 'session', detail), '')
         snapshot['activeIds'] = ['saved-api']
         self.assertEqual(manager._draft_account_identity('deepseek', 'session', {'session': {'model': 'other/model'}}), '')
 
+    def test_unsaved_deepseek_official_uses_current_fingerprint(self):
+        temp = tempfile.TemporaryDirectory()
+        self.addCleanup(temp.cleanup)
+        credential = Path(temp.name)/'deepseek.json'
+        def set_grant(token):
+            credential.write_text(json.dumps({'version': 1, 'refs': {}, 'records': {
+                'deepseek-account-platform/default': {'kind': 'grant', 'payload': {
+                    'version': 1, 'issuer': 'https://platform.deepseek.com', 'token': token}}}}))
+            credential.chmod(0o600)
+        set_grant('token-one')
+        manager = DesktopSessions.__new__(DesktopSessions)
+        manager.adapters = {'deepseek': SimpleNamespace()}
+        row = {'id': 'current-official', 'kind': 'official', 'saved': False}
+        snapshot = {'accounts': [row], 'activeIds': ['current-official']}
+        manager._account_store = lambda provider: SimpleNamespace(lock=threading.RLock(), public=lambda: snapshot,
+                                                                  path=credential)
+        detail = {'session': {'model': 'deepseek-account/model'}}
+        first = manager._draft_account_identity('deepseek', 'session', detail)
+        self.assertEqual(len(first), 64)
+        set_grant('token-two')
+        self.assertNotEqual(manager._draft_account_identity('deepseek', 'session', detail), first)
+        row['accountId'] = 'known-account'
+        stable = manager._draft_account_identity('deepseek', 'session', detail)
+        set_grant('token-three')
+        self.assertEqual(manager._draft_account_identity('deepseek', 'session', detail), stable)
+
     def test_claude_cli_requires_matching_managed_profile(self):
+        temp = tempfile.TemporaryDirectory()
+        self.addCleanup(temp.cleanup)
+        credential = Path(temp.name)/'api.json'
+        credential.write_text(json.dumps({'key': 'api-key'}))
         manager = DesktopSessions.__new__(DesktopSessions)
         profile = {'origin': 'gateway:saved-api:/profile:settings-a', 'directory': '/profile'}
         cli = SimpleNamespace(lock=threading.RLock(), index={'session': {'origin': profile['origin']}},
@@ -117,18 +199,35 @@ class DraftIdentityTests(unittest.TestCase):
         remote = SimpleNamespace(lock=threading.RLock(), index={})
         manager.adapters = {'claude': SimpleNamespace(cli=cli, remote_cli=remote, index={})}
         access = SimpleNamespace(lock=threading.RLock(), index={'activeClaude': 'saved-api',
-            'claude': [{'id': 'saved-api', 'kind': 'api', 'originBase': 'gateway:saved-api:/profile'}]})
+            'claude': [{'id': 'saved-api', 'kind': 'api', 'originBase': 'gateway:saved-api:/profile',
+                        'secretPath': str(credential)}]})
         manager.bridge = SimpleNamespace(cli_access=access)
         first = manager._draft_account_identity('claude', 'session', {'session': {}})
         self.assertEqual(len(first), 64)
         profile['origin'] = 'gateway:saved-api:/profile:settings-b'
         cli.index['session']['origin'] = profile['origin']
         self.assertEqual(manager._draft_account_identity('claude', 'session', {'session': {}}), first)
+        credential.write_text(json.dumps({'key': 'other-account-key'}))
+        self.assertNotEqual(manager._draft_account_identity('claude', 'session', {'session': {}}), first)
         remote.index['session'] = {'host': 'remote'}
         self.assertEqual(manager._draft_account_identity('claude', 'session', {'session': {}}), '')
         remote.index.clear()
         access.index['activeClaude'] = 'different'
         self.assertEqual(manager._draft_account_identity('claude', 'session', {'session': {}}), '')
+
+    def test_unsaved_claude_desktop_uses_current_fingerprint(self):
+        manager = DesktopSessions.__new__(DesktopSessions)
+        cli = SimpleNamespace(lock=threading.RLock(), index={})
+        remote = SimpleNamespace(lock=threading.RLock(), index={})
+        manager.adapters = {'claude': SimpleNamespace(cli=cli, remote_cli=remote,
+                                                     index={'session': {'backend': 'desktop'}})}
+        current = ['official', 'token-fingerprint-one', None]
+        manager._account_store = lambda provider: SimpleNamespace(lock=threading.RLock(),
+            _current=lambda: current, _index=lambda: {'accounts': []})
+        first = manager._draft_account_identity('claude', 'session', {'session': {}})
+        self.assertEqual(len(first), 64)
+        current[1] = 'token-fingerprint-two'
+        self.assertNotEqual(manager._draft_account_identity('claude', 'session', {'session': {}}), first)
 
 
 if __name__ == '__main__':

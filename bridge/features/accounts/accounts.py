@@ -40,7 +40,18 @@ def private_bytes(path, content):
             stream.write(content)
             stream.flush()
             os.fsync(stream.fileno())
-        os.replace(name, path)
+        deadline = time.monotonic() + 2 if os.name == 'nt' else 0
+        while True:
+            try:
+                os.replace(name, path)
+                break
+            except PermissionError as exc:
+                if os.name != 'nt' or getattr(exc, 'winerror', None) not in (5, 32, 33):
+                    raise
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    raise
+                time.sleep(min(.05, remaining))
     finally:
         Path(name).unlink(missing_ok=True)
 

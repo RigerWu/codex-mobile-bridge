@@ -12,7 +12,6 @@
 | SSH CLI | 本轮在实际 Linux SSH 执行端及 Mac/Windows 原生 CLI 上，以隔离配置和回环上游验证模型查询、原执行环境、缓存及身份隔离。服务器自身网络仍决定真实上游可达性；未为 88server 添加代理 |
 | v2.1.0 旧数据 | 使用标签 v2.1.0 的认证和配对实现生成隔离数据；新实现读取后，配置与桌面偏好字节、Cookie 命名空间、可信手机会话、中继身份及绑定证明均保留 |
 | 真实旧版桌面覆盖升级 | 使用官方 v2.1.0 macOS arm64 App 与原生 CI 生成的 2.1.1 ZIP，在隔离目录完成实际替换；注入替换失败后恢复旧 App。两轮均逐字节保留网关、桌面、通知和订阅配置，原扫码可信手机 Cookie 仍通过认证。未替换日常 App 或数据 |
-
 | 跨平台完整 CI | [候选精确提交测试](https://github.com/try2love/codex-mobile-bridge/actions/runs/39105761941)全部通过：Windows / Ubuntu Python 3.9、3.13，macOS Python 3.13，以及前端、更新器与移动端检查 |
 | macOS arm64 / Intel x64 | [原生打包工作流](https://github.com/try2love/codex-mobile-bridge/actions/runs/39105759061)通过 DMG/ZIP、签名完整性、App 启动、鉴权、通知、配对及真实更新控制器检查；更新成功与失败回滚均保留配置和原可信手机会话 |
 | Windows x64 | 同一原生工作流通过 NSIS/ZIP、安装后 GUI、二维码、连续终端、网关鉴权、HTTPS、配对、通知和更新控制器检查；更新与失败恢复保留配置和原可信手机会话 |

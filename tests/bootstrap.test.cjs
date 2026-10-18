@@ -22,7 +22,7 @@ async function fixture({missing='',auth='anonymous',hash='',language='zh',pairPe
   const context=vm.createContext({window,location,history:{replaceState(_a,_b,url){current=new URL(url,current);}},localStorage:storage,sessionStorage:storage,navigator:{userAgent:'fixture'},
     document:{documentElement:{},getElementById:id=>nodes.get(id),addEventListener(){},dispatchEvent(){},querySelectorAll(){return [];},querySelector(){return {classList:{toggle(){}}};},createElement:node},
     Event:class{},CustomEvent:class{},Option:function(text,value){return {...node('option'),textContent:text,value};},
-    Workbench:class{constructor(){this.current=null;this.panel={querySelector(){return null;}};this.backCalls=0;}get splitMode(){return false;}get isFileVisible(){return !!this.current&&this.current.active!=='chat';}back(){this.backCalls++;return workbenchBack.call(this);}directory(session,_tab,dir){session.directory=dir;}select(id){this.current.active=id;}rememberScroll(){}stopThumbnails(){}reset(){}relabel(){}},DesktopSessionsView:class{bindListCache(identity,host){this.snapshot=storage.getItem(`desktop-list-v1:${identity}:${host}:${cachedProvider}`);}previewCachedList(provider){if(provider!==cachedProvider||!this.snapshot)return false;const row=node('button');row.textContent=JSON.parse(this.snapshot).rows[0].title;row.disabled=true;row.dataset.provider=provider;nodes.get('app').append(row);navigation.push('preview');return true;}refresh(){}clear(){}},ClientNavigation:class{constructor(){this.provider=storage.getItem('bridge-client')||'codex';}paint(){navigation.push('paint');}refresh(){navigation.push('refresh');if(navigationPending)return new Promise(resolve=>{releaseNavigation=()=>{if(allDisabled)this.provider=null;resolve();};});if(allDisabled)this.provider=null;}async openChatLink(){navigation.push('open');}acknowledgeList(){}},
+    Workbench:class{constructor(){this.current=null;this.panel={querySelector(){return null;}};this.backCalls=0;this.locateCancels=0;}get splitMode(){return false;}get isFileVisible(){return !!this.current&&this.current.active!=='chat';}back(){this.backCalls++;return workbenchBack.call(this);}cancelLocate(){this.locateCancels++;}directory(session,_tab,dir){session.directory=dir;}select(id){this.current.active=id;}rememberScroll(){}stopThumbnails(){}reset(){}relabel(){}},DesktopSessionsView:class{bindListCache(identity,host){this.snapshot=storage.getItem(`desktop-list-v1:${identity}:${host}:${cachedProvider}`);}previewCachedList(provider){if(provider!==cachedProvider||!this.snapshot)return false;const row=node('button');row.textContent=JSON.parse(this.snapshot).rows[0].title;row.disabled=true;row.dataset.provider=provider;nodes.get('app').append(row);navigation.push('preview');return true;}refresh(){}clear(){}},ClientNavigation:class{constructor(){this.provider=storage.getItem('bridge-client')||'codex';}paint(){navigation.push('paint');}refresh(){navigation.push('refresh');if(navigationPending)return new Promise(resolve=>{releaseNavigation=()=>{if(allDisabled)this.provider=null;resolve();};});if(allDisabled)this.provider=null;}async openChatLink(){navigation.push('open');}acknowledgeList(){}},
     setTimeout(fn,delay){timers.set(++clock,{fn,delay});return clock;},clearTimeout(id){timers.delete(id);},setInterval(){},clearInterval(){},
     fetch:async(url,options={})=>{
       requests.push(url);if(options.method==='POST')writes.push({url,body:options.body});
@@ -199,22 +199,23 @@ test('the standalone app can reveal login without the optional bootstrap API',as
   const loaded=await fixture({missing:'bootstrap'});assert.equal(loaded.nodes.get('login').hidden,false);assert.equal(loaded.nodes.get('bootstrap-status').hidden,true);
 });
 
-test('Codex header Back walks file parents, chat, then list; native Back consumes one level',async()=>{
+test('Codex header Back returns to list; native Back walks file parents and chat',async()=>{
   const ui=await fixture({auth:'signed-in'}),app=ui.nodes.get('app'),back=ui.nodes.get('back'),workbench=ui.window.BridgeWorkbench;
   const session={active:'files',directory:'src/lib',files:[{id:'files'}]};workbench.current=session;app.classList.add('chat-open');
   const listRequests=()=>ui.requests.filter(url=>url.startsWith('/api/sessions?')).length;
   const initialLists=listRequests();
-  back.click();assert.equal(session.directory,'src');assert.equal(session.active,'files');assert.equal(listRequests(),initialLists);
-  back.click();assert.equal(session.directory,'');assert.equal(session.active,'files');assert.equal(listRequests(),initialLists);
-  back.click();assert.equal(session.active,'chat');assert.equal(app.classList.contains('chat-open'),true);assert.equal(listRequests(),initialLists);
-  back.click();assert.equal(app.classList.contains('chat-open'),false);assert.equal(listRequests(),initialLists+1);
+  back.click();assert.equal(session.directory,'src/lib');assert.equal(session.active,'files');
+  assert.equal(workbench.backCalls,0);assert.equal(workbench.locateCancels,1);
+  assert.equal(app.classList.contains('chat-open'),false);assert.equal(listRequests(),initialLists+1);
 
   session.directory='src/lib';session.active='files';app.classList.add('chat-open');
-  const beforeNative=workbench.backCalls;
   assert.equal(ui.window.BridgeNavigation.back(),true);
-  assert.equal(workbench.backCalls,beforeNative+1);assert.equal(session.directory,'src');assert.equal(listRequests(),initialLists+1);
-  session.directory='';session.active='chat';
-  const beforeList=workbench.backCalls;
+  assert.equal(workbench.backCalls,1);assert.equal(session.directory,'src');assert.equal(listRequests(),initialLists+1);
   assert.equal(ui.window.BridgeNavigation.back(),true);
-  assert.equal(workbench.backCalls,beforeList+2);assert.equal(app.classList.contains('chat-open'),false);assert.equal(listRequests(),initialLists+2);
+  assert.equal(workbench.backCalls,2);assert.equal(session.directory,'');assert.equal(session.active,'files');
+  assert.equal(ui.window.BridgeNavigation.back(),true);
+  assert.equal(workbench.backCalls,3);assert.equal(session.active,'chat');assert.equal(app.classList.contains('chat-open'),true);
+  assert.equal(ui.window.BridgeNavigation.back(),true);
+  assert.equal(workbench.backCalls,4);assert.equal(workbench.locateCancels,2);
+  assert.equal(app.classList.contains('chat-open'),false);assert.equal(listRequests(),initialLists+2);
 });

@@ -364,7 +364,9 @@ class Catalog:
                      for name, value in os.environ.items()
                      if name in ('CODEX_HOME', 'OPENAI_API_KEY', 'OPENAI_BASE_URL')
                      or name.endswith(('_API_KEY', '_AUTH_TOKEN', '_BEARER_TOKEN', '_BASE_URL'))}
-        return ModelStore.key('codex', str(self.home.resolve()), str(Path(cwd).resolve()), provider, files, variables)
+        # Do not reuse catalogs cached before desktop requests stopped borrowing
+        # gateway environment credentials.
+        return ModelStore.key('codex-desktop-v2', str(self.home.resolve()), str(Path(cwd).resolve()), provider, files, variables)
 
     def _start_model_refresh(self, cwd, provider, identity):
         if not self.allow_background_refresh:
@@ -588,7 +590,9 @@ class Catalog:
              'env_http_headers', 'auth', 'gateway_oauth', 'query_params', 'aws'))
 
     def read_models(self, request, cwd, provider=None, metadata_request=None, environment=None):
-        environment = os.environ if environment is None else environment
+        # Desktop catalog reads have no verified owner environment. Only the
+        # native CLI path supplies a verified environment explicitly.
+        environment = {} if environment is None else environment
         config = request('config/read', {'includeLayers': False, 'cwd': cwd}).get('config', {})
         profile = (config.get('profiles') or {}).get(config.get('profile')) or {}
         effective = {**config, **profile}

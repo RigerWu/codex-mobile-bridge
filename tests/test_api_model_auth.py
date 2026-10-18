@@ -31,10 +31,10 @@ class ApiModelAuthTests(unittest.TestCase):
         self.assertEqual(method, 'config/read')
         return {'config': self.config}
 
-    def read(self, payload):
+    def read(self, payload, environment=None):
         with patch('bridge.features.accounts.models.build_opener') as factory:
             factory.return_value.open.return_value = io.BytesIO(json.dumps(payload).encode())
-            result = self.reader.read_models(self.request, str(self.home))
+            result = self.reader.read_models(self.request, str(self.home), environment=environment)
             return result, factory.return_value.open
 
     def test_actor_auth_is_sent_and_upstream_efforts_survive_public_catalog(self):
@@ -56,8 +56,8 @@ class ApiModelAuthTests(unittest.TestCase):
 
     def test_static_and_env_headers_and_query_parameters_are_preserved(self):
         self.definition.update(env_http_headers={'X-tenant': 'CMB_TEST_TENANT'}, query_params={'api-version': 'fixture version'})
-        with patch.dict(os.environ, {'CMB_TEST_TENANT': 'fixture-tenant'}):
-            result, opened = self.read({'data': [{'id': 'api-model', 'supportedReasoningEfforts': [{'reasoningEffort': 'medium'}]}]})
+        result, opened = self.read({'data': [{'id': 'api-model', 'supportedReasoningEfforts': [{'reasoningEffort': 'medium'}]}]},
+                                   environment={'CMB_TEST_TENANT': 'fixture-tenant'})
         self.assertNotIn('modelError', result)
         request = opened.call_args.args[0]
         self.assertEqual(request.full_url, 'https://fixture.invalid/v1/models?api-version=fixture+version')
@@ -70,6 +70,29 @@ class ApiModelAuthTests(unittest.TestCase):
             result, opened = self.read({'data': [{'id': 'api-model'}]})
         opened.assert_not_called()
         self.assertIn('认证请求头', result['modelError'])
+
+    def test_gateway_environment_cannot_supply_desktop_header_or_key(self):
+        self.definition.pop('experimental_bearer_token')
+        for field, value in (('env_http_headers', {'X-key': 'CMB_DESKTOP_ONLY'}),
+                             ('env_key', 'CMB_DESKTOP_ONLY')):
+            with self.subTest(field=field):
+                self.definition.pop('env_http_headers', None)
+                self.definition.pop('env_key', None)
+                self.definition[field] = value
+                with patch.dict(os.environ, {'CMB_DESKTOP_ONLY': 'gateway-A'}):
+                    result, opened = self.read({'data': [{'id': 'api-model'}]})
+                opened.assert_not_called()
+                self.assertIn('modelError', result)
+                self.assertNotIn('gateway-A', json.dumps(result))
+
+    def test_explicit_verified_environment_uses_its_own_header(self):
+        self.definition.pop('experimental_bearer_token')
+        self.definition['env_http_headers'] = {'X-key': 'CMB_DESKTOP_ONLY'}
+        with patch.dict(os.environ, {'CMB_DESKTOP_ONLY': 'gateway-A'}):
+            result, opened = self.read({'data': [{'id': 'api-model'}]},
+                                       environment={'CMB_DESKTOP_ONLY': 'verified-B'})
+        self.assertNotIn('modelError', result)
+        self.assertEqual(opened.call_args.args[0].get_header('X-key'), 'verified-B')
 
     def test_header_only_auth_does_not_require_an_unrelated_openai_key(self):
         self.definition.pop('experimental_bearer_token')

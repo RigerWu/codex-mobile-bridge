@@ -286,8 +286,9 @@ class CliBridgeTests(CliBridgeFixture):
             self.assertEqual(session.desktop_owner_probe, None)
             self.bridge._refresh_async(session, force=True)
             deadline = time.monotonic() + 2
-            while not session.connected and time.monotonic() < deadline:
+            while session.connecting and time.monotonic() < deadline:
                 time.sleep(.01)
+            self.assertFalse(session.connecting)
             self.assertTrue(session.connected)
             self.assertEqual(session.runtime, 'desktop')
             self.cli.attach.assert_not_called()

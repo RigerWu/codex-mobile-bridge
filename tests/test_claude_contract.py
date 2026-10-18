@@ -1,4 +1,5 @@
 import tempfile
+import threading
 import unittest
 import uuid
 from pathlib import Path
@@ -160,8 +161,15 @@ class DesktopActionContract(unittest.IsolatedAsyncioTestCase):
         self.manager.adapters['claude'] = self.adapter
 
     def test_account_and_permission_reads_do_not_claim_mutation_receipts(self):
-        self.manager.call('claude', 'account')
-        self.manager.call('claude', 'access', 'session')
+        store = Mock()
+        store.lock = threading.RLock()
+        store._current.return_value = ('official', 'fixture-login', None)
+        store.models.return_value = {'models': [], 'groups': []}
+        with patch.object(self.manager, '_account_model_identity', return_value='fixture-account'), \
+                patch.object(self.manager, '_account_store', return_value=store), \
+                patch.object(self.manager, '_account_model_live', return_value=True):
+            self.manager.call('claude', 'account')
+            self.manager.call('claude', 'access', 'session')
         self.assertEqual(self.manager.db.execute('SELECT COUNT(*) FROM requests').fetchone()[0], 0)
         self.assertEqual(self.adapter.call.call_count, 2)
 

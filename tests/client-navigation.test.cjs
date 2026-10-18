@@ -27,9 +27,27 @@ test('changing provider paints the shell before its slow read resolves',async()=
   const pending=nav.choose('deepseek');assert.equal(nav.provider,'deepseek');assert.equal(painted.length,1);
   resolve();await pending;
 });
+test('an older client status reply cannot undo a later provider choice',async()=>{
+  const {nav}=fixture();let finish,applied=0;
+  nav.request=()=>new Promise(resolve=>{finish=resolve;});
+  const reading=nav.refresh();
+  nav.applyClients=()=>{applied++;};
+  await nav.choose('deepseek');
+  finish({clients:[{id:'claude',enabled:true}]});await reading;
+  assert.equal(nav.provider,'deepseek');assert.equal(applied,0);
+});
 
 test('clicking the selected provider does not reset its view or issue another read',async()=>{
  const {nav}=fixture();let calls=0;nav.view.choose=async()=>{calls++;};await nav.choose('claude');assert.equal(calls,0);
+});
+
+test('discovery confirms a cached preview only while its provider remains enabled',async()=>{
+ const {nav}=fixture();let confirmations=0;
+ nav.view.previewOnly=true;nav.view.confirmCachedList=function(){this.previewOnly=false;confirmations++;};
+ nav.applyClients({clients:nav.clients});assert.equal(confirmations,1);assert.equal(nav.provider,'claude');
+ nav.view.previewOnly=true;nav.view.choose=async function(id){this.provider=id;this.previewOnly=false;};
+ nav.applyClients({clients:nav.clients.map(client=>({...client,enabled:false}))});await Promise.resolve();
+ assert.equal(nav.provider,null);assert.equal(nav.view.provider,'codex');assert.equal(nav.view.previewOnly,false);assert.equal(confirmations,1);
 });
 
 test('turning the last client off and re-enabling Codex refreshes its list',async()=>{
@@ -321,6 +339,18 @@ test('swipe settles before choosing and canceled animations cannot switch later'
   if(cancel)nav.cancelListSwipe();else waits.forEach(wait=>wait.resolve());
   await done;assert.deepEqual(calls,cancel?[]:['deepseek']);assert.equal(removed,true);assert.equal(nav.swipePreview,null);
  }
+});
+test('a second flick adopts the first settling choice and reaches the following client',async()=>{
+ const context=vm.createContext({window:{matchMedia:()=>({matches:false}),getSelection:()=>null},document:{querySelector:()=>null},localStorage:{getItem:()=>null},innerWidth:390,Date,BridgeI18n:{t:s=>s}});
+ vm.runInContext(fs.readFileSync('web/features/clients/client-navigation.js','utf8'),context);
+ const C=vm.runInContext('ClientNavigation',context),nav=Object.create(C.prototype),calls=[],waits=[],list={getBoundingClientRect:()=>({width:390})};
+ const node=()=>({style:{transform:'translate3d(-100px,0,0)'},animate(){let resolve,reject;const finished=new Promise((yes,no)=>{resolve=yes;reject=no;});const animation={finished,cancel(){reject(Object.assign(Error('canceled'),{name:'AbortError'}));}};waits.push({resolve});return animation;}});
+ Object.assign(nav,{provider:'codex',clients:['codex','claude','deepseek'].map(id=>({id,enabled:true})),sidebar:list,view:{list},dragListSwipe(gesture,dx){if(this.swipePreview)return;const enabled=this.clients,index=enabled.findIndex(c=>c.id===gesture.provider),next=enabled[index+(dx<0?1:-1)];this.swipePreview={provider:gesture.provider,next:next?.id,direction:1,width:390,current:node(),incoming:node(),root:{remove(){}}};},choose(id){this.cancelListSwipe();this.provider=id;calls.push(id);return Promise.resolve();},notify:message=>{throw Error(message);}});
+ const touch=(phase,x)=>{const point={identifier:1,clientX:x,clientY:100};nav.listTouch(phase,{target:{closest:()=>null},touches:phase==='end'?[]:[point],changedTouches:[point],cancelable:true,preventDefault(){}},list);};
+ touch('start',200);touch('move',110);touch('end',90);assert.deepEqual(calls,[]);
+ touch('start',200);assert.deepEqual(calls,['claude']);assert.equal(nav.listGesture.provider,'claude');
+ touch('move',110);touch('end',90);waits.slice(2).forEach(wait=>wait.resolve());await new Promise(setImmediate);
+ assert.deepEqual(calls,['claude','deepseek']);assert.equal(nav.provider,'deepseek');
 });
 
 test('reduced-motion swipes commit without animation and recheck enabled state',async()=>{

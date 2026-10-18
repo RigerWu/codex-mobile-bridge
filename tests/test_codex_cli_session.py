@@ -1,4 +1,5 @@
 import tempfile
+import io
 import json
 import os
 import shlex
@@ -644,7 +645,162 @@ class CliSessionTests(unittest.TestCase):
         result = self.sessions.get_kind('thread-a', 'models')
         self.assertEqual(result['modelSource'], 'api')
         self.assertEqual(result['models'], [])
+        self.assertTrue(result['modelError'])
         self.assertFalse(any(method == 'model/list' for method, _ in self.fake.sent))
+
+    def test_local_native_api_catalog_uses_verified_config_and_upstream_models(self):
+        self.sessions.attach('thread-a', explicit=True)
+        self.sessions.metadata['thread-a']['modelProvider'] = 'custom'
+        self.fake.thread['modelProvider'] = 'custom'
+        original = self.fake.request
+        def request(method, params, **kwargs):
+            if method == 'config/read':
+                return {'config': {'model_provider': 'custom', 'model_providers': {'custom': {
+                    'base_url': 'https://fixture.invalid/v1',
+                    'experimental_bearer_token': 'fixture-key'}}}}
+            return original(method, params, **kwargs)
+        self.fake.request = request
+        with patch('bridge.features.accounts.models.build_opener') as factory:
+            factory.return_value.open.return_value = io.BytesIO(json.dumps({'data': [
+                {'id': 'available', 'displayName': 'Available'}, {'id': 'other'}]}).encode())
+            result = self.sessions.get_kind('thread-a', 'models')
+        self.assertEqual([row['id'] for row in result['models']], ['available', 'other'])
+        self.assertEqual(result['models'][0]['name'], 'Available')
+        self.assertEqual(result['models'][0]['efforts'], [])
+        self.assertEqual(result['models'][1]['efforts'], [])
+        self.assertIsNone(result['modelError'])
+        self.assertEqual(factory.return_value.open.call_args.args[0].get_header('Authorization'),
+                         'Bearer fixture-key')
+        self.assertNotIn('native-model', [row['id'] for row in result['models']])
+
+    def test_local_native_api_catalog_does_not_use_gateway_environment_key(self):
+        self.sessions.attach('thread-a', explicit=True)
+        self.sessions.metadata['thread-a']['modelProvider'] = 'custom'
+        self.fake.thread['modelProvider'] = 'custom'
+        original = self.fake.request
+        def request(method, params, **kwargs):
+            if method == 'config/read':
+                return {'config': {'model_provider': 'custom', 'model_providers': {'custom': {
+                    'base_url': 'https://fixture.invalid/v1', 'env_key': 'CMB_FIXTURE_KEY'}}}}
+            return original(method, params, **kwargs)
+        self.fake.request = request
+        with patch.dict(os.environ, {'CMB_FIXTURE_KEY': 'gateway-only-secret'}), patch(
+                'bridge.features.accounts.models.build_opener') as factory:
+            result = self.sessions.get_kind('thread-a', 'models')
+        self.assertEqual(result['models'], [])
+        self.assertIn('启动环境', result['modelError'])
+        factory.assert_not_called()
+
+    def test_local_env_key_uses_daemon_value_and_exact_native_efforts(self):
+        self.sessions.attach('thread-a', explicit=True)
+        self.sessions.metadata['thread-a']['modelProvider'] = 'custom'
+        self.fake.thread['modelProvider'] = 'custom'
+        original = self.fake.request
+        def request(method, params, **kwargs):
+            if method == 'config/read':
+                return {'config': {'model_provider': 'custom', 'model_providers': {'custom': {
+                    'base_url': 'https://fixture.invalid/v1', 'env_key': 'CMB_FIXTURE_KEY'}}}}
+            return original(method, params, **kwargs)
+        self.fake.request = request
+        with patch.dict(os.environ, {'CMB_FIXTURE_KEY': 'gateway-key'}), patch.object(
+                self.sessions, 'model_environment', return_value=({'CMB_FIXTURE_KEY': 'daemon-key'},
+                                                                    ('fixture-process',))), patch(
+                'bridge.features.accounts.models.build_opener') as factory:
+            factory.return_value.open.return_value = io.BytesIO(json.dumps({'data': [
+                {'id': 'native-model'}, {'id': 'api-only',
+                 'supportedReasoningEfforts': [{'reasoningEffort': 'medium'}]}]}).encode())
+            result = self.sessions.get_kind('thread-a', 'models')
+        rows = {row['id']: row for row in result['models']}
+        self.assertEqual(set(rows), {'native-model', 'api-only'})
+        self.assertEqual(rows['native-model']['efforts'], ['high'])
+        self.assertEqual(rows['api-only']['efforts'], ['medium'])
+        self.assertEqual(factory.return_value.open.call_args.args[0].get_header('Authorization'),
+                         'Bearer daemon-key')
+
+    def test_openai_custom_route_reads_daemon_base_url_even_without_account(self):
+        names = CliSessions._required_model_environment(
+            {'model_providers': {'openai': {'env_key': 'CMB_FIXTURE_KEY'}}}, 'openai', {})
+        self.assertEqual(names, {'OPENAI_BASE_URL', 'CMB_FIXTURE_KEY'})
+
+    def test_openai_custom_route_reads_daemon_key_even_without_account(self):
+        config = {'model_providers': {'openai': {'query_params': {'fixture': '1'}}}}
+        with patch('bridge.clients.codex.cli_session._local_cli', return_value='/fixture/codex'), patch(
+                'bridge.clients.codex.cli_session.read_daemon_environment',
+                return_value=({'OPENAI_API_KEY': 'daemon-key'}, ('fixture-process',))) as reader:
+            values, _ = self.sessions.model_environment(config, 'openai', {})
+        self.assertEqual(values['OPENAI_API_KEY'], 'daemon-key')
+        self.assertEqual(reader.call_args.args[2], {'OPENAI_BASE_URL', 'OPENAI_API_KEY'})
+
+    def test_local_native_openai_api_key_uses_same_home_auth_file(self):
+        self.sessions.attach('thread-a', explicit=True)
+        self.sessions.metadata['thread-a']['modelProvider'] = 'openai'
+        self.fake.thread['modelProvider'] = 'openai'
+        (self.home / 'auth.json').write_text('{"OPENAI_API_KEY":"home-key"}')
+        original = self.fake.request
+        def request(method, params, **kwargs):
+            if method == 'config/read':
+                return {'config': {'model_provider': 'openai'}}
+            if method == 'account/read':
+                return {'account': {'type': 'apiKey'}}
+            if method == 'model/list':
+                raise AppServerUnavailable('native metadata unavailable')
+            return original(method, params, **kwargs)
+        self.fake.request = request
+        with patch.dict(os.environ, {'OPENAI_API_KEY': 'gateway-only-secret'}), patch.object(
+                self.sessions, 'model_environment', return_value=({}, ('fixture-process',))), patch(
+                'bridge.features.accounts.models.build_opener') as factory:
+            factory.return_value.open.return_value = io.BytesIO(b'{"data":[{"id":"api-model"}]}')
+            result = self.sessions.get_kind('thread-a', 'models')
+        self.assertEqual([row['id'] for row in result['models']], ['api-model'])
+        self.assertIsNone(result['modelError'])
+        self.assertEqual(factory.return_value.open.call_args.args[0].get_header('Authorization'),
+                         'Bearer home-key')
+
+    def test_ssh_native_api_catalog_does_not_use_local_auth(self):
+        self.sessions.attach('thread-a', explicit=True)
+        self.sessions.alias = 'fixture-host'
+        self.sessions.remote_home = '/remote/codex-home'
+        self.sessions.metadata['thread-a']['modelProvider'] = 'custom'
+        self.fake.thread['modelProvider'] = 'custom'
+        (self.home / 'auth.json').write_text('{"OPENAI_API_KEY":"gateway-secret"}')
+        with patch.object(self.sessions, 'model_environment', side_effect=AssertionError('local environment read')), \
+             patch('bridge.clients.codex.cli_session.Catalog.read_models', side_effect=AssertionError('local API read')), \
+             patch('bridge.clients.codex.cli_session.remote_model_catalog', return_value={
+                 'models': [{'id': 'remote-model', 'efforts': ['high']}], 'modelSource': 'api'}) as catalog:
+            result = self.sessions.get_kind('thread-a', 'models')
+        self.assertEqual(result['models'], [{'id': 'remote-model', 'efforts': ['high']}])
+        self.assertEqual(catalog.call_args.args[:4],
+                         ('fixture-host', '/remote/codex-home', '/original/project', 'custom'))
+        self.assertNotIn('gateway-secret', json.dumps(catalog.call_args.args))
+        self.assertEqual(catalog.call_args.args[-1][0]['model'], 'native-model')
+
+    def test_ssh_environment_identity_is_read_on_target(self):
+        self.sessions.alias = 'fixture-host'
+        self.sessions.remote_home = '/remote/codex-home'
+        with patch('bridge.clients.codex.cli_session.remote_model_identity', return_value='target-digest') as read, \
+             patch.object(self.sessions, 'model_environment', side_effect=AssertionError('local environment read')):
+            identity = self.sessions.model_environment_identity({'model_provider': 'custom'},
+                                                                'custom', {}, cwd='/remote/project')
+        self.assertEqual(identity, 'target-digest')
+        read.assert_called_once_with('fixture-host', '/remote/codex-home', '/remote/project',
+                                     'custom', {'model_provider': 'custom'}, {})
+
+    def test_chatgpt_gateway_models_come_from_joined_daemon(self):
+        self.sessions.attach('thread-a', explicit=True)
+        self.sessions.metadata['thread-a']['modelProvider']='openai'
+        self.fake.thread['modelProvider']='openai'
+        original=self.fake.request
+        def request(method,params,**kwargs):
+            if method=='config/read':
+                return {'config':{'openai_base_url':'http://127.0.0.1:3425/backend-api/codex'}}
+            if method=='account/read':
+                return {'account':{'type':'chatgpt'},'requiresOpenaiAuth':True}
+            return original(method,params,**kwargs)
+        self.fake.request=request
+        result=self.sessions.get_kind('thread-a','models')
+        self.assertEqual(result['modelSource'],'codex')
+        self.assertEqual(result['models'][0]['id'],'native-model')
+        self.assertFalse(any(method=='turn/start' for method,_ in self.fake.sent))
 
     def test_native_goal_unknown_result_is_not_replayed(self):
         self.sessions.attach('thread-a', explicit=True)
@@ -831,6 +987,8 @@ class CliSessionTests(unittest.TestCase):
             self.assertTrue(self.sessions.daemon_may_be_running())
         self.assertEqual(run.call_args.args[0], ['/fixture/codex', 'app-server', 'daemon', 'version'])
         self.assertEqual(run.call_args.kwargs['env']['CODEX_HOME'], str(self.home))
+        self.assertEqual(run.call_args.kwargs['encoding'], 'utf-8')
+        self.assertEqual(run.call_args.kwargs['errors'], 'replace')
 
     def test_local_daemon_status_only_reports_stopped_without_runtime_evidence(self):
         Path(self.fake.socket_path).unlink()

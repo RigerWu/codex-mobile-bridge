@@ -8,7 +8,7 @@ import unittest
 from pathlib import Path, PurePosixPath
 
 from bridge.api.assets import FONT_ROUTE, PDF_CMAP_ROUTE, PDF_FONT_ROUTE, STATIC
-from bridge.clients.codex.remote import RemoteCatalog
+from bridge.clients.codex.remote import RemoteCatalog, RemoteCliModels
 from bridge.features.auth import tls
 from bridge.resources import project_root, source_text
 
@@ -36,12 +36,21 @@ SSH_SOURCES = {
     'bridge/clients/claude/remote_worker.py': ['profile', 'command', 'resume'],
     'bridge/features/sessions/store.py': ['SessionStore'],
     'bridge/clients/codex/catalog.py': ['Catalog'],
+    'bridge/clients/codex/remote_models.py': ['remote_model_worker'],
     'bridge/features/sessions/create.py': ['create_empty', 'fork_copy', 'rename_thread'],
     'bridge/features/accounts/models.py': ['model_ids'],
+    'bridge/features/accounts/draft_identity.py': ['draft_identity', 'codex_account_identity'],
     'bridge/features/auth/tls.py': ['client_context'],
     'bridge/features/workspace/workspace.py': ['Workspace', 'operate'],
     'bridge/features/terminals/manager.py': ['CommandJob', 'serve_remote'],
     'bridge/platforms/posix/terminal.py': ['TerminalSession', 'remote_main'],
+}
+PLATFORM_SOURCES = {
+    'bridge/platforms/codex_daemon_env.py',
+    'bridge/platforms/linux/codex_daemon_env.py',
+    'bridge/platforms/macos/codex_daemon_env.py',
+    'bridge/platforms/macos/force_exit.py',
+    'bridge/platforms/windows/codex_daemon_env.py',
 }
 CONNECTORS = {'bridge/clients/claude/connector.js', 'bridge/clients/deepseek/host.mjs'}
 NATIVE_SOURCES = {'bridge/platforms/macos/claude-helper.swift',
@@ -119,7 +128,8 @@ class ResourceLayoutTests(unittest.TestCase):
     def test_gateway_manifest_contains_all_remote_sources_and_client_assets(self):
         manifest = json.loads((ROOT/'scripts/gateway-resources.json').read_text())
         self.assertEqual(len(manifest), len(set(manifest)))
-        self.assertEqual({name for name in manifest if name.endswith('.py')}, set(SSH_SOURCES))
+        self.assertEqual({name for name in manifest if name.endswith('.py')},
+                         set(SSH_SOURCES) | PLATFORM_SOURCES)
         self.assertTrue(CONNECTORS <= set(manifest))
         self.assertIn('bridge/clients/LICENSE.coding-mobile', manifest)
         for relative in manifest:
@@ -144,6 +154,9 @@ class ResourceLayoutTests(unittest.TestCase):
                 self.assertFalse(any(name.name.startswith('bridge') for name in node.names))
         cases = [{'name': 'catalog-with-models-and-tls', 'source': source,
                   'symbols': [symbol for name in sorted(combined) for symbol in SSH_SOURCES[name]]}]
+        cases.append({'name': 'native-cli-models-with-platform-readers',
+                      'source': RemoteCliModels._source(),
+                      'symbols': ['remote_model_worker', 'read_daemon_environment']})
         for relative, symbols in SSH_SOURCES.items():
             if relative not in combined:
                 cases.append({'name': relative, 'source': source_text(relative.removeprefix('bridge/')),

@@ -5,11 +5,11 @@
 
 # Codex Mobile Bridge · 多客户端远程工作台
 
-> **v2.1.0 正式版**：[发布页](https://github.com/try2love/codex-mobile-bridge/releases/tag/v2.1.0) · [完整更新说明](RELEASE_NOTES.md) · [手机安装说明](mobile/README.md)。新增 Codex / Claude CLI 接入、已有 HTTPS 入口与文件阅读，改善 Windows 终端、Claude/DSH 连接及手机浏览体验。
+> **v2.1.1 正式版**：[发布页](https://github.com/try2love/codex-mobile-bridge/releases/tag/v2.1.1) · [完整更新说明](RELEASE_NOTES.md) · [手机安装说明](mobile/README.md)。统一账号与模型界面，完善模型缓存、草稿保存、文件定位及手机导航体验。
 
 [简体中文](README.md) · [English](README_EN.md)
 
-**[双语介绍与使用演示 ↗](https://try2love.github.io/codex-mobile-bridge/?lang=zh)** · **[下载桌面与手机 App](https://github.com/try2love/codex-mobile-bridge/releases/tag/v2.1.0)**
+**[双语介绍与使用演示 ↗](https://try2love.github.io/codex-mobile-bridge/?lang=zh)** · **[下载桌面与手机 App](https://github.com/try2love/codex-mobile-bridge/releases/tag/v2.1.1)**
 
 [![桌面网关：客户端与接入（演示数据）](site/assets/v2-clients.png)](https://try2love.github.io/codex-mobile-bridge/?lang=zh)
 
@@ -17,7 +17,13 @@
 
 任务继续在原电脑执行，Codex 的 SSH 任务继续在原服务器执行。网关复用原客户端的会话、认证和执行环境，不让手机重新运行一套 Agent。手机无需登录相同的模型账号，使用网关登录或可撤销的扫码配对即可接入。
 
-## v2.1.0 更新
+## v2.1.1 更新
+
+- **账号与模型**：三个客户端统一账号卡片与模型选择；模型目录缓存优先，按电脑、账号与接入隔离，显示更新时间，支持手动及 12 小时更新。
+- **草稿与文件**：跨聊天和电脑保留未发送草稿；定位文件平滑滚动并高亮，左上角直接返回聊天列表；支持工具截图预览。
+- **日常体验**：修复快速滑动回跳、列表与模型重复加载，优化 iOS 通知跳转；网关和手机可跳过当前更新，修改密码可选择保留有效手机绑定。
+
+### v2.1.0 更新
 
 - **CLI 与文件阅读**：从手机或 Web 阅读、显式恢复 Codex / Claude Code CLI 会话；源码、PDF 和自包含 HTML 有专门的阅读预览。
 - **连接与列表**：接入已有 HTTPS 穿透或反向代理；Codex 列表逐主机呈现，Claude 混合列表按日期排序，来源标签持续可见。
@@ -32,9 +38,9 @@
 
 <a id="workspace-reading"></a>
 
-## 文件阅读与预览（v2.1.0 正式版）
+## 文件阅读与预览
 
-- **逐级返回目录**：在文件子目录中点击返回，先回上一级；项目根目录后再回聊天。全屏中先退出全屏。
+- **定位与返回**：聊天文件链接可平滑定位并高亮目标 3 秒。左上角返回直接回聊天列表；文件区上级目录按钮与系统返回仍支持层级导航，全屏的系统返回先退出全屏。
 - **源码阅读**：常见代码显示语法高亮和行号；点击“自动换行”让长行适合屏幕，或切回“原始行宽”。复制代码保留原文，不带行号；这是只读预览，不修改文件。未知语言与较大文本使用纯文本。
 - **PDF 阅读**：手机滑动翻阅、双指缩放，电脑浏览器保留翻页和缩放按钮。有文本层时可选择文字，扫描件不提供 OCR；不同尺寸的页面分别适配宽度。快速缩放时先保留原画面，再替换完成的新画面，减少闪烁。
 - **HTML 阅读**：在“预览 / 源代码”之间切换。自包含 HTML 的内联交互和动画可运行；外部资源、CDN、后端请求、弹窗和表单提交不受支持。预览与网关登录信息、父页面和手机原生接口隔离。
@@ -82,18 +88,18 @@ Codex 与 Claude CLI 接入分别在各自账号管理中配置；本机 CLI 同
 
 ## 下载与快速开始（推荐）
 
-日常使用直接下载桌面 App，**无需 Agent 帮忙部署，也无需安装 Python、Node.js 或打开终端**。下列链接对应 **v2.1.0 正式版**。
+日常使用直接下载桌面 App，**无需 Agent 帮忙部署，也无需安装 Python、Node.js 或打开终端**。下列链接对应 **v2.1.1 正式版**。
 
 | 系统 | 下载 | 打开方式 |
 | --- | --- | --- |
-| Windows x64（推荐安装包） | [下载 Setup.exe](https://github.com/try2love/codex-mobile-bridge/releases/download/v2.1.0/Codex-Mobile-Bridge-2.1.0-Windows-x64-Setup.exe) | 运行安装包，从快捷方式打开 |
-| Windows x64（免安装） | [下载完整 ZIP](https://github.com/try2love/codex-mobile-bridge/releases/download/v2.1.0/Codex-Mobile-Bridge-2.1.0-Windows-x64.zip) | 完整解压后运行 `Codex Mobile Bridge.exe`，不要单独移动 exe |
-| macOS Apple Silicon（M 系列） | [下载 arm64 DMG](https://github.com/try2love/codex-mobile-bridge/releases/download/v2.1.0/Codex-Mobile-Bridge-2.1.0-macOS-arm64.dmg) | 打开 DMG，将 App 拖入“应用程序” |
-| macOS Intel（英特尔） | [下载 x64 DMG](https://github.com/try2love/codex-mobile-bridge/releases/download/v2.1.0/Codex-Mobile-Bridge-2.1.0-macOS-x64.dmg) | 打开 DMG，将 App 拖入“应用程序” |
-| Ubuntu x64（实验性） | [下载 .deb](https://github.com/try2love/codex-mobile-bridge/releases/download/v2.1.0/Codex-Mobile-Bridge-2.1.0-Linux-amd64.deb) | Ubuntu 22.04；安装后以普通用户启动 |
-| Ubuntu ARM64（实验性） | [下载 .deb](https://github.com/try2love/codex-mobile-bridge/releases/download/v2.1.0/Codex-Mobile-Bridge-2.1.0-Linux-arm64.deb) | Ubuntu 22.04 ARM64；不含 32 位 ARM |
+| Windows x64（推荐安装包） | [下载 Setup.exe](https://github.com/try2love/codex-mobile-bridge/releases/download/v2.1.1/Codex-Mobile-Bridge-2.1.1-Windows-x64-Setup.exe) | 运行安装包，从快捷方式打开 |
+| Windows x64（免安装） | [下载完整 ZIP](https://github.com/try2love/codex-mobile-bridge/releases/download/v2.1.1/Codex-Mobile-Bridge-2.1.1-Windows-x64.zip) | 完整解压后运行 `Codex Mobile Bridge.exe`，不要单独移动 exe |
+| macOS Apple Silicon（M 系列） | [下载 arm64 DMG](https://github.com/try2love/codex-mobile-bridge/releases/download/v2.1.1/Codex-Mobile-Bridge-2.1.1-macOS-arm64.dmg) | 打开 DMG，将 App 拖入“应用程序” |
+| macOS Intel（英特尔） | [下载 x64 DMG](https://github.com/try2love/codex-mobile-bridge/releases/download/v2.1.1/Codex-Mobile-Bridge-2.1.1-macOS-x64.dmg) | 打开 DMG，将 App 拖入“应用程序” |
+| Ubuntu x64（实验性） | [下载 .deb](https://github.com/try2love/codex-mobile-bridge/releases/download/v2.1.1/Codex-Mobile-Bridge-2.1.1-Linux-amd64.deb) | Ubuntu 22.04；安装后以普通用户启动 |
+| Ubuntu ARM64（实验性） | [下载 .deb](https://github.com/try2love/codex-mobile-bridge/releases/download/v2.1.1/Codex-Mobile-Bridge-2.1.1-Linux-arm64.deb) | Ubuntu 22.04 ARM64；不含 32 位 ARM |
 
-[查看所有版本与更新说明](https://github.com/try2love/codex-mobile-bridge/releases) · [下载 SHA256 校验文件](https://github.com/try2love/codex-mobile-bridge/releases/download/v2.1.0/SHA256SUMS.txt)。两种 Mac 同时提供 ZIP，供应用内更新或手动替换使用。Windows ARM 暂无专用安装包。Mac 版采用本地完整性签名但未公证，首次打开可能需要手动允许；Windows 版未做证书签名。详见下方 macOS 首次打开说明。
+[查看所有版本与更新说明](https://github.com/try2love/codex-mobile-bridge/releases) · [下载 SHA256 校验文件](https://github.com/try2love/codex-mobile-bridge/releases/download/v2.1.1/SHA256SUMS.txt)。两种 Mac 同时提供 ZIP，供应用内更新或手动替换使用。Windows ARM 暂无专用安装包。Mac 版采用本地完整性签名但未公证，首次打开可能需要手动允许；Windows 版未做证书签名。详见下方 macOS 首次打开说明。
 
 1. 安装并登录要使用的桌面客户端，打开 **Codex Mobile Bridge**。在 **客户端与接入** 检查扫描结果，完成需要的授权，并启用配置就绪的客户端。
 2. 在 **网络访问** 保留局域网访问或添加 HTTPS 入口，保存后从概览或客户端页点击 **启动网关**。已有配置时沿用原端口。
@@ -102,7 +108,7 @@ Codex 与 Claude CLI 接入分别在各自账号管理中配置；本机 CLI 同
 
 需要外网访问时，可选 [Tailscale 固定 HTTPS](docs/tailscale.md)、内置 Cloudflare 临时 HTTPS、[固定 Cloudflare Tunnel](docs/fixed-domain.md)、[自有服务器 + SSH](docs/server-ssh.md) 或 NAS 反代。详细要求见[连接方式说明](#connections)。固定地址不保证国内直连速度，首次配置请用实际蜂窝网络测试。
 
-Android APK、iOS 未签名 IPA 与 Xcode 源码包见同一 [v2.1.0 Release](https://github.com/try2love/codex-mobile-bridge/releases/tag/v2.1.0)。Android 覆盖安装以保留数据；iOS 需自行签名，暂无 App Store/TestFlight 分发。源码运行与自定义部署见后面的[部署 Agent 执行说明](#agent-deployment)。
+Android APK、iOS 未签名 IPA 与 Xcode 源码包见同一 [v2.1.1 Release](https://github.com/try2love/codex-mobile-bridge/releases/tag/v2.1.1)。Android 覆盖安装以保留数据；iOS 需自行签名，暂无 App Store/TestFlight 分发。源码运行与自定义部署见后面的[部署 Agent 执行说明](#agent-deployment)。
 
 <a id="macos-first-launch"></a>
 
@@ -112,7 +118,7 @@ Android APK、iOS 未签名 IPA 与 Xcode 源码包见同一 [v2.1.0 Release](ht
 
 从 `v0.2.0-beta.5` 起，可在桌面 App 的「应用更新」中检查新版、查看说明并点击「更新并重启」。下载与校验完成后短暂重启网关，保留登录、网络、通知和关注聊天配置；失败时尝试恢复原版本。此前版本需要先手动安装一次支持更新的版本。使用临时 HTTPS 时，重启后请打开最新地址。发布与恢复说明见 [桌面更新文档](docs/desktop-updates.md)。
 
-**Windows beta.7 / 1.0.0 用户：**旧更新器可能因目录占用报 `WinError 32` 并回退。请先在托盘选择“停止网关并退出”，再用 **2.1.0 Setup.exe** 安装到原位置；无需卸载或删除数据。1.1.0 修复后续更新的目录占用问题。
+**Windows beta.7 / 1.0.0 用户：**旧更新器可能因目录占用报 `WinError 32` 并回退。请先在托盘选择“停止网关并退出”，再用 **2.1.1 Setup.exe** 安装到原位置；无需卸载或删除数据。1.1.0 修复后续更新的目录占用问题。
 
 Android v2.0.3 起支持应用内 APK 更新，并可选择手机下载或电脑下载；旧版首次升级可手动覆盖安装。电脑协助方式需要配套网关，下载失败可重选方式，已完成的包可继续安装或保存。iOS 仍按签名安装指引升级，详见[手机说明](mobile/README.md#安装与升级)。
 
@@ -149,7 +155,7 @@ v2.0.0 在线查询订阅周期日期，显示剩余时间和具体日期；接�
 - 网页登录默认勾选 **记住密码（7 天免登录）**：保存登录 Cookie，不保存明文密码，持续使用会续期；七天未刷新后需重新登录。取消勾选使用普通有效期的浏览器会话 Cookie。
 - 同一 IP **连续输错 5 次即自动封禁**，网页显示剩余次数，失败计数与封禁记录在重启后保留。正确登录会重置连续失败次数；封禁后只能在电脑 App 的 **登录与设备 → 自动封禁 IP** 解除并重置次数。
 - **消息通知 → 登录安全通知** 默认开启，封禁时通过已启用的 PushPlus、Bark、ntfy 发送通知，可单独关闭；关闭通知不关闭封禁。
-- 普通登录有效期在 **登录与设备 → 登录有效期（小时）** 中设置。保存后重启网关生效；修改账号、密码、登录方式或有效期会撤销此前登录。普通网关重启和 App 更新保留未过期登录。
+- 普通登录有效期在 **登录与设备 → 登录有效期（小时）** 中设置，保存后重启网关生效。修改账号或登录方式会撤销此前登录；修改密码默认撤销全部登录，也可取消勾选“同时撤销所有已绑定手机”，只保留当前有效且已标记为可信手机的登录，普通浏览器登录须重新登录。此标记沿用现有手机 User-Agent 判定，并非不可伪造的设备身份。保留时须先停止网关。普通网关重启和 App 更新保留未过期登录。
 - `0` 表示不自动过期。浏览器仍可能清理长期未使用的 Cookie；退出登录、清除浏览器数据或更换访问域名后需要重新验证。
 - **登录设备** 展示一次浏览器登录的 IP、浏览器标识、登录时间、最近访问（最多约一分钟延迟）和到期时间。**撤销登录** 只移除该登录，之后可重新验证；**封禁此 IP** 会撤销该 IP 的全部登录并禁止重新登录。
 - IP 白名单默认关闭，启用后仅允许列表内地址；黑名单优先。支持精确 IPv4 / IPv6 地址，每行一个。规则保存后立即生效，可随时从电脑 App 解除，不需要手机端权限。
@@ -163,7 +169,7 @@ v2.0.0 在线查询订阅周期日期，显示剩余时间和具体日期；接�
 1. 从本仓库的 Release 下载对应芯片的 DMG 或 ZIP，以及 `SHA256SUMS.txt`。计算下载文件的 SHA-256，与校验文件中同名文件的一行比较；不一致时重新下载，不要放行。以下以 2.1.0 的 M 系列 Mac DMG 为例，其他文件请替换文件名：
 
    ```sh
-   shasum -a 256 "$HOME/Downloads/Codex-Mobile-Bridge-2.1.0-macOS-arm64.dmg"
+   shasum -a 256 "$HOME/Downloads/Codex-Mobile-Bridge-2.1.1-macOS-arm64.dmg"
    ```
 
 2. 打开 DMG，将 `Codex Mobile Bridge.app` 拖入“应用程序”，再推出磁盘映像；ZIP 则先解压并移动 App。尝试从“应用程序”打开后，前往 **系统设置 → 隐私与安全性 → 仍要打开**，按系统提示确认。
@@ -328,7 +334,7 @@ App 设置界面通过本机进程通信管理网关；网关启停、更新及�
 | 手机回应 | 支持命令、文件、临时权限请求及提问卡片；复杂请求提示回到桌面处理 |
 | SSH 会话 | 显示桌面 App 已连接主机的聊天，操作继续交给对应主机的会话 |
 | 聊天列表 | 最近交互或项目视图、主机标签、运行中与完成未查看标识 |
-| 模型设置 | 更改当前聊天的模型与推理强度，支持自定义模型 ID；符合条件的官方账号可开关 Fast 模式 |
+| 模型设置 | 更改当前聊天的模型与推理强度，支持自定义模型 ID；符合原生模型目录与工作区条件的接入可开关 Fast 模式 |
 | 计划与目标模式 | 从网页开启计划或原生目标；计划完成后可直接执行或继续修改 |
 | Skill | 按会话所在主机与工作目录读取已安装技能，搜索后随消息发送原生 Skill 引用 |
 | 登录方式 | 独立账号密码；可配置免密 |
@@ -408,7 +414,7 @@ python3 -B "$PWD/run.py" --lan
 
 不加 `--lan` 时，仅监听本机 `127.0.0.1`。前台运行时按 `Ctrl+C` 停止；也可以运行 `python3 -B stop.py`，或双击 `停止手机网关.command`。从旧版本升级后，首次请在旧服务窗口按 `Ctrl+C` 停止，再启用新的停止控制机制。
 
-网关不安装开机启动服务。重启网关后需要重新登录。
+网关不安装开机启动服务。使用同一数据目录重启时，仍有效的登录与可信手机绑定会保留。
 
 ## 外网访问：临时 HTTPS 隧道
 
@@ -509,9 +515,9 @@ SSH 列表复用 App 保存的连接和项目配置。手机不需要保存 SSH 
 
 点击输入框上方的模型按钮，选择模型与推理强度。当前任务正在运行时，新设置从下一轮使用。自定义模型 ID 必须由当前 provider 支持。
 
-使用官方 ChatGPT 账号，且当前聊天的模型与工作区允许时，面板显示 **Fast 模式** 开关。勾选或取消后点击 **应用到此聊天**，从下一轮生效；取消会明确切回标准速度。开关同步桌面实际设置，刷新后仍可查看。只调整模型或推理强度而未操作开关时，会保留原有速度档位。
+使用官方 ChatGPT 账号，或使用显式 Codex 原生模型目录的聚合接入，且当前聊天的模型与工作区允许时，面板显示 **Fast 模式** 开关。路由模型保留完整 ID，速度能力以该模型实际返回的原生元数据为准，不从名称相近的基础模型推断。勾选或取消后点击 **应用到此聊天**，从下一轮生效；取消会明确切回标准速度。开关同步桌面实际设置，刷新后仍可查看。只调整模型或推理强度而未操作开关时，会保留原有速度档位。
 
-Fast 会增加额度消耗，具体以[官方速度说明](https://learn.chatgpt.com/docs/agent-configuration/speed)为准。API、自定义服务或不支持的模型不显示该开关；SSH 聊天按远端账号和工作区判断。设置只作用于当前聊天。
+Fast 会增加额度消耗，具体以[官方速度说明](https://learn.chatgpt.com/docs/agent-configuration/speed)为准。普通 API 模型列表仅提供模型与推理强度选项；Fast 开关还要求原生模型速度能力、当前聊天接入和工作区策略匹配。SSH 聊天按远端账号和工作区判断。设置只作用于当前聊天。
 
 较长的模型名称会在工具栏中省略，推理强度完整保留。点击按钮可在设置面板查看完整模型 ID，电脑端也可悬停查看。
 

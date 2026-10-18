@@ -34,6 +34,10 @@ async function runClientSwipeLayoutTests(){
     nav.dragListSwipe({provider,list},provider==='codex'?-110:110);
     try{
       const preview=nav.swipePreview,copy=preview.current.querySelector('.session');
+      const heading=nav.heading,headingParent=heading.parentElement,badgeIcon=nav.badge.querySelector('.client-icon'),navigation=nav.navigation,navigationParent=navigation.parentElement;
+      nav.listGesture={provider,list};nav.paint();
+      check(nav.swipePreview===preview&&nav.listGesture?.provider===provider,provider+' status paint preserves the active swipe');
+      check(heading.parentElement===headingParent&&navigation.parentElement===navigationParent&&nav.badge.querySelector('.client-icon')===badgeIcon,provider+' status paint keeps the header and footer in place');
       check(!!preview&&preview.root.inert&&preview.root.getAttribute('aria-hidden')==='true',provider+' preview is inert');
       check(preview.current.querySelector('.client-swipe-rows').scrollTop===scroll,provider+' preview preserves the scroll position');
       check(preview.root.querySelectorAll('[id]').length===0,provider+' preview has no duplicate IDs');

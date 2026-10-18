@@ -1,4 +1,4 @@
-# Codex CLI 会话接入（v2.1.0）
+# Codex CLI 会话接入（v2.1.1）
 
 聊天列表纳入现有 Codex CLI 会话。列表始终在日期上方显示会话来源；完整可见库存同时包含 APP 与 CLI 会话时，显示来源筛选；来源取自会话的原始记录，接续后的运行方不改变来源。筛选先于分页，搜索或翻页不会让来源选项消失。打开聊天先读已保存历史，并只读查找已有 Codex App 执行连接；不启动 CLI、不向桌面 App 跳转，也不发送模型请求。Codex App 已配置的有效 SSH 连接会参与发现；远端通过用户登录 shell 读取其 `CODEX_HOME`，未设置时使用 `~/.codex`。
 
@@ -12,7 +12,9 @@
 
 SSH 使用已有主机配置和密钥校验，不自动接受新主机密钥或安装远端程序。
 
-由 Codex App 接续的 CLI 聊天复用现有 App 的模型、Skill 和模式操作；由原生 CLI 执行的聊天从同一个 daemon 读取目录并提交设置、Skill 和计划请求。自定义提供商可手动填写模型 ID，不切换到其他提供商的模型目录。兼容的本机和 SSH 原生 CLI 通过同一 daemon 操作 Goal；SSH 上由 Codex App 接管的聊天尚不支持 Goal，网关不会另起执行方。连接成功后目录自动加载，短暂断线保留已选 Skill 与输入草稿。
+由 Codex App 接续的 CLI 聊天复用现有 App 的模型、Skill 和模式操作；由原生 CLI 执行的聊天从同一个 daemon 读取目录并提交设置、Skill 和计划请求。自定义 API 接入可读取上游模型列表；环境变量认证使用经核验的原 CLI 后台服务启动环境，SSH 查询在原服务器执行，不混用网关电脑的凭据。上游未提供的推理强度只按相同模型 ID 的原生元数据补充，不根据模型名称猜测。上游不提供列表时仍可手动填写模型 ID。兼容的本机和 SSH 原生 CLI 通过同一 daemon 操作 Goal；SSH 上由 Codex App 接管的聊天尚不支持 Goal，网关不会另起执行方。连接成功后目录自动加载，短暂断线保留已选 Skill 与输入草稿。
+
+模型列表按主机、CLI 配置、提供商与认证身份分别缓存，显示上次成功更新时间。重复打开优先读取缓存；手动刷新、接入身份变化或到达 12 小时刷新周期时重新查询。相同接入刷新失败时保留上次成功列表与时间，身份变化则不复用旧结果。查询需要原服务器能访问其 API；网关不会为此修改 SSH 代理或网络配置。
 
 CLI 权限可从聊天中的权限按钮切换；原生 CLI 按执行主机的运行时与策略展示可用选项，App 接续的聊天通过原 owner 更新。保存后从后续回合生效，界面以原生确认结果为准；聊天按钮将完全访问权限简写为“完全访问”，确认说明保持完整。消息编辑/分支、重命名和临时侧边聊天暂不开放。网关关闭或手机页面退出只断开网关连接，不停止 CLI 任务。连接中断或写入结果不确定时不自动重发；先查看原会话历史与运行状态，再决定后续操作。
 
@@ -44,7 +46,7 @@ Windows 保存历史读取和冷恢复可识别普通路径与扩展路径指向
 
 Source labels remain visible above dates; when the readable inventory contains both App and CLI origins, type filters are shown. Opening one reads saved history and passively checks for an existing Codex App owner. If App already owns the chat, Bridge verifies and follows that owner. Otherwise, select **Continue chat** to connect to the native CLI daemon or explicitly start its already installed, managed daemon and resume the same chat, even if the terminal has closed. It does not install CLI, bypass SSH host-key checks, change the chat's identity, or seize another runtime's writer lock. Supported actions include send, queue, steer, interrupt, approvals and input requests, plus model/effort selection, Skills and default/plan modes. Compatible joined native CLI runtimes, including SSH hosts, support creating, pausing, editing, resuming and clearing Goals through the same daemon. SSH chats owned by the desktop App do not expose Goal controls.
 
-Native CLI controls use the same daemon for catalogs, settings, Skills, modes and Goals. Custom providers accept manually entered model IDs without switching providers. Catalogs load after connection; transient disconnects retain draft text and selected Skills. Permission controls follow the execution runtime and its policy on local and SSH CLI chats; App-owned chats use their existing owner. Changes apply to subsequent turns and require effective runtime confirmation. Editing/forking, rename and side chats remain unavailable for CLI-origin chats.
+Native CLI controls use the same daemon for catalogs, settings, Skills, modes and Goals. Custom API providers can list upstream models using the verified daemon's launch credentials. SSH queries run on the original host without borrowing the gateway computer's credentials. Missing effort metadata is supplemented only for exact native model IDs. Manual model IDs remain available when the upstream does not expose a catalog. Catalogs are cached separately by host, CLI configuration, provider and authentication identity, with a last-success timestamp. Manual refresh, identity changes and the 12-hour refresh cycle query the upstream again; a failed refresh retains the previous list only for the same identity. Bridge does not configure a proxy for the remote host. Transient disconnects retain draft text and selected Skills. Permission controls follow the execution runtime and its policy on local and SSH CLI chats; App-owned chats use their existing owner. Changes apply to subsequent turns and require effective runtime confirmation. Editing/forking, rename and side chats remain unavailable for CLI-origin chats.
 
 Codex and Claude CLI access have separate account sections and configurations. Desktop switches offer opt-in local CLI synchronization and separate verification results. Codex shared-configuration effects are stated explicitly; SSH settings remain on their hosts. Claude Code CLI chats can be created from existing local or SSH projects with their selected configuration and directory; this does not claim control of an arbitrary live Claude terminal. Claude Code supports closed-session resume, creation, replies, model/permission controls, Skills, uploads, approvals and interrupt. Unknown context capacity remains neutral rather than inferring a percentage from billed tokens.
 

@@ -77,7 +77,12 @@ class ClaudeConnectionProbe(unittest.TestCase):
         def respond():
             deadline = time.monotonic() + 2
             while time.monotonic() < deadline:
-                packet = json.loads((self.adapter.directory/'request.json').read_text())
+                try:
+                    packet = json.loads((self.adapter.directory/'request.json').read_text())
+                except PermissionError:
+                    # Windows can deny a read during the mailbox's atomic replace.
+                    time.sleep(.01)
+                    continue
                 request = json.loads(packet['payload'])
                 if request['type'] == 'request' and request['seq'] > 1:
                     requests.append(request)

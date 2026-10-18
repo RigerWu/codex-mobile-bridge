@@ -320,6 +320,7 @@ class Handler(BaseHTTPRequestHandler):
                 return self.output(200, {"uiLanguage": self.server.ui_language(), "authenticated": bool(session), "trustedDevice": bool(session and session.get("trustedDevice")), "csrf": session["csrf"] if session else None,
                                          "loginStatus": self.server.auth.login_status(self.client()["ip"]),
                                          "instanceId": self.server.instance_id, "cookieName": self.server.auth.cookie_name,
+                                         **({'draftIdentity': self.server.auth.draft_identity} if session else {}),
                                          **({'listCacheIdentity': hashlib.sha256((self.server.instance_id + '\0' + session['csrf']).encode()).hexdigest()} if session else {}),
                                          **({"computer": {"name": socket.gethostname(), "platform": platform.system()}} if session else {}),
                                          **({'connection': discovery.descriptor(self.token())} if session and discovery else {}),
@@ -472,7 +473,10 @@ class Handler(BaseHTTPRequestHandler):
                 if len(parts) != 4 or parts[2] not in ('deepseek', 'claude') or parts[3] not in (WRITES if write else READS):
                     return self.output(404, {'error': '接口不存在'})
                 manager.require_enabled(parts[2])
-                body = self.read_json() if write else {}
+                body = self.read_json() if write else ({'section': query.get('section', ['all'])[0],
+                                                         'refresh': query.get('refresh') == ['true']}
+                                                        if parts[3] == 'catalog' else
+                                                        {'refresh': query.get('refresh') == ['true']} if parts[3] == 'account' else {})
                 sid = body.pop('sessionId', None) if write else query.get('sessionId', [None])[0]
                 if write and any(key in body for key in ('resolvedImages', 'resolvedFiles')):
                     raise ValueError('附件格式无效')
@@ -1003,7 +1007,7 @@ class Handler(BaseHTTPRequestHandler):
 
     def desktop_image_preview(self, bridge, thread_id, image_id):
         artifact, served_variant = bridge.desktop_image_preview(thread_id, image_id)
-        data = Path(artifact["previewPath"]).read_bytes()
+        data = artifact['previewBytes'] if 'previewBytes' in artifact else Path(artifact["previewPath"]).read_bytes()
         etag = '"' + artifact["previewSha256"] + '"'
         if self.headers.get("If-None-Match") == etag:
             self.send_response(304)

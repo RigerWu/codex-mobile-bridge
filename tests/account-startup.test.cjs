@@ -7,7 +7,7 @@ async function fixture(read,kind='chatgpt',catalog=null,gatewayLanguage,accountS
   const nodes=new Map(),timers=new Map(),requests=[],intervals=[],events={},responses=[];let timerId=0,delayNextSkill=null,failNextSkill=false;
   const node=(tag='div')=>({tagName:tag.toUpperCase(),getBoundingClientRect(){return {width:0};},value:'',checked:false,disabled:false,hidden:false,open:false,textContent:'',dataset:{},options:[],children:[],style:{setProperty(k,v){this[k]=v;}},scrollTop:0,parentElement:{},
     classList:{add(){},remove(){},toggle(){},contains(){return false;}},addEventListener(){},setAttribute(k,v){this[k]=v;},closest(selector){return selector==='dialog'?nodes.get('accounts-dialog'):null;},
-    replaceChildren(...children){this.children=children;},append(...children){for(const child of children){child.parentElement=this;this.children.push(child);}},after(child){const parent=this.parentElement;if(parent?.children){parent.children.splice(parent.children.indexOf(this)+1,0,child);child.parentElement=parent;}},querySelectorAll(){return [];},querySelector(){return null;},
+    replaceChildren(...children){for(const child of this.children)child.parentElement=null;this.children=[];this.append(...children);},append(...children){for(const child of children){child.remove?.();child.parentElement=this;this.children.push(child);}},insertBefore(child,before){if(child===before)return child;child.remove?.();const index=before?this.children.indexOf(before):-1;this.children.splice(index<0?this.children.length:index,0,child);child.parentElement=this;return child;},remove(){const parent=this.parentElement;if(parent?.children)parent.children=parent.children.filter(child=>child!==this);this.parentElement=null;},after(child){const parent=this.parentElement;if(parent?.children){parent.children.splice(parent.children.indexOf(this)+1,0,child);child.parentElement=parent;}},querySelectorAll(){return [];},querySelector(){return null;},
     showModal(){this.open=true;},close(){this.open=false;}});
   const html=fs.readFileSync(path.join(__dirname,'../web/index.html'),'utf8');
   for(const match of html.matchAll(/<([a-z]+)\b([^>]*\bid="([^"]+)"[^>]*)>/g)){
@@ -15,7 +15,7 @@ async function fixture(read,kind='chatgpt',catalog=null,gatewayLanguage,accountS
   }
   const storage=()=>({getItem(){return null;},setItem(){},clear(){}});
   const response=(data,status=200)=>({ok:status===200,status,json:async()=>data});
-  const context=vm.createContext({ClientNavigation:class{constructor(){this.provider="codex";}async refresh(){}async openChatLink(hash){assert.equal(hash,'','This fixture enters without a chat deep link');return false;}},DesktopSessionsView:class{clear(){}},Workbench:class{open(){}reset(){}setThumbnails(){}relabel(){}},Event:class{constructor(type){this.type=type;}},navigator:{userAgent:'test'},Date,Option:function(text,value){return {...node('option'),textContent:text,value};},document:{addEventListener(){},dispatchEvent(){},documentElement:{},getElementById:id=>nodes.get(id),querySelector:()=>({classList:{toggle(){}}}),querySelectorAll:()=>[],createElement:node},
+  const context=vm.createContext({ClientNavigation:class{constructor(){this.provider="codex";}async refresh(){}async openChatLink(hash){assert.equal(hash,'','This fixture enters without a chat deep link');return false;}},DesktopSessionsView:class{bindListCache(){}previewCachedList(){return false;}clear(){}},Workbench:class{open(){}reset(){}setThumbnails(){}relabel(){}},Event:class{constructor(type){this.type=type;}},navigator:{userAgent:'test'},Date,Option:function(text,value){return {...node('option'),textContent:text,value};},document:{addEventListener(){},dispatchEvent(){},documentElement:{},getElementById:id=>nodes.get(id),querySelector:()=>({classList:{toggle(){}}}),querySelectorAll:()=>[],createElement:node},
     window:{addEventListener:(name,fn)=>events[name]=fn},localStorage:storage(),sessionStorage:storage(),
     location:{hash:'',pathname:'/',search:''},history:{replaceState(){}},
     setTimeout(fn,delay){timers.set(++timerId,{fn,delay});return timerId;},clearTimeout(id){timers.delete(id);},setInterval(fn,delay){intervals.push({fn,delay});},
@@ -96,10 +96,14 @@ test('API chat picker shows upstream Gemini models and requires replacing the un
  const select=ui.nodes.get('model-select');assert.ok(select.children.some(o=>o.value==='gemini-fixture'));
  assert.equal(select.children.some(o=>o.value.startsWith('gpt')),false);assert.equal(select.value,'');
  assert.match(ui.nodes.get('model-error').textContent,/当前聊天模型不在上游/);assert.equal(ui.nodes.get('model-save').disabled,true);
- assert.equal(ui.responses.length,0);select.value='gemini-fixture';select.onchange();
+ assert.equal(ui.responses.length,0);
+ const modelChoice=ui.nodes.get('model-options').children.find(row=>row.children[0].value==='gemini-fixture').children[0];
+ modelChoice.checked=true;modelChoice.onchange();assert.equal(select.value,'gemini-fixture');
+ const effortChoice=ui.nodes.get('effort-options').children.find(row=>row.children[0].value==='xhigh').children[0];
+ effortChoice.checked=true;effortChoice.onchange();
  assert.equal(ui.nodes.get('model-save').disabled,false);assert.equal(ui.nodes.get('fast-mode-control').hidden,true);
  await ui.nodes.get('model-form').onsubmit({preventDefault(){}});
- assert.equal(ui.responses[0].model,'gemini-fixture');assert.equal(ui.responses[0].effort,'high');
+ assert.equal(ui.responses[0].model,'gemini-fixture');assert.equal(ui.responses[0].effort,'xhigh');
  assert.equal(ui.responses[0].fastMode,undefined);
 });
 test('API model discovery failure shows its error with manual input instead of stale GPT options',async()=>{
@@ -109,6 +113,21 @@ test('API model discovery failure shows its error with manual input instead of s
  assert.match(ui.nodes.get('model-error').textContent,/上游拒绝/);assert.equal(ui.nodes.get('custom-model-label').hidden,false);
  assert.equal(ui.nodes.get('model-select').children.some(o=>o.value.startsWith('gpt')),false);
  assert.equal(ui.responses.length,0);
+});
+
+test('a native aggregate route exposes Fast and submits the full routed model ID',async()=>{
+ const route='route/gpt-fixture',other='route/other-fixture',catalog={models:[{id:route,name:'GPT fixture',efforts:['high'],fastTier:'priority'},{id:other,name:'Other fixture',efforts:['low']}],modelSource:'codex',fastMode:{allowed:true,provider:'custom'}};
+ const ui=await fixture(r=>r(official),'api',catalog);
+ ui.run("currentId='11111111-1111-4111-8111-111111111111';state={model:'route/gpt-fixture',provider:'custom',connected:true,effort:'high',serviceTier:'default'}");
+ await ui.nodes.get('model-button').onclick();assert.equal(ui.nodes.get('fast-mode-control').hidden,false);assert.equal(ui.nodes.get('fast-mode-enabled').checked,false);
+ const choices=ui.nodes.get('model-options').children;
+ const choose=id=>{const input=choices.find(row=>row.children[0].value===id).children[0];input.checked=true;input.onchange();};
+ choose(other);assert.equal(ui.nodes.get('model-select').value,other);assert.equal(ui.nodes.get('fast-mode-control').hidden,true);
+ choose(route);assert.equal(ui.nodes.get('model-select').value,route);assert.equal(ui.nodes.get('fast-mode-control').hidden,false);
+ assert.equal(ui.nodes.get('effort-options').children[0].children[0].value,'high');
+ ui.nodes.get('fast-mode-enabled').checked=true;ui.nodes.get('fast-mode-enabled').onchange();
+ await ui.nodes.get('model-form').onsubmit({preventDefault(){}});
+ assert.deepEqual(ui.responses[0],{model:route,effort:'high',fastMode:true});
 });
 test('selected skill pills render before the catalog response arrives',async()=>{
   const ui=await fixture(r=>r(official));
@@ -268,14 +287,17 @@ test('account switch discards API model capabilities before opening the official
  await ui.nodes.get('model-form').onsubmit({preventDefault(){}});
  assert.equal(ui.responses.at(-1).effort,'low');
 });
-test('official model with unknown capabilities does not offer every effort or allow saving',async()=>{
- const catalog={models:[{id:'official-missing',name:'Missing',efforts:[]}],modelSource:'codex'};
+test('official model with unknown capabilities explains the disabled save until a supported model is selected',async()=>{
+ const catalog={models:[{id:'official-missing',name:'Missing',efforts:[]},{id:'official-ready',name:'Ready',efforts:['high']}],modelSource:'codex'};
  const ui=await fixture(r=>r(official),'chatgpt',catalog);
  ui.run("currentId='11111111-1111-4111-8111-111111111111';state={connected:true,model:'official-missing',effort:'minimal'}");
  await ui.nodes.get('model-button').onclick();
  assert.equal(ui.nodes.get('effort-select').disabled,true);
  assert.equal(ui.nodes.get('effort-select').children.some(o=>o.value==='none'||o.value==='minimal'),false);
  assert.equal(ui.nodes.get('model-save').disabled,true);
+ assert.match(ui.nodes.get('model-error').textContent,/未能读取此模型/);
+ ui.nodes.get('model-select').value='official-ready';ui.nodes.get('model-select').onchange();
+ assert.equal(ui.nodes.get('model-error').textContent,'');assert.equal(ui.nodes.get('model-save').disabled,false);
 });
 test('model default must belong to its supported efforts',async()=>{
  const catalog={models:[{id:'official-fixture',name:'Fixture',efforts:['low','high'],defaultEffort:'minimal'}],modelSource:'codex'};
@@ -286,16 +308,89 @@ test('model default must belong to its supported efforts',async()=>{
 });
 
 
-test('explicit upstream refresh replaces the list and reports its access name',async()=>{
+test('model picker uses the backend cache on every open and only explicit refresh bypasses it',async()=>{
  const catalog={models:[{id:'gpt-fixture',name:'GPT',efforts:[]}],modelSource:'api',modelAccessName:'Old access'};
  const ui=await fixture(r=>r(official),'api',catalog);
  ui.run("currentId='11111111-1111-4111-8111-111111111111';state={connected:true,model:'gpt-fixture',effort:'high'}");
  await ui.nodes.get('model-button').onclick();
+ const modelReads=()=>ui.requests.filter(r=>r.includes('catalog?kind=models'));
+ assert.equal(modelReads().length,1);assert.equal(modelReads()[0].includes('refresh=true'),false);
+ ui.nodes.get('model-dialog').close();await ui.nodes.get('model-button').onclick();assert.equal(modelReads().length,2);
+ assert.equal(modelReads()[1].includes('refresh=true'),false);
  catalog.models=[{id:'gemini-pro',name:'Gemini',efforts:[]}];catalog.modelAccessName='suopan-antigravity';
  await ui.nodes.get('model-refresh').onclick();
  assert.equal(ui.nodes.get('model-select').children.some(o=>o.value==='gpt-fixture'),false);
  assert.equal(ui.nodes.get('model-select').children.some(o=>o.value==='gemini-pro'),true);
- assert.match(ui.nodes.get('model-access').textContent,/suopan-antigravity/);
  assert.equal(ui.responses.length,0);
- assert.ok(ui.requests.filter(r=>r.includes('catalog?kind=models&refresh=true')).length>=2);
+ assert.equal(modelReads().length,3);assert.equal(modelReads()[2].includes('refresh=true'),true);
+});
+
+
+test('a provider change replaces its model list and discards an old in-flight response',async()=>{
+ const catalog={models:[{id:'old',name:'Old'}],modelSource:'api'},ui=await fixture(r=>r(official),'api',catalog);
+ ui.run("currentId='11111111-1111-4111-8111-111111111111';state={connected:true,provider:'old',model:'old'};var releaseOld;const readApi=api;api=(url,body)=>url.includes('catalog?kind=models')&&state.provider==='old'?new Promise(resolve=>releaseOld=resolve):readApi(url,body)");
+ const pending=ui.nodes.get('model-button').onclick();
+ catalog.models=[{id:'new',name:'New'}];ui.run("state.provider='new';state.model='new'");
+ await ui.nodes.get('model-button').onclick();
+ ui.run("releaseOld({modelSource:'api',models:[{id:'old',name:'Old'}]})");await pending;
+ assert.deepEqual(ui.nodes.get('model-select').children.map(row=>row.value),['','new','__custom__']);
+ assert.equal(ui.nodes.get('model-error').textContent,'');
+});
+
+test('reopening a failed model query reads the recovered backend result',async()=>{
+ const catalog={models:[],modelSource:'api',modelError:'Temporary failure'},ui=await fixture(r=>r(official),'api',catalog);
+ ui.run("currentId='11111111-1111-4111-8111-111111111111';state={connected:true,provider:'api'}");
+ await ui.nodes.get('model-button').onclick();assert.match(ui.nodes.get('model-error').textContent,/Temporary failure/);
+ delete catalog.modelError;catalog.models=[{id:'ready',name:'Ready'}];
+ await ui.nodes.get('model-button').onclick();
+ assert.equal(ui.requests.filter(url=>url.includes('catalog?kind=models')).length,2);
+ assert.ok(ui.nodes.get('model-select').children.some(row=>row.value==='ready'));
+ assert.doesNotMatch(ui.nodes.get('model-error').textContent,/Temporary failure/);
+});
+test('same chat reopens model rows before a delayed catalog read',async()=>{
+ const catalog={models:[{id:'ready',name:'Ready',efforts:['low']}],modelSource:'codex',cache:{identity:'a'.repeat(64),updatedAt:1000}},ui=await fixture(r=>r(official),'chatgpt',catalog);
+ ui.run("currentId='11111111-1111-4111-8111-111111111111';state={connected:true,provider:'chatgpt',model:'ready',modelCatalogIdentity:'"+'a'.repeat(64)+"'}");
+ await ui.nodes.get('model-button').onclick();assert.match(ui.nodes.get('model-updated').textContent,/更新于：/);
+ ui.run("var releaseCatalog;const originalApi=api;api=(url,body)=>url.includes('catalog?kind=models')?new Promise(resolve=>releaseCatalog=resolve):originalApi(url,body)");
+ const pending=ui.nodes.get('model-button').onclick();assert.ok(ui.nodes.get('model-options').children.some(row=>row.children[0].value==='ready'));
+ ui.run("releaseCatalog({models:[{id:'ready',name:'Ready',efforts:['low']}],modelSource:'codex',cache:{identity:'"+'a'.repeat(64)+"',updatedAt:1000}})");await pending;
+ assert.match(ui.nodes.get('model-updated').textContent,/更新于：/);
+});
+test('a late catalog from another gateway cannot populate the current cache',async()=>{
+ const identity='a'.repeat(64),catalog={models:[{id:'ready',efforts:['low']}],cache:{identity,updatedAt:1000}},ui=await fixture(r=>r(official),'chatgpt',catalog);
+ ui.run("currentId='11111111-1111-4111-8111-111111111111';listIdentity='gateway-a';state={connected:true,provider:'chatgpt',model:'ready',modelCatalogIdentity:'"+identity+"'};var releaseGateway;const originalApi=api;api=(url,body)=>url.includes('catalog?kind=models')?new Promise(resolve=>releaseGateway=resolve):originalApi(url,body)");
+ const pending=ui.nodes.get('model-button').onclick();ui.run("listIdentity='gateway-b';releaseGateway({models:[{id:'ready',efforts:['low']}],cache:{identity:'"+identity+"',updatedAt:1000}})");await pending;
+ assert.equal(ui.run('modelCatalogs.size'),0);assert.equal(ui.run('catalogResults.models'),null);
+});
+
+test('legacy model fields are normalized and a failed directory ends the loading state',async()=>{
+ const ui=await fixture(r=>r(official),'api',{modelSource:'api',models:[{model:'legacy',displayName:'Legacy name'},'string-model']});
+ ui.run("currentId='11111111-1111-4111-8111-111111111111';state={connected:true,provider:'api'}");
+ await ui.nodes.get('model-button').onclick();
+ assert.ok(ui.nodes.get('model-select').children.some(row=>row.value==='legacy'&&row.textContent==='Legacy name'));
+ assert.ok(ui.nodes.get('model-select').children.some(row=>row.value==='string-model'));
+ ui.run("api=async()=>{throw Error('Offline')}");await ui.nodes.get('model-refresh').onclick();
+ assert.ok(ui.nodes.get('model-options').children.some(row=>row.children[0].value==='legacy'),'failed refresh keeps visible rows');
+ assert.match(ui.nodes.get('model-error').textContent,/Offline/);
+ assert.equal(ui.nodes.get('model-save').disabled,true);assert.equal(ui.nodes.get('model-refresh').disabled,false);
+});
+
+test('a failed model save retains the selected effort and pending Fast preference',async()=>{
+ const ui=await fixture(r=>r(official),'chatgpt',{modelSource:'codex',models:[{id:'model',name:'Model',efforts:['low','high'],fastTier:'priority'}],fastMode:{allowed:true,provider:'openai'}});
+ ui.run("currentId='11111111-1111-4111-8111-111111111111';state={connected:true,provider:'openai',model:'model',effort:'high',serviceTier:'default'}");
+ await ui.nodes.get('model-button').onclick();ui.nodes.get('effort-select').value='low';
+ ui.nodes.get('fast-mode-enabled').checked=true;ui.nodes.get('fast-mode-enabled').onchange();
+ ui.run("api=async()=>{throw Error('Save failed')}");await ui.nodes.get('model-form').onsubmit({preventDefault(){}});
+ assert.equal(ui.nodes.get('effort-select').value,'low');assert.equal(ui.nodes.get('fast-mode-enabled').checked,true);
+ assert.equal(ui.run('fastModeControl.payload().fastMode'),true);assert.match(ui.nodes.get('model-error').textContent,/Save failed/);
+});
+
+test('large model lists resolve display metadata with linear work',async()=>{
+ const catalog={modelSource:'api',models:Array.from({length:1000},(_,i)=>({id:'model-'+i,name:'Model '+i}))};
+ const ui=await fixture(r=>r(official),'api',catalog);
+ ui.run("currentId='11111111-1111-4111-8111-111111111111';state={connected:true,provider:'api'}");
+ await ui.nodes.get('model-button').onclick();
+ const reads=ui.run("var idReads=0;for(const row of catalogData.models){const id=row.id;Object.defineProperty(row,'id',{get(){idReads++;return id;}});}renderModelChoices();idReads");
+ assert.ok(reads<=catalog.models.length*3,'rendering should scale with the model count');
+ assert.equal(ui.nodes.get('model-options').children.length,1001);
 });

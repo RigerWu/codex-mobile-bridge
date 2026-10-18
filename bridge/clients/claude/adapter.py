@@ -733,6 +733,8 @@ class Claude:
             return {'connected': True, 'session': row, 'messages': model.transcript(raw), 'turns': model.turns(raw), 'notice': model.transcript_notice(raw),
                     'capabilities': capabilities, 'maxRequestBytes': MAX_REQUEST}
         if action == 'catalog':
+            if body.get('section') == 'selection':
+                return {'currentModel': row.get('model'), 'currentEffort': row.get('effort')}
             value = await self.desktop.call(kind, 'mobileCatalog', native)
             value.update(currentModel=row.get('model'), currentEffort=row.get('effort'))
             return value

@@ -6,6 +6,7 @@ import json
 import logging
 import os
 import re
+import sqlite3
 import subprocess
 import threading
 import time
@@ -22,16 +23,19 @@ from bridge.clients.codex.ipc import DesktopIPC, IPCError
 from bridge.clients.codex.app_server import AppServerError, AppServerUnavailable
 from bridge.clients.codex.cli_session import CliSessions
 from bridge.clients.codex.transport import ipc_endpoint
-from bridge.features.sessions.model import apply_patches, computer_use_approval, items_array, normalize_state, normalize_request, ordered_turns, pending_requests, async_requests, request_id, user_display_text
+from bridge.features.sessions.model import apply_patches, attachment_prompt, computer_use_approval, items_array, normalize_state, normalize_request, ordered_turns, pending_requests, async_requests, request_id, user_display_text
 from bridge.features.sessions.store import SessionStore, StoreUnavailable
 from bridge.features.workspace.files import artifact_paths, referenced_model_images
 from bridge.features.workspace.workspace import operate as workspace_operation
-from bridge.clients.codex.catalog import Catalog
+from bridge.clients.codex.catalog import Catalog, CatalogError, ModelStore, MODEL_REFRESH_SECONDS
+from bridge.platforms.codex_daemon_env import DaemonEnvironmentUnavailable
 from bridge.clients.codex.remote import AppHosts, RemoteStore, RemoteCatalog, RemoteUnavailable, ssh_read, ssh_download, payload
 from bridge.features.sessions.create import rename_thread, independent_directory, create_empty, fork_copy, open_in_desktop, CreationError, CreationUnavailable, ForkUnavailable
 from bridge.features.sessions.timeline import Timeline
+from bridge.features.sessions.tool_images import TOOL_IMAGE_CACHE, public_turns
 from bridge.features.accounts.account import Account
 from bridge.features.accounts.accounts import Accounts, operation
+from bridge.features.accounts.draft_identity import codex_account_identity, draft_identity
 from bridge.features.accounts.cli_access import CliAccess
 from bridge.features.sessions.goal import GoalRPC, GoalError, GoalUnavailable, GoalUnsupported, goal_activation, goal_identity, normalize_goal_result, normalize_ui_locale, goal_command_fingerprint, goal_state_confirms_command, native_goal_absent, normalize_goal, plan_goal_command, read_native_goal
 from bridge.features.workspace.uploads import Uploads, image_type
@@ -39,7 +43,7 @@ from bridge.clients.codex.remote import upload_file
 
 
 class LiveSession:
-    def __init__(self, thread_id):
+    def __init__(self, thread_id, *, image_cache=None):
         self.id = thread_id
         self.owner = None
         self.origin = "desktop"
@@ -77,20 +81,24 @@ class LiveSession:
         self.activation_lock = threading.Lock()
         self.action_lock = threading.RLock()
         self.timeline = Timeline()
+        self.tool_image_cache = image_cache if image_cache is not None else TOOL_IMAGE_CACHE
+        self.tool_images = {}
+        self.tool_images_sequence = -1
 
     def changed(self):
         self.sequence += 1
         self.condition.notify_all()
 
     def set_history(self, state):
-        self.saved_view = normalize_state(state, False)
+        self.saved_view = normalize_state(state, False, image_cache=self.tool_image_cache)
         if self.state is None or not self.connected:
             self.state = state
         self.changed()
 
     def view(self):
         with self.condition:
-            result = normalize_state(self.state or {"id": self.id}, self.connected)
+            result = normalize_state(self.state or {"id": self.id}, self.connected,
+                                     image_cache=self.tool_image_cache)
             if self.runtime == 'cli':
                 result['permissionMode'] = linux_permissions.current_mode(self.state)
             if self.saved_view and result['contextUsage'] is None:
@@ -123,13 +131,31 @@ class LiveSession:
             result["loadingHistory"] = self.state is None
             if self.access is not None:
                 result["access"] = dict(self.access)
+            self.tool_images = {
+                attachment['desktopId']: dict(attachment)
+                for turn in result['turns'] for message in turn['messages']
+                for attachment in message.get('attachments') or []
+                if attachment.get('type') == 'toolImage' and attachment.get('desktopId')
+            }
+            self.tool_images_sequence = self.sequence
+            # Base64 stays in the private index; state, polls and SSE carry ids only.
+            result['turns'] = public_turns(result['turns'])
             return result
+
+    def tool_image(self, image_id):
+        with self.condition:
+            if self.tool_images_sequence != self.sequence:
+                self.view()
+            return self.tool_images.get(image_id)
 
 
 class Bridge:
     def __init__(self, codex_home, data_dir, host="local", alias=None, ipc_path=None, codex_bin=None, goal_rpc=None, owner_goal=None, cli_sessions=None):
         self.host = host
         self.codex_home = Path(codex_home)
+        self._draft_remote_lock = threading.Lock()
+        self._draft_remote_cache = {}
+        self._draft_remote_pending = set()
         self.data_dir = Path(data_dir)
         self.hosts = AppHosts(codex_home)
         self.remote_bridges = {}
@@ -161,6 +187,11 @@ class Bridge:
         self.side_chats = SideChats(codex_bin, self.codex_home, self.data_dir, host,
                                    executable_getter=executable_getter)
         self.closed = threading.Event()
+        self.native_model_store = ModelStore(self.data_dir)
+        self.native_model_lock = threading.Lock()
+        self.native_model_reads = {}
+        self.native_model_timers = {}
+        self.native_model_refreshing = set()
         Path(data_dir).mkdir(parents=True, exist_ok=True, mode=0o700)
         self.ledger_path = Path(data_dir) / "submissions.json"
         self.submit_lock = threading.Lock()
@@ -1141,7 +1172,11 @@ class Bridge:
                 if policy['type'] not in modes:
                     raise ValueError('当前权限配置暂不支持临时侧边聊天')
                 settings['sandbox'] = modes[policy['type']]
-        return self.side_chats.operate(thread_id, action, body, snapshot, settings, self.catalog_reader)
+        result = self.side_chats.operate(thread_id, action, body, snapshot, settings, self.catalog_reader)
+        if (self.host == 'local' and isinstance(result, dict) and result.get('id') and
+                result.get('cwd') and result.get('provider')):
+            result['modelCatalogIdentity'] = self.catalog_reader.model_identity(result['cwd'], result['provider'])
+        return result
 
     def side_attachment(self, thread_id, child, operation, *args):
         self.store.get(thread_id)
@@ -1210,7 +1245,7 @@ class Bridge:
         def refresh():
             try:
                 fallback = self._saved_history(session)
-                normalized = normalize_state(fallback, False)
+                normalized = normalize_state(fallback, False, image_cache=session.tool_image_cache)
                 with session.condition:
                     if not session.connected and session.saved_view != normalized:
                         session.set_history(fallback)
@@ -1249,7 +1284,7 @@ class Bridge:
                     try:
                         fallback = self._saved_history(session)
                         with session.condition:
-                            if session.saved_view != normalize_state(fallback, False):
+                            if session.saved_view != normalize_state(fallback, False, image_cache=session.tool_image_cache):
                                 session.set_history(fallback)
                             session.history_retry_at = time.monotonic() + 2
                     except (OSError, ValueError, KeyError, RemoteUnavailable, StoreUnavailable):
@@ -1568,6 +1603,57 @@ class Bridge:
         target.chmod(0o600)
         target.replace(self.ledger_path)
 
+    def _draft_account_identity(self, view):
+        provider = view.get('provider')
+        if not isinstance(provider, str) or not provider:
+            return ''
+        if self.host != 'local':
+            alias = self.cli_sessions.alias
+            if not alias:
+                return ''
+            home = str(self.cli_sessions.remote_home) if self.cli_sessions.remote_home else None
+            key = (self.host, alias, home, provider)
+            with self._draft_remote_lock:
+                cached = self._draft_remote_cache.get(key)
+                if cached and time.monotonic() - cached[0] < 30:
+                    return cached[1]
+                if key in self._draft_remote_pending:
+                    return cached[1] if cached else ''
+                self._draft_remote_pending.add(key)
+            threading.Thread(target=self._probe_remote_draft_identity,
+                             args=(key, alias, home, provider), daemon=True,
+                             name='remote-draft-identity').start()
+            return cached[1] if cached else ''
+        try:
+            if provider in ('openai', 'bridge_api') and self.accounts:
+                with self.accounts.lock:
+                    if self.accounts.active_matches():
+                        row = self.accounts.row(self.accounts.index['activeId'])
+                        if row['kind'] == 'api':
+                            key = json.loads((self.accounts.directory(row['id'])/'api.json').read_text(encoding='utf-8')).get('key')
+                            return draft_identity('codex', self.host, provider, row['id'], row['baseUrl'], key) if key else ''
+                        return draft_identity('codex', self.host, provider, 'chatgpt', row['id'])
+            owner = codex_account_identity(self.codex_home, provider)
+            return draft_identity('codex', self.host, provider, owner) if owner else ''
+        except (OSError, ValueError, KeyError, TypeError, AttributeError):
+            pass
+        return ''
+
+    def _probe_remote_draft_identity(self, key, alias, home, provider):
+        try:
+            source = source_text('features/accounts/draft_identity.py')
+            source += '\nimport json, os\nfrom pathlib import Path\n'
+            source += 'request = ' + payload({'home': home, 'provider': provider}) + '\n'
+            source += 'home = request["home"] or os.environ.get("CODEX_HOME") or str(Path.home()/".codex")\n'
+            source += 'print(json.dumps({"identity": codex_account_identity(home, request["provider"])}))\n'
+            owner = ssh_read(alias, source, timeout=12).get('identity')
+            identity = draft_identity('codex', key[0], provider, owner) if owner else ''
+        except (OSError, ValueError, RemoteUnavailable, KeyError, TypeError):
+            identity = ''
+        with self._draft_remote_lock:
+            self._draft_remote_cache[key] = (time.monotonic(), identity)
+            self._draft_remote_pending.discard(key)
+
     def view(self, thread_id, attach=True, background=False, force=False):
         session = self.session(thread_id, attach=attach, background=background, force=force)
         goal_available = self._refresh_session_goal(session)
@@ -1579,7 +1665,17 @@ class Bridge:
             with session.condition:
                 view["permissionMode"] = linux_permissions.current_mode(session.state)
         view["host"] = self.host
+        view['draftAccountIdentity'] = self._draft_account_identity(view)
         view["hostLabel"] = "此电脑" if self.host == "local" else self.hosts.hosts().get(self.host, {}).get("displayName", self.host)
+        if self.host == 'local' and session.origin != 'cli':
+            cwd = view.get('cwd')
+            provider = view.get('provider')
+            if cwd:
+                try:
+                    selected = self.accounts.current_model_identity() if self.host == 'local' and self.accounts else None
+                    view['modelCatalogIdentity'] = selected or self.catalog_reader.model_identity(cwd, provider)
+                except (OSError, ValueError, KeyError):
+                    pass
         view["goalTransport"] = 'cli' if session.connected and session.runtime == 'cli' else self.goal_transport
         view["goalRuntimeAvailable"] = goal_available
         view["goalActivationIds"] = sorted(self._goal_activation_ids(thread_id))
@@ -1713,9 +1809,10 @@ class Bridge:
         if not agent_id: return self.store.subagents(thread_id)
         uuid.UUID(agent_id)
         state = self.store.subagent_history(thread_id, agent_id)
-        view = normalize_state(state, False)
+        view = normalize_state(state, False, image_cache=TOOL_IMAGE_CACHE)
         # Saved logs are evidence of the last recorded state, not a live heartbeat.
-        return {'id': agent_id, 'title': view['title'], 'turns': view['turns'],
+        # Subagent screenshots have no preview route; omit their descriptors.
+        return {'id': agent_id, 'title': view['title'], 'turns': public_turns(view['turns'], image_previews=False),
                 'historyComplete': view['historyComplete'], 'saved': True}
 
     def terminal(self, thread_id, owner, action, params):
@@ -1783,10 +1880,18 @@ class Bridge:
                 attachment.pop('path', None)
 
     def desktop_image_preview(self, thread_id, image_id):
-        """Serve a desktop-side image that is referenced by the saved thread."""
+        """Serve an image evidenced by this thread, without activating its owner."""
         if not re.fullmatch(r'[0-9a-f]{64}', image_id):
             raise ValueError('桌面图片标识无效')
         session = self.session(thread_id, attach=False)
+        attachment = session.tool_image(image_id)
+        if attachment is not None:
+            raw = session.tool_image_cache.preview(attachment)
+            # A patch may have removed/replaced the image while decoding outside
+            # the session lock. Cached bytes alone never authorize a preview.
+            if raw is not None and session.tool_image(image_id) == attachment:
+                return {'previewBytes': raw, 'previewMime': attachment['mime'],
+                        'previewSha256': image_id, 'name': attachment['name']}, 'tool'
         paths = []
         with session.condition:
             for turn in ordered_turns(session.state or {}):
@@ -1896,6 +2001,8 @@ class Bridge:
                            for item in items_array(turn.get('items')) if item.get('type') in ('ImageView', 'imageView')]
         # Resolve links in the delivered page, plus runtime ImageView evidence
         # retained separately from the paged message text.
+        if mode != 'detail':
+            result['meta']['draftAccountIdentity'] = self._draft_account_identity(authoritative_view)
         file_state = {'cwd': cwd, 'turns': [
             {'items': [{'type': 'agentMessage', 'text': text} for text in texts]},
             {'items': media_items},
@@ -1907,10 +2014,126 @@ class Bridge:
             result['meta']['forkedFrom'] = self._fork_origin(thread_id)
         return result
 
+    def _native_model_identity(self, cwd, provider):
+        request = self.cli_sessions.client.request
+        config = request('config/read', {'includeLayers': False, 'cwd': cwd}, replay_safe=True).get('config') or {}
+        if not isinstance(config, dict):
+            config = {}
+        try:
+            account = request('account/read', {'refreshToken': False}, replay_safe=True).get('account') or {}
+        except AppServerError:
+            account = {}
+        if not isinstance(account, dict):
+            account = {}
+        try:
+            local_auth = hashlib.sha256((self.codex_home/'auth.json').read_bytes()).hexdigest() if self.host == 'local' else None
+        except OSError:
+            local_auth = None
+        runtime_home = (self.cli_sessions.remote_home if self.cli_sessions.alias is not None
+                        else self.codex_home)
+        profile = (config.get('profiles') or {}).get(config.get('profile')) or {}
+        if not isinstance(profile, dict):
+            profile = {}
+        effective = {**config, **profile}
+        configured_catalog = (bool(effective.get('model_catalog_json')) and
+                              provider == (effective.get('model_provider') or 'openai'))
+        environment_identity = None
+        if (hasattr(self.cli_sessions, 'model_environment_identity') and
+                not configured_catalog and (Catalog.custom_provider(effective, provider) or
+                                            account.get('type') == 'apiKey')):
+            try:
+                environment_identity = self.cli_sessions.model_environment_identity(config, provider, account, cwd=cwd)
+            except (DaemonEnvironmentUnavailable, CatalogError):
+                environment_identity = 'unavailable'
+        return ModelStore.key('codex-cli-models-v3', self.host, self.cli_sessions.alias,
+                              str(runtime_home), cwd, provider, config, account, local_auth,
+                              environment_identity)
+
+    def _schedule_native_model_refresh(self, key, thread_id, cwd, provider, updated_at, replace=False):
+        with self.native_model_lock:
+            if replace and key in self.native_model_timers:
+                self.native_model_timers.pop(key).cancel()
+            if self.closed.is_set() or key in self.native_model_timers:
+                return
+            delay = max(1, updated_at + MODEL_REFRESH_SECONDS - time.time())
+            def due():
+                with self.native_model_lock:
+                    self.native_model_timers.pop(key, None)
+                    if key in self.native_model_refreshing or self.closed.is_set():
+                        return
+                    self.native_model_refreshing.add(key)
+                try:
+                    if self._native_model_identity(cwd, provider) == key:
+                        self._native_models(thread_id, cwd, provider, refresh=True)
+                except (OSError, ValueError, AppServerError):
+                    pass
+                finally:
+                    with self.native_model_lock:
+                        self.native_model_refreshing.discard(key)
+                    if not self.closed.is_set():
+                        try:
+                            record = self.native_model_store.read(key)
+                        except (OSError, sqlite3.DatabaseError, ValueError):
+                            record = None
+                        if record:
+                            self._schedule_native_model_refresh(key, thread_id, cwd, provider,
+                                                                max(record[0], time.time()-MODEL_REFRESH_SECONDS+300))
+            timer = threading.Timer(delay, due)
+            timer.daemon = True
+            self.native_model_timers[key] = timer
+            timer.start()
+
+    def _native_models(self, thread_id, cwd, provider, refresh=False):
+        def stable(value):
+            return {key: copy.deepcopy(item) for key, item in value.items()
+                    if key not in ('currentModel', 'currentEffort')}
+
+        identity = self._native_model_identity(cwd, provider)
+        try:
+            persisted = self.native_model_store.read(identity)
+        except (OSError, sqlite3.DatabaseError, ValueError):
+            persisted = None
+        if persisted and not refresh:
+            self._schedule_native_model_refresh(identity, thread_id, cwd, provider, persisted[0])
+            return {**stable(persisted[1]), 'cache': {'state': 'fresh' if time.time()-persisted[0] < MODEL_REFRESH_SECONDS else 'stale',
+                                                    'updatedAt': persisted[0], 'identity': identity}}
+        with self.native_model_lock:
+            lock = self.native_model_reads.setdefault(identity, threading.Lock())
+        with lock:
+            if not refresh:
+                try:
+                    persisted = self.native_model_store.read(identity)
+                except (OSError, sqlite3.DatabaseError, ValueError):
+                    persisted = None
+                if persisted:
+                    return {**stable(persisted[1]), 'cache': {'state': 'fresh', 'updatedAt': persisted[0], 'identity': identity}}
+            try:
+                value = self.cli_sessions.get_kind(thread_id, 'models', refresh=refresh,
+                                                   query='', offset=0, limit=200, ids=None)
+            except (OSError, ValueError, AppServerError):
+                if persisted:
+                    return {**stable(persisted[1]), 'modelError': '模型列表刷新失败，已保留上次结果',
+                            'cache': {'state': 'stale', 'updatedAt': persisted[0], 'identity': identity}}
+                raise
+            if self._native_model_identity(cwd, provider) != identity:
+                raise ValueError('账号身份已变化，请重新读取模型列表')
+            if not value.get('modelError'):
+                try:
+                    updated_at = self.native_model_store.write(identity, stable(value))
+                    self._schedule_native_model_refresh(identity, thread_id, cwd, provider, updated_at, replace=True)
+                except (OSError, sqlite3.DatabaseError):
+                    updated_at = time.time()
+            elif persisted:
+                return {**stable(persisted[1]), 'modelError': value['modelError'],
+                        'cache': {'state': 'stale', 'updatedAt': persisted[0], 'identity': identity}}
+            if self._native_model_identity(cwd, provider) != identity:
+                raise ValueError('账号身份已变化，请重新读取模型列表')
+            return {**value, 'cache': {'state': 'fresh', 'updatedAt': updated_at, 'identity': identity}} if not value.get('modelError') else value
+
     def catalog(self, thread_id, refresh=False, kind=None, query='', offset=0, limit=200, ids=None):
         session = self.session(thread_id, attach=False, background=True)
         if session.origin != 'cli':
-            session = self.session(thread_id)
+            session = self.session(thread_id, attach=False)
         with session.condition:
             state = session.state or {}
             native = session.origin == 'cli' and session.runtime == 'cli' and session.connected
@@ -1922,27 +2145,27 @@ class Bridge:
             provider = session.view().get('provider')
         if native:
             if kind in ('models', 'skills'):
-                value = self.cli_sessions.get_kind(thread_id, kind, refresh=refresh, query=query,
-                                                   offset=offset, limit=limit, ids=ids)
+                value = (self._native_models(thread_id, cwd, provider, refresh=refresh) if kind == 'models' else
+                         self.cli_sessions.get_kind(thread_id, kind, refresh=refresh, query=query,
+                                                    offset=offset, limit=limit, ids=ids))
                 return {**value, 'kind': kind, **({'currentModel': model or value.get('currentModel'),
                         'currentEffort': effort or value.get('currentEffort')} if kind == 'models' else {})}
-            models = self.cli_sessions.get_kind(thread_id, 'models', refresh=refresh)
+            models = self._native_models(thread_id, cwd, provider, refresh=refresh)
             skills = self.cli_sessions.get_kind(thread_id, 'skills', refresh=refresh)
             return {**models, **skills, 'currentModel': model or models.get('currentModel'),
                     'currentEffort': effort or models.get('currentEffort')}
         selected = (self.accounts.current_models(refresh) if session.origin != 'cli' and
                     self.host == 'local' and self.accounts and kind != 'skills' else None)
-        if kind == 'models' and selected is not None:
-            return {**selected, 'kind':'models', 'currentModel':model, 'currentEffort':effort}
         if kind in ('models', 'skills'):
-            value = self.catalog_reader.get_kind(kind, cwd, refresh=refresh, provider=provider,
-                                                 **({'query':query, 'offset':offset, 'limit':limit, 'ids':ids} if kind == 'skills' else {}))
+            value = selected if kind == 'models' and selected is not None else self.catalog_reader.get_kind(
+                kind, cwd, refresh=refresh, provider=provider,
+                **({'query':query, 'offset':offset, 'limit':limit, 'ids':ids} if kind == 'skills' else {}))
             if kind == 'models':
                 with session.condition:
                     view = session.view()
                 return {**value, 'kind': 'models', 'currentModel': model or value.get('currentModel'),
                         'currentEffort': effort or value.get('currentEffort'),
-                        'fastMode': {**value.get('fastMode', {}), 'allowed': view.get('provider') == 'openai' and value.get('fastMode', {}).get('allowed') is True},
+                        'fastMode': {**value.get('fastMode', {}), 'allowed': view.get('provider') == value.get('fastMode', {}).get('provider', 'openai') and value.get('fastMode', {}).get('allowed') is True},
                         **({'currentServiceTier': view['serviceTier']} if 'serviceTier' in view else {})}
             return {**value, 'kind': 'skills'}
         catalog = ({**self.catalog_reader.get_kind('skills', cwd, refresh=refresh, provider=provider), **selected}
@@ -1951,7 +2174,7 @@ class Bridge:
             view = session.view()
         return {**catalog, "currentModel": model or catalog.get("currentModel"),
                 "currentEffort": effort or catalog.get("currentEffort"),
-                'fastMode': {**catalog.get('fastMode', {}), 'allowed': view.get('provider') == 'openai' and catalog.get('fastMode', {}).get('allowed') is True},
+                'fastMode': {**catalog.get('fastMode', {}), 'allowed': view.get('provider') == catalog.get('fastMode', {}).get('provider', 'openai') and catalog.get('fastMode', {}).get('allowed') is True},
                 **({'currentServiceTier': view['serviceTier']} if 'serviceTier' in view else {})}
 
     def _resolve_skills(self, session, skills):
@@ -2390,6 +2613,9 @@ class Bridge:
         submission_id = key.split(":")[1]
         text = entry["text"]
         files = self.uploads.resolve(session.id, entry.get('attachments', []))
+        # CLI start already adds context.fileAttachments to its prompt.
+        if session.runtime != 'cli':
+            text = attachment_prompt(text, files)
         request = {"threadId": session.id, "input": [{"type": "text", "text": text, "text_elements": []}], "clientUserMessageId": submission_id}
         request['input'].extend({'type': 'localImage', 'path': f['path']} for f in files if f['image'])
         context = {'attachments': [], 'commentAttachments': []}
@@ -2538,9 +2764,23 @@ class Bridge:
     def close(self):
         self.terminals.close()
         self.side_chats.close()
+        if self.cli_access:
+            self.cli_access.close()
         self.closed.set()
+        if hasattr(self.catalog_reader, 'stop_model_refresh'):
+            self.catalog_reader.stop_model_refresh()
+        with self.native_model_lock:
+            for timer in self.native_model_timers.values():
+                timer.cancel()
+            self.native_model_timers.clear()
         if self.host == "local" and self.accounts:
             self.accounts.login_cancel.set()
+            with self.accounts.lock:
+                for timer in self.accounts.api_model_timers.values():
+                    timer.cancel()
+                self.accounts.api_model_timers.clear()
+                for catalog in self.accounts.saved_model_catalogs.values():
+                    catalog.stop_model_refresh()
         for bridge in list(self.remote_bridges.values()):
             bridge.close()
         with self.lock:

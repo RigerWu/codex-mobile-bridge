@@ -53,12 +53,11 @@ final class BridgeNavigationController: UINavigationController {
 
 @main
 final class AppDelegate: UIResponder, UIApplicationDelegate, UNUserNotificationCenterDelegate {
-    var window: UIWindow?
     let controller = BridgeController()
+    private var pendingNotification: UNNotificationResponse?
+    private var lastNotificationRoute: (response: UNNotificationResponse, fromScene: Bool)?
     func application(_ application: UIApplication, didFinishLaunchingWithOptions options: [UIApplication.LaunchOptionsKey: Any]?) -> Bool {
         UNUserNotificationCenter.current().delegate = self
-        let window = UIWindow(frame: UIScreen.main.bounds); window.rootViewController = BridgeNavigationController(rootViewController: controller); window.makeKeyAndVisible(); self.window = window
-        if let url = options?[.url] as? URL { DispatchQueue.main.async { self.controller.openLink(url) } }
         return true
     }
     func application(_ application: UIApplication, didRegisterForRemoteNotificationsWithDeviceToken deviceToken: Data) {
@@ -66,12 +65,54 @@ final class AppDelegate: UIResponder, UIApplicationDelegate, UNUserNotificationC
         controller.registerNativePush()
     }
     func application(_ application: UIApplication, didFailToRegisterForRemoteNotificationsWithError error: Error) { controller.info(MobileStrings.text("系统推送注册失败，请检查推送签名与网络。")) }
-    func application(_ app: UIApplication, open url: URL, options: [UIApplication.OpenURLOptionsKey: Any] = [:]) -> Bool { controller.openLink(url); return true }
     func userNotificationCenter(_ center: UNUserNotificationCenter, didReceive response: UNNotificationResponse, withCompletionHandler completion: @escaping () -> Void) {
+        DispatchQueue.main.async { self.receiveNotification(response, fromScene: false) }
+        completion()
+    }
+    func receiveNotification(_ response: UNNotificationResponse, fromScene: Bool) {
+        if let last = lastNotificationRoute,
+           last.response === response, last.fromScene != fromScene {
+            lastNotificationRoute = nil
+            return
+        }
+        lastNotificationRoute = (response, fromScene)
+        pendingNotification = response
+        openPendingNotification()
+    }
+    func openPendingNotification() {
+        guard controller.viewIfLoaded?.window != nil, let response = pendingNotification else { return }
+        pendingNotification = nil
         let data = response.notification.request.content.userInfo
-        if let origin = data["origin"] as? String { controller.openNotification(origin, thread: data["thread"] as? String, host: data["host"] as? String ?? "local") }; completion()
+        if let origin = data["origin"] as? String { controller.openNotification(origin, thread: data["thread"] as? String, host: data["host"] as? String ?? "local") }
     }
     func userNotificationCenter(_ center: UNUserNotificationCenter, willPresent notification: UNNotification, withCompletionHandler completion: @escaping (UNNotificationPresentationOptions) -> Void) { completion([.banner, .sound]) }
+}
+
+final class SceneDelegate: UIResponder, UIWindowSceneDelegate {
+    var window: UIWindow?
+    func scene(_ scene: UIScene, willConnectTo session: UISceneSession, options connectionOptions: UIScene.ConnectionOptions) {
+        guard let windowScene = scene as? UIWindowScene,
+              let app = UIApplication.shared.delegate as? AppDelegate else { return }
+        let window = UIWindow(windowScene: windowScene)
+        window.rootViewController = BridgeNavigationController(rootViewController: app.controller)
+        self.window = window
+        window.makeKeyAndVisible()
+        DispatchQueue.main.async {
+            if let response = connectionOptions.notificationResponse { app.receiveNotification(response, fromScene: true) }
+            app.openPendingNotification()
+            if let url = connectionOptions.urlContexts.first?.url { app.controller.openLink(url) }
+        }
+    }
+    // A cold-launch tap can arrive before the first layout attaches the
+    // controller; activation is the next point where its window is ready.
+    func sceneDidBecomeActive(_ scene: UIScene) {
+        (UIApplication.shared.delegate as? AppDelegate)?.openPendingNotification()
+    }
+    func scene(_ scene: UIScene, openURLContexts URLContexts: Set<UIOpenURLContext>) {
+        guard let url = URLContexts.first?.url,
+              let app = UIApplication.shared.delegate as? AppDelegate else { return }
+        app.controller.openLink(url)
+    }
 }
 
 final class NoRedirect: NSObject, URLSessionTaskDelegate {
@@ -1037,7 +1078,7 @@ final class BridgeController: UIViewController, WKNavigationDelegate, WKUIDelega
         request.setValue("application/vnd.github+json", forHTTPHeaderField: "Accept")
         request.setValue("Codex-Mobile-Bridge/" + current, forHTTPHeaderField: "User-Agent")
         let session = URLSession(configuration: .ephemeral)
-        session.dataTask(with: request) { [weak sheet, weak check, weak status] data, response, error in
+        session.dataTask(with: request) { [weak self, weak sheet, weak check, weak status] data, response, error in
             defer { session.finishTasksAndInvalidate() }
             var candidate: MobileRelease?; var failed = false
             do {
@@ -1045,13 +1086,19 @@ final class BridgeController: UIViewController, WKNavigationDelegate, WKUIDelega
                 candidate = try MobileRelease.select(data, current: current)
             } catch { failed = true }
             DispatchQueue.main.async {
-                guard let sheet, sheet.presentingViewController != nil, let check, let status else { return }
+                guard let self, let sheet, sheet.presentingViewController != nil, let check, let status else { return }
                 check.isEnabled = true
                 let url = candidate?.page ?? URL(string: MobileRelease.repository + "/releases")!
                 if !failed && candidate == nil { status.text = MobileStrings.text("当前已是此通道最新版本。"); return }
-                status.text = MobileStrings.text(failed ? "检查失败，请检查网络后重试。也可以打开版本页面。" : "发现新版本") + (candidate.map { " · " + $0.version } ?? "")
+                let skipKey = "skip-mobile-update:" + MobileRelease.channel(current)
+                let skipped = candidate?.version == self.defaults.string(forKey: skipKey)
+                status.text = MobileStrings.text(failed ? "检查失败，请检查网络后重试。也可以打开版本页面。" : skipped ? "已跳过此版本，仍可手动更新" : "发现新版本") + (candidate.map { " · " + $0.version } ?? "")
                 let alert = UIAlertController(title: status.text, message: candidate.map { MobileStrings.text("iOS App 需要使用自己的 Apple 账号重新签名安装，暂不支持 App 内直接覆盖更新。") + "\n\n" + $0.notes }, preferredStyle: .alert)
                 alert.addAction(UIAlertAction(title: MobileStrings.text("稍后"), style: .cancel))
+                if let candidate { alert.addAction(UIAlertAction(title: MobileStrings.text("跳过此版本"), style: .default) { _ in
+                    self.defaults.set(candidate.version, forKey: skipKey)
+                    status.text = MobileStrings.text("已跳过此版本，仍可手动更新") + " · " + candidate.version
+                }) }
                 alert.addAction(UIAlertAction(title: MobileStrings.text(failed ? "版本页面" : "查看新版与安装指引"), style: .default) { _ in UIApplication.shared.open(url) })
                 sheet.present(alert, animated: true)
             }
@@ -1302,6 +1349,8 @@ enum MobileStrings {
 "版本页面": "Releases",
 "当前已是此通道最新版本。": "You are up to date on this channel.",
 "发现新版本": "Update available",
+"跳过此版本": "Skip this version",
+"已跳过此版本，仍可手动更新": "This version is skipped; you can still update manually",
 "下载后按系统提示覆盖安装，不要先卸载。已保存的电脑与登录状态会保留。": "After downloading, follow the system prompts to update without uninstalling. Saved computers and sign-ins will be retained.",
 "稍后": "Later",
 "更新说明": "Release notes",

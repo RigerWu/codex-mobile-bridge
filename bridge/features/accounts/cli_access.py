@@ -3,13 +3,16 @@
 import hashlib
 import json
 import re
+import sqlite3
 import threading
+import time
 import uuid
 from contextlib import ExitStack
 from pathlib import Path
 from urllib.parse import urlsplit
 
 from bridge.clients.claude.cli_session import _auth_ready, _profile
+from bridge.clients.codex.catalog import ModelStore, MODEL_REFRESH_SECONDS
 from bridge.features.accounts.accounts import private_json
 from bridge.features.accounts.models import model_ids
 from bridge.features.notifications.channels import read_json
@@ -22,6 +25,13 @@ class CliAccess:
         if self.root.is_symlink():
             raise ValueError('CLI 接入目录不能是符号链接')
         self.lock = threading.RLock()
+        self.model_store = ModelStore(self.root)
+        self.model_lock = threading.Lock()
+        self.model_reads = {}
+        self.model_timers = {}
+        self.model_refreshing = set()
+        self.model_retry_at = {}
+        self.model_closed = False
         self.codex_switch = None
         self.claude_verification = None
         self.index = read_json(self.root/'index.json', {'claude': [], 'activeClaude': None})
@@ -75,6 +85,13 @@ class CliAccess:
                     | {'active': row['id'] == self.index.get('activeClaude'),
                        'keySaved': row['kind'] == 'api' and Path(row['secretPath']).is_file()}
                     for row in self.index['claude']]
+            for provider, cards in (('codex', codex['accounts']), ('claude', rows)):
+                for card in cards:
+                    if card['kind'] == 'api':
+                        try:
+                            card['modelCatalogIdentity'] = self._probe_source(provider, card['id'])[-1]
+                        except (OSError, ValueError, KeyError, TypeError):
+                            pass
             return {'codex': {'accounts': codex['accounts'], 'activeId': codex['activeId'],
                               'activeVerified': codex['activeVerified'], 'sharedWithDesktop': True,
                               'switch': codex['switch'], 'cliSwitch': self.codex_switch, 'blockers': codex['blockers']},
@@ -235,20 +252,64 @@ class CliAccess:
             return result
 
     def _probe_api(self, provider, value):
-        if set(value) != {'provider', 'action', 'id'}:
+        refresh = value.get('refresh') is True
+        if (set(value) not in ({'provider', 'action', 'id'}, {'provider', 'action', 'id', 'refresh'}) or
+                'refresh' in value and (value['action'] != 'models' or not isinstance(value['refresh'], bool))):
             raise ValueError('CLI 接入请求无效')
+        row, url, key, headers, identity = self._probe_source(provider, value['id'])
+        if value['action'] == 'test':
+            models = model_ids(url, key, **headers)
+            if self._probe_source(provider, row['id'])[-1] != identity:
+                raise ValueError('CLI 接入已变化，请重新读取模型列表')
+            return self._probe_result(provider, row, models)
+        try:
+            persisted = self.model_store.read(identity)
+        except (OSError, sqlite3.DatabaseError, ValueError):
+            persisted = None
+        if persisted and not refresh:
+            if time.time()-persisted[0] >= MODEL_REFRESH_SECONDS:
+                self._start_model_refresh(provider, row['id'], identity)
+            else:
+                self._schedule_model_refresh(provider, row['id'], identity, persisted[0])
+            return self._probe_result(provider, row, persisted[1], identity, persisted[0])
+        with self.model_lock:
+            lock = self.model_reads.setdefault(identity, threading.Lock())
+        with lock:
+            if not refresh:
+                try:
+                    persisted = self.model_store.read(identity)
+                except (OSError, sqlite3.DatabaseError, ValueError):
+                    persisted = None
+                if persisted:
+                    return self._probe_result(provider, row, persisted[1], identity, persisted[0])
+            try:
+                models = model_ids(url, key, **headers)
+            except (OSError, ValueError):
+                if persisted:
+                    return self._probe_result(provider, row, persisted[1], identity, persisted[0], error=True)
+                raise
+            if self._probe_source(provider, row['id'])[-1] != identity:
+                raise ValueError('CLI 接入已变化，请重新读取模型列表')
+            try:
+                updated_at = self.model_store.write(identity, models)
+                self._schedule_model_refresh(provider, row['id'], identity, updated_at, replace=True)
+            except (OSError, sqlite3.DatabaseError):
+                updated_at = time.time()
+            return self._probe_result(provider, row, models, identity, updated_at)
+
+    def _probe_source(self, provider, identifier):
         if provider == 'codex':
             accounts = self.bridge.accounts
             with accounts.lock:
-                row = dict(accounts.row(value['id']))
+                row = dict(accounts.row(identifier))
                 if row['kind'] != 'api':
                     raise ValueError('请选择已保存的 API 接入')
                 url, key = accounts.api_credentials({'id': row['id'], 'baseUrl': row['baseUrl'], 'apiKey': ''})
-            models = model_ids(url, key)
+            headers = {}
         else:
             from bridge.features.accounts.cli_sync import LocalCliSync
             with self.lock:
-                row = dict(self._claude_row(value['id']))
+                row = dict(self._claude_row(identifier))
                 if row['kind'] != 'api':
                     raise ValueError('请选择已保存的 API 接入')
                 key = LocalCliSync(self.bridge)._claude_key(row)
@@ -256,12 +317,71 @@ class CliAccess:
             if not urlsplit(url).path.rstrip('/').endswith('/v1'):
                 url += '/v1'
             auth = {'Authorization': 'Bearer '+key} if row['authScheme'] == 'bearer' else {'x-api-key': key}
-            models = model_ids(url, key, headers={**auth, 'anthropic-version': '2023-06-01'})
+            headers = {'headers': {**auth, 'anthropic-version': '2023-06-01'}}
+        identity = ModelStore.key('cli-api', provider, row['id'], url, key,
+                                  row.get('authScheme'), row.get('directory'))
+        return row, url, key, headers, identity
+
+    def _probe_result(self, provider, row, models, identity=None, updated_at=None, error=False):
+        if identity and self._probe_source(provider, row['id'])[-1] != identity:
+            raise ValueError('CLI 接入已变化，请重新读取模型列表')
         result = self.public()
         result['probe'] = {'provider': provider, 'id': row['id'], 'status': 'reachable',
-                           'scope': 'models', 'models': models if value['action'] == 'models' else None,
+                           'scope': 'models', 'models': models if identity else None,
                            'modelCount': len(models)}
+        if identity:
+            result['probe']['cache'] = {'state': 'stale' if error or time.time()-updated_at >= MODEL_REFRESH_SECONDS else 'fresh',
+                                        'updatedAt': updated_at, 'identity': identity}
+            if error:
+                result['probe']['modelError'] = '模型目录刷新失败，已保留上次结果'
         return result
+
+    def _start_model_refresh(self, provider, identifier, identity):
+        with self.model_lock:
+            if self.model_closed or identity in self.model_refreshing or time.time() < self.model_retry_at.get(identity, 0):
+                return
+            self.model_refreshing.add(identity)
+        def update():
+            try:
+                if self._probe_source(provider, identifier)[-1] == identity:
+                    self._probe_api(provider, {'provider': provider, 'action': 'models', 'id': identifier, 'refresh': True})
+            except (OSError, ValueError):
+                pass
+            finally:
+                with self.model_lock:
+                    self.model_retry_at[identity] = time.time()+60
+                    self.model_refreshing.discard(identity)
+                try:
+                    record = self.model_store.read(identity)
+                    if record and not self.model_closed and self._probe_source(provider, identifier)[-1] == identity:
+                        self._schedule_model_refresh(provider, identifier, identity,
+                            max(record[0], time.time()-MODEL_REFRESH_SECONDS+300))
+                except (OSError, sqlite3.DatabaseError, ValueError):
+                    pass
+        threading.Thread(target=update, daemon=True, name='cli-model-refresh-'+provider).start()
+
+    def _schedule_model_refresh(self, provider, identifier, identity, updated_at, replace=False):
+        with self.model_lock:
+            if replace and identity in self.model_timers:
+                self.model_timers.pop(identity).cancel()
+            if self.model_closed or identity in self.model_timers:
+                return
+            delay = max(1, updated_at+MODEL_REFRESH_SECONDS-time.time())
+            def due():
+                with self.model_lock:
+                    self.model_timers.pop(identity, None)
+                self._start_model_refresh(provider, identifier, identity)
+            timer = threading.Timer(delay, due)
+            timer.daemon = True
+            self.model_timers[identity] = timer
+            timer.start()
+
+    def close(self):
+        with self.model_lock:
+            self.model_closed = True
+            for timer in self.model_timers.values():
+                timer.cancel()
+            self.model_timers.clear()
 
     def control(self, value):
         return self.public() if value.get('action') == 'list' else self.change(value)

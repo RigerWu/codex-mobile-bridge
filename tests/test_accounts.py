@@ -3,6 +3,7 @@ import json
 import os
 import tempfile
 import threading
+import traceback
 import unittest
 import uuid
 from pathlib import Path, PurePosixPath
@@ -92,20 +93,35 @@ class AccountsTests(unittest.TestCase):
     def test_chat_catalog_and_account_details_use_the_same_selected_upstream(self):
         row=self.api(name='Gemini access');self.manager.mark_active(row['id'])
         self.manager.info.entries={}
-        with patch('bridge.features.accounts.accounts.model_ids', return_value=['gemini-flash','gemini-pro']) as upstream:
+        with patch('bridge.features.accounts.accounts.model_catalog', return_value=[{'id': 'gemini-flash', 'name': 'Flash', 'efforts': ['low', 'high'], 'defaultEffort': 'low'}, {'id': 'gemini-pro', 'name': 'Pro', 'efforts': []}]) as upstream:
             details=self.manager.api_models(row, refresh=True)
             chat=self.manager.current_models()
         self.assertEqual(chat['models'],details)
+        self.assertEqual(chat['models'][0]['efforts'], ['low', 'high'])
         self.assertEqual(chat['modelSource'],'api');self.assertEqual(chat['modelAccessName'],'Gemini access')
+        self.assertEqual(chat['cache']['identity'], self.manager.current_model_identity())
+        self.assertIsInstance(chat['cache']['updatedAt'], float)
         self.assertEqual(upstream.call_count,1)
         self.assertNotIn('secret-fixture',json.dumps(chat))
 
     def test_changed_live_api_credentials_do_not_query_saved_account_models(self):
         row=self.api();self.manager.mark_active(row['id'])
         private_json(self.home/'auth.json',{'OPENAI_API_KEY':'changed-fixture-key'})
-        with patch('bridge.features.accounts.accounts.model_ids') as upstream:
+        with patch('bridge.features.accounts.accounts.model_catalog') as upstream:
             self.assertIsNone(self.manager.current_models(refresh=True))
         upstream.assert_not_called()
+        self.assertIsNone(self.manager.current_model_identity())
+
+    def test_official_catalog_identity_uses_account_home_not_chat_directory(self):
+        from bridge.clients.codex.catalog import Catalog
+        reader = Catalog(self.home, executable=self.root/'runtime')
+        self.bridge.catalog_reader = reader
+        self.manager.index['activeId'] = 'a' * 32
+        with patch.object(self.manager, 'active_matches', return_value=True), \
+             patch.object(self.manager, 'row', return_value={'id': 'a' * 32, 'kind': 'chatgpt'}):
+            identity = self.manager.current_model_identity()
+        self.assertEqual(identity, reader.model_identity(str(self.home), 'openai'))
+        self.assertNotEqual(identity, reader.model_identity('/another-chat', 'openai'))
 
     def test_account_switch_invalidates_split_model_catalog(self):
         from bridge.clients.codex.catalog import Catalog
@@ -236,9 +252,14 @@ class AccountsTests(unittest.TestCase):
             self.assertFalse(self.bridge.account.lock.acquire(blocking=False))
             original_restore(snapshot)
         self.manager.restore_files=restore
-        with patch('bridge.features.accounts.accounts.DesktopApp',return_value=self.app):
+        recovery_errors=[]
+        original_phase=self.manager.phase
+        def record_phase(name,**values):
+            if name=='interrupted':recovery_errors.append(traceback.format_exc())
+            return original_phase(name,**values)
+        with patch.object(self.manager,'phase',side_effect=record_phase), patch('bridge.features.accounts.accounts.DesktopApp',return_value=self.app):
             self.manager.recover({'confirmed':True});wait_for_account_worker(self)
-        self.assertEqual(self.manager.state['phase'],'restored')
+        self.assertEqual(self.manager.state['phase'],'restored',recovery_errors[-1] if recovery_errors else 'no recovery exception captured')
         self.assertEqual(self.manager.snapshot_files(),self.original)
 
     def test_busy_and_queued_tasks_block_before_shutdown(self):

@@ -13,7 +13,8 @@ from pathlib import Path
 
 from bridge.clients.claude import model
 from bridge.clients.claude.context import context_fields
-from bridge.clients.claude.cli_session import (_Owned, _message_content, _skill_catalog, MODES,
+from bridge.clients.claude.cli_session import (_Owned, _message_content, _skill_catalog, _cli_catalog,
+                                                _set_cli_settings, MODES,
                                                 PERMISSION_OPTIONS, ResumePreflightBlocked)
 from bridge.clients.codex.remote import ssh_command
 from bridge.clients.errors import BridgeUnavailable
@@ -202,7 +203,7 @@ class RemoteClaudeCli:
 
     def _public(self, row):
         value = {key: item for key, item in row.items() if key not in
-                 ('events', 'origin', 'alias', 'permissionKnown')}
+                 ('events', 'origin', 'alias', 'permissionKnown', 'projectConfig')}
         value.update(context_fields(row.get('events') or []))
         owned = self.owned.get(row['id'])
         live = bool(owned and owned.origin == row['origin'] and owned.process.poll() is None and not owned.error)
@@ -363,13 +364,7 @@ class RemoteClaudeCli:
             if action == 'catalog':
                 if not live:
                     return {'models': [], 'capabilities': {'models': False}, 'notice': '请先继续这条 Claude Code 会话'}
-                models = owned.catalog.get('models') or []
-                return {'models': [{'id': item.get('value') or item.get('id'),
-                                    'name': item.get('displayName') or item.get('name') or item.get('value') or item.get('id'),
-                                    'efforts': []} for item in models if isinstance(item, dict) and (item.get('value') or item.get('id'))],
-                        'currentModel': public['model'], 'currentEffort': '',
-                        'capabilities': {'models': True, 'effort': False, 'skills': True},
-                        'skills': _skill_catalog(owned.catalog)}
+                return _cli_catalog(owned, public, body.get('refresh') is True)
             if action == 'access' and 'mode' not in body:
                 return {'status': 'accepted', 'mode': public['permissionMode'],
                         'options': [{'value': mode, 'label': label, 'description': description}
@@ -447,12 +442,7 @@ class RemoteClaudeCli:
             elif action == 'stop':
                 owned.control({'subtype': 'interrupt'})
             elif action == 'settings':
-                selection = body.get('model')
-                offered = {item.get('value') or item.get('id') for item in owned.catalog.get('models') or []}
-                if selection not in offered:
-                    raise ValueError('请选择 Claude Code 提供的模型')
-                owned.control({'subtype': 'set_model', 'model': selection})
-                owned.model = selection
+                _set_cli_settings(owned, body)
             elif action == 'access':
                 mode = body.get('mode')
                 if mode not in MODES:

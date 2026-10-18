@@ -137,20 +137,69 @@ class RemoteCatalog:
         self.alias = alias
         self.kind_caches = {}
         self.lock = threading.RLock()
+        self.model_refreshing = set()
+        self.model_timers = {}
+        self.model_retry_at = {}
+        self.model_closed = False
 
     def invalidate_models(self):
         with self.lock:
             for kind in ('catalog', 'models'):
                 self.kind_caches.pop(kind, None)
+            for timer in self.model_timers.values():
+                timer.cancel()
+            self.model_timers.clear()
+
+    def stop_model_refresh(self):
+        with self.lock:
+            self.model_closed = True
+            for timer in self.model_timers.values():
+                timer.cancel()
+            self.model_timers.clear()
 
     def _source(self):
         source = source_text('features/auth/tls.py') + '\n'
         source += source_text('features/accounts/models.py').replace('from bridge.features.auth.tls import client_context', '') + '\n'
-        source += source_text('clients/codex/catalog.py').replace('from bridge.features.accounts.models import model_ids', '')
+        source += source_text('clients/codex/catalog.py').replace('from bridge.features.accounts.models import model_catalog', '')
         source += '\nimport shutil\nhome=Path(os.environ.get("CODEX_HOME", str(Path.home()/".codex")))\n'
         source += 'runtime=shutil.which("codex") or str(Path.home()/".local/bin/codex")\n'
         source += 'reader=Catalog(home, runtime, allow_background_refresh=False)\n'
         return source
+
+    def _start_model_refresh(self, key, cwd, provider):
+        if self.model_closed or key in self.model_refreshing or time.time() < self.model_retry_at.get(key, 0):
+            return
+        self.model_refreshing.add(key)
+        def update():
+            try:
+                self.get_kind('models', cwd, refresh=True, provider=provider)
+            except (OSError, ValueError, CatalogError):
+                pass
+            finally:
+                with self.lock:
+                    self.model_retry_at[key] = time.time() + 60
+                    self.model_refreshing.discard(key)
+                    result = self.kind_caches.get('models', {}).get(key)
+                    updated_at = (result[1].get('cache') or {}).get('updatedAt') if result else None
+                    self._schedule_model_refresh(key, cwd, provider, updated_at or time.time(), retry=True)
+        threading.Thread(target=update, daemon=True, name='ssh-model-refresh').start()
+
+    def _schedule_model_refresh(self, key, cwd, provider, updated_at, retry=False, replace=False):
+        if self.model_closed:
+            return
+        if replace and key in self.model_timers:
+            self.model_timers.pop(key).cancel()
+        if key in self.model_timers:
+            return
+        delay = max(60 if retry else 1, updated_at + 12 * 60 * 60 - time.time())
+        def due():
+            with self.lock:
+                self.model_timers.pop(key, None)
+                self._start_model_refresh(key, cwd, provider)
+        timer = threading.Timer(delay, due)
+        timer.daemon = True
+        self.model_timers[key] = timer
+        timer.start()
 
     def get(self, cwd, refresh=False, provider=None):
         with self.lock:
@@ -178,7 +227,7 @@ class RemoteCatalog:
                 key = (kind, cwd, provider)
             cache = self.kind_caches.setdefault(kind, {})
             previous = cache.get(key)
-            if previous and not refresh and time.monotonic() - previous[0] < 300:
+            if kind == 'skills' and previous and not refresh and time.monotonic() - previous[0] < 300:
                 return previous[1]
             source = self._source()
             source += ('print(json.dumps(reader.get_kind(' + payload(kind) + ', ' + payload(cwd) +
@@ -191,6 +240,12 @@ class RemoteCatalog:
             except RemoteUnavailable as exc:
                 raise CatalogError(str(exc)) from exc
             cache[key] = (time.monotonic(), result)
+            if kind == 'models':
+                metadata = result.get('cache') or {}
+                if metadata.get('state') == 'stale' and not refresh:
+                    self._start_model_refresh(key, cwd, provider)
+                elif metadata.get('state') == 'fresh' and metadata.get('updatedAt'):
+                    self._schedule_model_refresh(key, cwd, provider, metadata['updatedAt'], replace=refresh)
             if kind == 'skills' and not refresh and result.get('cache', {}).get('state') in ('stale', 'legacy'):
                 return self.get_kind(kind, cwd, refresh=True, provider=provider, query=query,
                                       offset=offset, limit=limit, ids=list(identifiers))
@@ -205,6 +260,71 @@ class RemoteCatalog:
         except RemoteUnavailable as exc:
             raise CatalogError(str(exc)) from exc
         return result
+
+
+class RemoteCliModels:
+    """Read a joined CLI's API catalog on its SSH host without returning secrets."""
+
+    def __init__(self, alias):
+        self.alias = alias
+
+    @staticmethod
+    def _source():
+        source = source_text('features/auth/tls.py') + '\n'
+        source += source_text('features/accounts/models.py').replace(
+            'from bridge.features.auth.tls import client_context', '') + '\n'
+        source += source_text('clients/codex/catalog.py').replace(
+            'from bridge.features.accounts.models import model_catalog', '') + '\n'
+        source += source_text('platforms/linux/codex_daemon_env.py') + '\n'
+        source += '_linux_read_process_environment = read_process_environment\n'
+        source += source_text('platforms/macos/force_exit.py') + '\n'
+        source += source_text('platforms/macos/codex_daemon_env.py').replace(
+            'from bridge.platforms.macos.force_exit import Native', '') + '\n'
+        source += '_macos_read_process_environment = read_process_environment\n'
+        dispatcher = source_text('platforms/codex_daemon_env.py')
+        dispatcher = dispatcher.replace(
+            'from bridge.platforms.macos.codex_daemon_env import read_process_environment',
+            'read_process_environment = _macos_read_process_environment').replace(
+            'from bridge.platforms.linux.codex_daemon_env import read_process_environment',
+            'read_process_environment = _linux_read_process_environment').replace(
+            'from bridge.platforms.windows.codex_daemon_env import read_process_environment',
+            "raise DaemonEnvironmentUnavailable('SSH Windows model catalog is unsupported')")
+        source += dispatcher + '\n'
+        source += source_text('clients/codex/remote_models.py') + '\n'
+        return source
+
+    def _call(self, operation, home, cwd, provider, config, account=None, native_models=None):
+        home = str(home) if isinstance(home, Path) else home
+        cwd = str(cwd) if isinstance(cwd, Path) else cwd
+        value = {'operation': operation, 'home': home, 'cwd': cwd, 'provider': provider,
+                 'config': config, 'account': account or {}, 'nativeModels': native_models or []}
+        source = self._source() + '\nprint(json.dumps(remote_model_worker(' + payload(value) + '), ensure_ascii=False))\n'
+        try:
+            result = ssh_read(self.alias, source, timeout=120 if operation == 'models' else 20)
+        except RemoteUnavailable as exc:
+            raise CatalogError(str(exc)) from exc
+        if not isinstance(result, dict):
+            raise CatalogError('SSH 模型目录格式无效')
+        if result.get('error'):
+            raise CatalogError(result['error'])
+        identity = result.get('identity')
+        if not isinstance(identity, str) or len(identity) != 64 or any(char not in '0123456789abcdef' for char in identity):
+            raise CatalogError('SSH 模型目录身份无效')
+        return result
+
+    def identity(self, home, cwd, provider, config, account=None):
+        return self._call('identity', home, cwd, provider, config, account)['identity']
+
+    def read_models(self, home, cwd, provider, config, account=None, native_models=None):
+        return self._call('models', home, cwd, provider, config, account, native_models)
+
+
+def remote_model_identity(alias, home, cwd, provider, config, account=None):
+    return RemoteCliModels(alias).identity(home, cwd, provider, config, account)
+
+
+def remote_model_catalog(alias, home, cwd, provider, config, account=None, native_models=None):
+    return RemoteCliModels(alias).read_models(home, cwd, provider, config, account, native_models)
 
 
 class AppHosts:

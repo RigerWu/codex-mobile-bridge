@@ -12,6 +12,7 @@ import unittest
 import uuid
 from contextlib import closing
 from pathlib import Path, PureWindowsPath
+from unittest.mock import patch
 
 from bridge.features.auth.auth import Auth, password_record
 from bridge.features.workspace.files import artifact_paths
@@ -122,9 +123,12 @@ class IntegrationTests(unittest.TestCase):
         # Path must fit macOS's 104-byte Unix socket limit; bind via relative path.
         self.original_path = self.root
         self.fixture = DesktopFixture(self.root)
+        rollout = self.root / 'sessions/fixture.jsonl'
+        rollout.parent.mkdir(parents=True)
+        rollout.write_text('')
         db = sqlite3.connect(str(self.root / 'state_5.sqlite'))
         db.execute('CREATE TABLE threads(id TEXT PRIMARY KEY, title TEXT, cwd TEXT, updated_at INT, archived INT, originator TEXT, source TEXT, rollout_path TEXT)')
-        db.execute('INSERT INTO threads VALUES(?,?,?,?,?,?,?,?)', (THREAD, 'Desktop test', '/workspace', 1, 0, 'Codex Desktop', 'vscode', 'unused'))
+        db.execute('INSERT INTO threads VALUES(?,?,?,?,?,?,?,?)', (THREAD, 'Desktop test', '/workspace', 1, 0, 'Codex Desktop', 'vscode', str(rollout)))
         db.commit()
         db.close()
         db.close()
@@ -211,6 +215,32 @@ class IntegrationTests(unittest.TestCase):
         self.assertEqual(detail['text'], 'row 130')
         changes = self.bridge.timeline_read(THREAD, 'changes', after=page['sequence'], epoch=page['epoch'], start=older['before'])
         self.assertEqual(changes['rows'], [])
+
+    def test_timeline_meta_refreshes_draft_identity_without_sequence_change(self):
+        self.fixture.state['turns'] = [{'turnId': 'turn', 'items': [
+            {'id': str(i), 'type': 'agentMessage', 'text': 'row '+str(i)} for i in range(150)]}]
+        session = self.bridge.session(THREAD)
+        account = ['']
+
+        def draft_identity(view):
+            self.assertFalse(session.condition._is_owned())
+            return account[0]
+
+        with patch.object(self.bridge, '_draft_account_identity', side_effect=draft_identity):
+            page = self.bridge.timeline_read(THREAD)
+            self.assertEqual(page['meta']['draftAccountIdentity'], '')
+            account[0] = 'account-a'
+            older = self.bridge.timeline_read(THREAD, limit=80, before=page['before'])
+            self.assertEqual(older['meta']['draftAccountIdentity'], 'account-a')
+            self.assertEqual(older['sequence'], page['sequence'])
+            account[0] = 'account-b'
+            changes = self.bridge.timeline_read(THREAD, 'changes', after=page['sequence'],
+                                                epoch=page['epoch'], start=older['before'])
+            self.assertEqual(changes['meta']['draftAccountIdentity'], 'account-b')
+            self.assertEqual(changes['sequence'], page['sequence'])
+            self.assertEqual(changes['rows'], [])
+        self.assertFalse(any(request['method'] == 'thread-follower-start-turn'
+                             for request in self.fixture.requests))
 
     def test_legacy_desktop_threads_visible_but_subagents_excluded(self):
         from bridge.features.sessions.store import SessionStore
@@ -497,6 +527,7 @@ class IntegrationTests(unittest.TestCase):
     def test_managed_catalog_uses_selected_access_instead_of_old_chat_provider(self):
         from unittest.mock import Mock
         from types import SimpleNamespace
+        self.bridge.session(THREAD)
         selected={'models':[{'id':'gemini-fixture','efforts':[]}],'modelSource':'api','modelAccessName':'Gemini access'}
         self.bridge.accounts=SimpleNamespace(current_models=Mock(return_value=selected))
         self.bridge.catalog_reader.get=Mock(side_effect=AssertionError('must not query old provider models'))
@@ -507,6 +538,27 @@ class IntegrationTests(unittest.TestCase):
             self.assertEqual(result['modelAccessName'],'Gemini access')
         self.assertEqual([c.args[0] for c in self.bridge.catalog_reader.get_kind.call_args_list],['skills'])
         self.bridge.accounts=None
+
+    def test_cold_model_catalog_reads_saved_settings_without_desktop_attach(self):
+        from unittest.mock import Mock, patch
+        saved = {**state(), 'cwd': '/saved/project', 'modelProvider': 'saved-api',
+                 'latestModel': 'saved-model', 'latestReasoningEffort': 'xhigh',
+                 'latestThreadSettings': {'effort': 'medium'}}
+        models = {'models': [{'id': 'saved-model', 'efforts': ['xhigh']}],
+                  'modelSource': 'api', 'fastMode': {'allowed': False}}
+        self.bridge.catalog_reader.get_kind = Mock(return_value=models)
+        with patch.object(self.bridge.store, 'history', return_value=saved) as history, \
+                patch.object(self.bridge, '_attach', side_effect=AssertionError('catalog attached desktop')), \
+                patch('bridge.app.service.open_in_desktop', side_effect=AssertionError('catalog opened desktop')):
+            result = self.bridge.catalog(THREAD, kind='models')
+        history.assert_called_once_with(THREAD, turn_limit=20)
+        self.bridge.catalog_reader.get_kind.assert_called_once_with(
+            'models', '/saved/project', refresh=False, provider='saved-api')
+        self.assertEqual(result['currentModel'], 'saved-model')
+        self.assertEqual(result['currentEffort'], 'xhigh')
+        self.assertIsNone(self.bridge.live[THREAD].owner)
+        self.assertFalse(self.bridge.live[THREAD].connected)
+        self.assertEqual(self.fixture.requests, [])
 
     def test_upstream_model_without_effort_metadata_uses_original_provider_and_owner(self):
         reads = []
@@ -1175,7 +1227,7 @@ class HttpTests(unittest.TestCase):
             conn.request('GET', '/')
             response = conn.getresponse()
             self.assertEqual(response.status, 200)
-            scripts = re.findall(r'<script src="([^"]+)"', response.read().decode())
+            scripts = re.findall(r'<script (?:src|data-bridge-src)="([^"]+)"', response.read().decode())
             self.assertEqual([script.split('?', 1)[0] for script in scripts], ['/bootstrap.js', '/host.js', '/layout.js', '/vendor/markdown-it.min.js', '/vendor/katex/katex.min.js',
                                        '/vendor/texmath.js', '/message-actions.js', '/markdown.js', '/i18n.js', '/downloads.js', '/image-viewer.js', '/timeline.js', '/account.js', '/modes.js', '/attachments.js', '/activity.js', '/fast-mode.js', '/accounts.js', '/client-accounts.js', '/cli-access.js', '/floating-panel.js', '/git-panel.js', '/vendor/xterm/xterm.js', '/vendor/xterm/addon-fit.js', '/command-terminal-panel.js', '/terminal-panel.js', '/permissions.js', '/side-chat.js', '/agents-panel.js', '/file-actions.js', '/vendor/prism/source-view.min.js', '/source-view.js', '/pdf-preview.js', '/html-preview.js', '/workbench.js', '/list-sync.js', '/client-lifecycle.js', '/desktop-sessions.js', '/client-navigation.js', '/app.js', '/presentation.js'])
             for script in scripts:

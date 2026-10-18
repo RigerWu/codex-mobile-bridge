@@ -51,6 +51,7 @@ class RemoteCliModelsTests(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stderr)
         return json.loads(result.stdout), result.stdout
 
+    @unittest.skipUnless(sys.platform in ('linux', 'darwin'), 'SSH CLI model helper requires a Linux or macOS target')
     def test_identity_only_does_not_query_upstream_or_return_daemon_secrets(self):
         daemon = "def read_daemon_environment(home, executable, names):\n assert names == {'FIXTURE_API_KEY'}\n return ({'FIXTURE_API_KEY':'target-secret'}, (7, 42, executable))"
         catalog = "def model_catalog(*args, **kwargs): raise AssertionError('upstream request during identity read')"
@@ -59,6 +60,7 @@ class RemoteCliModelsTests(unittest.TestCase):
         self.assertNotIn('target-secret', output)
         self.assertNotIn('private-auth', output)
 
+    @unittest.skipUnless(sys.platform in ('linux', 'darwin'), 'SSH CLI model helper requires a Linux or macOS target')
     def test_upstream_models_keep_exact_ids_and_native_effort_metadata(self):
         daemon = "def read_daemon_environment(home, executable, names): return ({'FIXTURE_API_KEY':'target-secret'}, (7, 42, executable))"
         catalog = "def model_catalog(base, key, **options):\n assert key == 'target-secret'\n return [{'id':'route/model-a','name':'Upstream A','efforts':[]}]"
@@ -68,6 +70,7 @@ class RemoteCliModelsTests(unittest.TestCase):
         self.assertEqual(result['models'][0]['efforts'], ['high'])
         self.assertNotIn('target-secret', output)
 
+    @unittest.skipUnless(sys.platform in ('linux', 'darwin'), 'SSH CLI model helper requires a Linux or macOS target')
     def test_process_change_discards_models_and_unreadable_daemon_fails_closed(self):
         daemon = "count=0\ndef read_daemon_environment(home, executable, names):\n global count\n count+=1\n return ({'FIXTURE_API_KEY':'target-secret'}, (7, count, executable))"
         catalog = "def model_catalog(*args, **kwargs): return [{'id':'route/model-a','name':'A','efforts':[]}]"
@@ -76,6 +79,7 @@ class RemoteCliModelsTests(unittest.TestCase):
         result, _ = self.worker('models', "def read_daemon_environment(*args): raise OSError('private environment')", catalog)
         self.assertEqual(result, {'error': '无法核验 SSH 原生 CLI 守护进程的启动环境，请重新连接后刷新模型'})
 
+    @unittest.skipUnless(sys.platform in ('linux', 'darwin'), 'SSH CLI model helper requires a Linux or macOS target')
     def test_environment_selection_respects_auth_file_and_static_credentials(self):
         no_environment = "def read_daemon_environment(*args): raise AssertionError('unneeded environment read')"
         catalog = "def model_catalog(*args, **kwargs): raise AssertionError('identity read queried upstream')"
@@ -96,6 +100,7 @@ class RemoteCliModelsTests(unittest.TestCase):
         self.assertEqual(len(result['identity']), 64)
         self.assertNotIn('target-key', output)
 
+    @unittest.skipUnless(sys.platform in ('linux', 'darwin'), 'SSH CLI model helper requires a Linux or macOS target')
     def test_native_catalog_cannot_replace_upstream_api_models(self):
         daemon = "def read_daemon_environment(home, executable, names): return ({}, (7, 42, executable))"
         catalog = "def model_catalog(*args, **kwargs): raise AssertionError('native catalog should not query upstream')"
@@ -103,6 +108,7 @@ class RemoteCliModelsTests(unittest.TestCase):
                                 config={'model_provider': 'openai', 'model_catalog_json': '/native/models.json'})
         self.assertEqual(result, {'error': '当前原生 CLI 接入不是 API 模型目录，请手动填写模型 ID'})
 
+    @unittest.skipUnless(sys.platform in ('linux', 'darwin'), 'SSH CLI model helper requires a Linux or macOS target')
     def test_openai_custom_query_auth_reads_target_key_and_base_without_account(self):
         daemon = "def read_daemon_environment(home, executable, names):\n assert names == {'OPENAI_API_KEY', 'OPENAI_BASE_URL'}\n return ({'OPENAI_API_KEY':'target-key', 'OPENAI_BASE_URL':'https://target.invalid/v1'}, (7,42,executable))"
         catalog = "def model_catalog(base, key, **options):\n assert base == 'https://target.invalid/v1' and key == 'target-key'\n return [{'id':'target/model', 'name':'Target', 'efforts':['low','high']}]"

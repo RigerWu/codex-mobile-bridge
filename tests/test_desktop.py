@@ -80,7 +80,7 @@ class DesktopTests(unittest.TestCase):
     def test_password_change_can_keep_only_current_phone_bindings(self):
         value = self.value()
         old_config = self.desktop.config()['auth']
-        old_password = next(line[3:] for line in (self.directory/'首次登录.txt').read_text().splitlines()
+        old_password = next(line[3:] for line in (self.directory/'首次登录.txt').read_text(encoding='utf-8').splitlines()
                             if line.startswith('密码：'))
         auth = Auth(old_config, self.directory)
         kept, _ = auth.new_session('192.0.2.1', 'BridgeMobile/0.1-iOS')

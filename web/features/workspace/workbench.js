@@ -256,9 +256,9 @@ class Workbench {
     const directory=path.split('/').slice(0,-1).join('/');
     let tab=session.files.find(t=>t.id==='files');
     const loadedRow=tab?.list&&Array.from(tab.list.children).find(row=>row.dataset.path===path);
-    const reusable=tab?.loaded&&tab.list&&session.directory===directory&&session.search===''&&session.hidden&&
-      (loadedRow||Number.isInteger(tab.next));
-    session.search='';session.hidden=true;
+    const reusable=tab?.loaded&&tab.list&&session.directory===directory&&session.search===''&&
+      (loadedRow||(session.hidden&&Number.isInteger(tab.next)));
+    session.search='';if(!reusable)session.hidden=true;
     if(!tab){tab={id:'files',name:BridgeI18n.t('文件'),body:this.node('div','wb-browser')};session.files.unshift(tab);}
     const state=this.locateState={session,tab,directory,row:null};
     this.select('files');
@@ -367,7 +367,7 @@ class Workbench {
     try {
       const url = this.url(session, '', path) + '&hidden=' + session.hidden + '&search=' + encodeURIComponent(session.search) + '&offset=' + (append ? tab.next : 0);
       const result = await this.request(url, undefined, controller.signal);
-      if (controller.signal.aborted || tab.controller!==controller || this.sessions.get(session.key)!==session || !session.files.includes(tab) || session.directory!==path || (locateState&&!this.locateValid(locateState))) return;
+      if (controller.signal.aborted || tab.controller!==controller || this.sessions.get(session.key)!==session || !session.files.includes(tab) || session.directory!==path) return;
       session.project = result.project; const crumb=tab.body.querySelector('.wb-path');delete crumb.dataset.i18n;crumb.textContent = result.project + (path ? ' / ' + path : '');
       delete tab.status.dataset.i18n;
       tab.status.replaceChildren(...(result.total ? [this.node('span', '', String(result.total)), this.node('span', '', ' 项 · '), this.node('span', '', session.host === 'local' ? '电脑上的项目' : 'SSH 项目')] : [this.node('span', '', '当前目录没有匹配的文件')]));

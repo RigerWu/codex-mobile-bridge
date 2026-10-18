@@ -307,13 +307,14 @@ test('visible file locate leaves scroll untouched and repeated folder locate res
  assert.equal(second.classList.contains('wb-locate-highlight'),true);assert.equal(ui.document.activeElement,second);
 });
 test('locating a fully visible row deep in an existing directory preserves its node and scroll',async()=>{
- const ui=await opened(),wb=ui.view.workbench,session=wb.current;session.hidden=true;session.directory='src';
+ const ui=await opened(),wb=ui.view.workbench,session=wb.current;session.directory='src';
  const entries=Array.from({length:30},(_,index)=>({name:`item-${index}.txt`,path:`src/item-${index}.txt`,kind:'file',size:1}));
  ui.setHandler(async()=>({project:'/project',total:entries.length,entries,nextOffset:null}));
  wb.files();await new Promise(setImmediate);const tab=session.files.find(t=>t.id==='files'),list=tab.list,row=list.children[22],calls=ui.calls.length;
  Object.assign(list,{clientHeight:200,scrollHeight:1800,scrollTop:1180});list.getBoundingClientRect=()=>({top:100,bottom:300});row.getBoundingClientRect=()=>({top:155,bottom:205});
  await wb.locate(session,row.dataset.path);
  assert.equal(ui.calls.length,calls);assert.equal(tab.list,list);assert.equal(list.children[22],row);assert.equal(list.scrollTop,1180);
+ assert.equal(session.hidden,false);assert.equal(tab.body.querySelectorAll('input')[1].checked,false);
  assert.equal(ui.document.activeElement,row);assert.equal(row.classList.contains('wb-locate-highlight'),true);
  assert.equal(list.onwheel,null);assert.equal(list.ontouchstart,null);assert.equal(list.onpointerdown,null);
 });
@@ -357,12 +358,27 @@ test('manual scroll during pagination and direct split switching discard pending
  const tab=session.files.find(t=>t.id==='files'),list=tab.list;assert.equal(typeof list.onwheel,'function');
  list.onwheel({type:'wheel'});assert.equal(list.onwheel,null);
  finish({project:'/project',total:1,entries:[{name:'target.txt',path:'src/target.txt',kind:'file',size:1}],nextOffset:null});await first;
- assert.equal(list.children.length,0);
- const second=wb.locate(session,'src/target.txt');await new Promise(setImmediate);
+ assert.equal(list.children.length,1);assert.notEqual(ui.document.activeElement,list.children[0]);
+ const second=wb.locate(session,'other/target.txt');await new Promise(setImmediate);
  const terminal={id:'terminal',name:'Terminal',body:wb.node('div','wb-terminal')};session.files.push(terminal);wb.split('terminal');
  assert.equal(session.active,'terminal');assert.equal(tab.list.onwheel,null);
- finish({project:'/project',total:1,entries:[{name:'target.txt',path:'src/target.txt',kind:'file',size:1}],nextOffset:null});await second;
- assert.equal(tab.list.children.length,0);
+ finish({project:'/project',total:1,entries:[{name:'target.txt',path:'other/target.txt',kind:'file',size:1}],nextOffset:null});await second;
+ assert.equal(tab.list.children.length,1);assert.notEqual(ui.document.activeElement,tab.list.children[0]);
+});
+test('touch during initial locate load still renders the directory without continuing locate',async()=>{
+ const ui=await opened(),wb=ui.view.workbench,session=wb.current;let finish;
+ ui.setHandler(()=>new Promise(resolve=>finish=resolve));
+ const locating=wb.locate(session,'src/target.txt'),tab=session.files.find(t=>t.id==='files'),list=tab.list;
+ assert.equal(typeof list.ontouchstart,'function');list.ontouchstart({type:'touchstart'});
+ assert.equal(list.ontouchstart,null);
+ finish({project:'/project',total:1,entries:[{name:'target.txt',path:'src/target.txt',kind:'file',size:1}],nextOffset:null});await locating;
+ assert.equal(session.directory,'src');assert.equal(list.children.length,1);assert.equal(tab.loaded,true);
+ assert.notEqual(ui.document.activeElement,list.children[0]);assert.equal(list.scrollTop,0);
+ const pending=new Map();ui.setHandler(url=>new Promise(resolve=>pending.set(new URL(url,'http://fixture').searchParams.get('path'),resolve)));
+ const stale=wb.locate(session,'other/stale.txt'),current=wb.directory(session,tab,'manual');
+ pending.get('manual')({project:'/project',total:1,entries:[{name:'current.txt',path:'manual/current.txt',kind:'file',size:1}],nextOffset:null});await current;
+ pending.get('other')({project:'/old',total:1,entries:[{name:'stale.txt',path:'other/stale.txt',kind:'file',size:1}],nextOffset:null});await stale;
+ assert.equal(session.directory,'manual');assert.equal(tab.list.children.length,1);assert.equal(tab.list.children[0].dataset.path,'manual/current.txt');
 });
 test('wide split file back consumes the visible file tab, then returns to unsplit chat',async()=>{
  const ui=await opened(),wb=ui.view.workbench,session=wb.current;

@@ -53,7 +53,7 @@ class Workbench {
     this.chat.style.setProperty('--wb-left',`calc(${ratio*100}% - var(--wb-divider-width, 8px) / 2)`);
     this.divider.setAttribute('aria-valuemin',String(Math.round(minimum*100)));this.divider.setAttribute('aria-valuemax',String(Math.round((1-minimum)*100)));this.divider.setAttribute('aria-valuenow',String(Math.round(ratio*100)));
   }
-  split(id){if(!this.canSplit()||!this.current?.files.some(t=>t.id===id))return;this.rememberScroll();this.current.splitTab=id;this.current.active=id;this.paint();}
+  split(id){if(!this.canSplit()||!this.current?.files.some(t=>t.id===id))return;if(id!=='files')this.cancelLocate();this.rememberScroll();this.current.splitTab=id;this.current.active=id;this.paint();}
   unsplit(){if(!this.current)return;this.current.active=this.current.splitTab||this.current.active;this.current.splitTab=null;this.paint();}
   endDrag(){this.dragTab=null;this.layout.classList.remove('wb-dragging');}
   node(tag, cls = '', text) { const n = document.createElement(tag); n.className = cls; if (text !== undefined) { n._rawText=text;n.textContent = ['pre','code'].includes(tag)?text:BridgeI18n.t(text); const source=BridgeI18n.source(text); if(source&&!['pre','code'].includes(tag))n.dataset.i18n=source; } return n; }
@@ -233,7 +233,18 @@ class Workbench {
     this.locateState=null;
     if(state.frame!==undefined)cancelAnimationFrame(state.frame);
     if(state.timer!==undefined)clearTimeout(state.timer);
+    this.stopLocateInput(state);
     state.row?.classList.remove('wb-locate-highlight');
+  }
+  stopLocateInput(state) {
+    if(!state.motionList)return;
+    for(const event of ['wheel','touchstart','pointerdown'])state.motionList.removeEventListener(event,state.motionInterrupt);
+    state.motionList=null;
+  }
+  watchLocateInput(state,list) {
+    state.motionList=list;
+    state.motionInterrupt=()=>{if(this.locateState===state)this.cancelLocate();};
+    for(const event of ['wheel','touchstart','pointerdown'])list.addEventListener(event,state.motionInterrupt,{passive:true});
   }
   locateValid(state) {
     return this.locateState===state&&this.current===state.session&&this.sessions.get(state.session.key)===state.session&&
@@ -242,12 +253,20 @@ class Workbench {
   async locate(session,path) {
     if(session!==this.current)return;
     this.cancelLocate();
-    session.search='';session.hidden=true;
+    const directory=path.split('/').slice(0,-1).join('/');
     let tab=session.files.find(t=>t.id==='files');
+    const loadedRow=tab?.list&&Array.from(tab.list.children).find(row=>row.dataset.path===path);
+    const reusable=tab?.loaded&&tab.list&&session.directory===directory&&session.search===''&&session.hidden&&
+      (loadedRow||Number.isInteger(tab.next));
+    session.search='';session.hidden=true;
     if(!tab){tab={id:'files',name:BridgeI18n.t('文件'),body:this.node('div','wb-browser')};session.files.unshift(tab);}
-    const state=this.locateState={session,tab,directory:path.split('/').slice(0,-1).join('/'),row:null};
+    const state=this.locateState={session,tab,directory,row:null};
     this.select('files');
-    await this.directory(session,tab,state.directory,false,state);
+    if(!reusable){const reading=this.directory(session,tab,directory,false,state);this.watchLocateInput(state,tab.list);await reading;}
+    else{
+      if(tab.loading&&loadedRow){tab.controller?.abort();tab.loading=false;}
+      this.watchLocateInput(state,tab.list);
+    }
     while(this.locateValid(state)&&Number.isInteger(tab.next)&&!Array.from(tab.list.children).some(row=>row.dataset.path===path)){
       const next=tab.next;await this.directory(session,tab,state.directory,true,state);if(tab.next===next)break;
     }
@@ -259,7 +278,7 @@ class Workbench {
     const reduced=window.matchMedia?.('(prefers-reduced-motion: reduce)').matches;
     const arrive=()=>{
       if(!this.locateValid(state)||tab.list!==list||!list.contains(row))return;
-      state.frame=undefined;row.focus({preventScroll:true});row.classList.remove('wb-locate-highlight');
+      state.frame=undefined;this.stopLocateInput(state);row.focus({preventScroll:true});row.classList.remove('wb-locate-highlight');
       // Restart the visual cue when the same row is located again.
       void row.offsetWidth;row.classList.add('wb-locate-highlight');
       state.timer=setTimeout(()=>{if(this.locateState===state){row.classList.remove('wb-locate-highlight');this.locateState=null;}},reduced?3000:3400);
@@ -272,16 +291,13 @@ class Workbench {
     if(!delta){arrive();return;}
     let start=null;
     const tick=now=>{
-      if(!this.locateValid(state)||state.motionCancelled)return;
+      if(!this.locateValid(state))return;
       if(!Number.isFinite(now)){list.scrollTop=target;arrive();return;}
       if(start===null)start=now;
       const progress=Math.min(1,(now-start)/300),eased=1-(1-progress)**3;
       list.scrollTop=from+delta*eased;
       if(progress<1)state.frame=requestAnimationFrame(tick);else arrive();
     };
-    for(const event of ['wheel','touchstart','pointerdown'])list.addEventListener(event,()=>{
-      if(this.locateState===state&&state.frame!==undefined){state.motionCancelled=true;cancelAnimationFrame(state.frame);state.frame=undefined;}
-    },{passive:true});
     state.frame=requestAnimationFrame(tick);
   }
   newTab() {
@@ -331,10 +347,10 @@ class Workbench {
   }
   async directory(session, tab, path, append = false, locateState = null) {
     if(this.locateState&&this.locateState!==locateState)this.cancelLocate();
-    tab.controller?.abort(); const controller = tab.controller = new AbortController();
+    tab.controller?.abort(); const controller = tab.controller = new AbortController();tab.loading=true;
     if (!append) {
       if (session === this.current) this.stopThumbnails();
-      session.directory = path; tab.next=null;tab.body.replaceChildren();
+      session.directory = path; tab.next=null;tab.loaded=false;tab.body.replaceChildren();
       const toolbar = this.node('div', 'wb-toolbar');
       const up = this.button('‹', () => this.directory(session, tab, path.split('/').slice(0, -1).join('/')), BridgeI18n.t('上一级目录')); up.disabled = !path;
       const crumb = this.node('div', 'wb-path', path || BridgeI18n.t('项目文件')); if(path)this.raw(crumb);else crumb.dataset.i18nTitle='当前聊天的项目目录';crumb.title = path || BridgeI18n.t('当前聊天的项目目录');
@@ -363,10 +379,11 @@ class Workbench {
         row.append(this.fileIcon(entry), this.raw(this.node('span', 'wb-file-name', entry.name)), this.node('span', 'wb-file-meta', entry.kind === 'directory' ? BridgeI18n.t('文件夹') : entry.kind === 'blocked' ? BridgeI18n.t('链接或特殊文件') : this.size(entry.size)));
         tab.list.append(row);
       }
-      tab.next = result.nextOffset;
+      tab.next = result.nextOffset;tab.loaded=true;
       if (tab.next !== null) { const more = this.button(BridgeI18n.t('加载更多'), () => this.directory(session, tab, path, true)); more.className = 'wb-load-more'; tab.body.append(more); }
       if (session === this.current) this.refreshThumbnails();
     } catch (error) { if (!controller.signal.aborted && this.sessions.has(session.key) && error.name !== 'AbortError') { tab.status.textContent=BridgeI18n.t(error.message); tab.status.classList.add('error'); } }
+    finally {if(tab.controller===controller)tab.loading=false;}
   }
   openPreviewFullscreen(session, tab, content, trigger) {
     if (this.previewFullscreen || session !== this.current || !tab.body.contains(content)) return;

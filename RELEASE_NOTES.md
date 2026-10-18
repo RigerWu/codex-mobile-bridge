@@ -14,6 +14,8 @@ v2.1.1 改善 Codex、Claude 和 DeepSeek Harness 的账号与模型操作，减
 
 ### Bug 修复
 
+- 修复 Windows 账号切换或恢复时，配置文件被短暂占用导致操作中断；持续占用仍会报错并保留原文件。
+
 - 修复 Codex 当前账号模型列表长时间停留在读取中、Claude 模型设置重复请求，以及账号切换后旧模型结果覆盖新接入的问题。
 - 降低账号面板无必要的高频刷新，修复模型列表滚动时自动回到顶部。
 - 修复快速从 Codex 滑到 DeepSeek Harness 时被拉回 Claude；Claude/DSH 重进列表优先展示缓存，再同步最新内容；统一筛选框样式。
@@ -49,6 +51,8 @@ v2.1.1 improves account and model controls across Codex, Claude and DeepSeek Har
 - **Update and pairing choices:** skip automatic reminders for an exact release on desktop and mobile while retaining manual updates. Choose whether valid phone bindings survive a gateway password change.
 
 #### Fixes
+
+- Retry brief Windows file-sharing conflicts during account changes or recovery; persistent failures still report an error and preserve the original file.
 
 - Fix stuck Codex account model loading, repeated Claude model requests and stale catalog responses after switching access.
 - Remove unnecessary frequent account refreshes and preserve model-list scroll position.

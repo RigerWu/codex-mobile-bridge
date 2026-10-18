@@ -12,6 +12,7 @@ import unittest
 import uuid
 from contextlib import closing
 from pathlib import Path, PureWindowsPath
+from unittest.mock import patch
 
 from bridge.features.auth.auth import Auth, password_record
 from bridge.features.workspace.files import artifact_paths
@@ -214,6 +215,32 @@ class IntegrationTests(unittest.TestCase):
         self.assertEqual(detail['text'], 'row 130')
         changes = self.bridge.timeline_read(THREAD, 'changes', after=page['sequence'], epoch=page['epoch'], start=older['before'])
         self.assertEqual(changes['rows'], [])
+
+    def test_timeline_meta_refreshes_draft_identity_without_sequence_change(self):
+        self.fixture.state['turns'] = [{'turnId': 'turn', 'items': [
+            {'id': str(i), 'type': 'agentMessage', 'text': 'row '+str(i)} for i in range(150)]}]
+        session = self.bridge.session(THREAD)
+        account = ['']
+
+        def draft_identity(view):
+            self.assertFalse(session.condition._is_owned())
+            return account[0]
+
+        with patch.object(self.bridge, '_draft_account_identity', side_effect=draft_identity):
+            page = self.bridge.timeline_read(THREAD)
+            self.assertEqual(page['meta']['draftAccountIdentity'], '')
+            account[0] = 'account-a'
+            older = self.bridge.timeline_read(THREAD, limit=80, before=page['before'])
+            self.assertEqual(older['meta']['draftAccountIdentity'], 'account-a')
+            self.assertEqual(older['sequence'], page['sequence'])
+            account[0] = 'account-b'
+            changes = self.bridge.timeline_read(THREAD, 'changes', after=page['sequence'],
+                                                epoch=page['epoch'], start=older['before'])
+            self.assertEqual(changes['meta']['draftAccountIdentity'], 'account-b')
+            self.assertEqual(changes['sequence'], page['sequence'])
+            self.assertEqual(changes['rows'], [])
+        self.assertFalse(any(request['method'] == 'thread-follower-start-turn'
+                             for request in self.fixture.requests))
 
     def test_legacy_desktop_threads_visible_but_subagents_excluded(self):
         from bridge.features.sessions.store import SessionStore

@@ -137,11 +137,13 @@ class Workbench {
   open(id, host) {
     this.rememberScroll();
     const key = (this.provider&&this.provider!=='codex'?this.provider+'|':'')+host + '|' + id;
+    if (this.current?.key !== key) this.cancelLocate();
     if (this.previewFullscreen && this.previewFullscreen.session.key !== key) this.closePreviewFullscreen();
     if (!this.sessions.has(key)) this.sessions.set(key, {id, host, key, provider:this.provider, active: 'chat', files: [], directory: '', search: '', hidden: false, scroll: 0});
     this.current = this.sessions.get(key); this.paint();
   }
   reset(provider=null) {
+    if (!provider || this.locateState?.session.provider === provider) this.cancelLocate();
     if (this.previewFullscreen && (!provider || this.previewFullscreen.session.provider === provider)) this.closePreviewFullscreen();
     const visible=!provider||this.current?.provider===provider;
     if(visible){this.stopThumbnails();this.uploadController?.abort();}
@@ -159,6 +161,7 @@ class Workbench {
   rememberScroll() { const timeline=this.chat.querySelector('.timeline');if (this.current && !this.chat.classList.contains('workbench-active') && timeline.clientHeight) this.current.scroll = timeline.scrollTop; }
   select(id) {
     if (!this.current) return;
+    if (id !== 'files') this.cancelLocate();
     if (this.previewFullscreen && this.previewFullscreen.tab.id !== id) this.closePreviewFullscreen();
     this.rememberScroll(); this.current.active = id; if(this.current.splitTab&&id!=='chat')this.current.splitTab=id; this.paint();
     if (id === 'chat') { const session = this.current; requestAnimationFrame(() => { if (session === this.current && session.active === 'chat') this.chat.querySelector('.timeline').scrollTop = session.scroll; }); }
@@ -206,6 +209,7 @@ class Workbench {
   async close(id) {
     const session = this.current, index = session.files.findIndex(t => t.id === id);
     if (index < 0) return;
+    if (id === 'files') this.cancelLocate();
     if (this.previewFullscreen?.tab === session.files[index]) this.closePreviewFullscreen();
     if (session.files[index].sideChat && !await session.files[index].sideChat.end()) return;
     if (!session.files[index] || session.files[index].id !== id) return;
@@ -224,17 +228,61 @@ class Workbench {
     }
     this.select('files');
   }
+  cancelLocate() {
+    const state=this.locateState;if(!state)return;
+    this.locateState=null;
+    if(state.frame!==undefined)cancelAnimationFrame(state.frame);
+    if(state.timer!==undefined)clearTimeout(state.timer);
+    state.row?.classList.remove('wb-locate-highlight');
+  }
+  locateValid(state) {
+    return this.locateState===state&&this.current===state.session&&this.sessions.get(state.session.key)===state.session&&
+      state.session.files.includes(state.tab)&&this.isVisible(state.session,state.tab)&&state.session.directory===state.directory;
+  }
   async locate(session,path) {
     if(session!==this.current)return;
+    this.cancelLocate();
     session.search='';session.hidden=true;
     let tab=session.files.find(t=>t.id==='files');
     if(!tab){tab={id:'files',name:BridgeI18n.t('文件'),body:this.node('div','wb-browser')};session.files.unshift(tab);}
+    const state=this.locateState={session,tab,directory:path.split('/').slice(0,-1).join('/'),row:null};
     this.select('files');
-    await this.directory(session,tab,path.split('/').slice(0,-1).join('/'));
-    while(session===this.current&&Number.isInteger(tab.next)&&!Array.from(tab.list.children).some(row=>row.dataset.path===path)){const next=tab.next;await this.directory(session,tab,session.directory,true);if(tab.next===next)break;}
-    if(session!==this.current)return;
+    await this.directory(session,tab,state.directory,false,state);
+    while(this.locateValid(state)&&Number.isInteger(tab.next)&&!Array.from(tab.list.children).some(row=>row.dataset.path===path)){
+      const next=tab.next;await this.directory(session,tab,state.directory,true,state);if(tab.next===next)break;
+    }
+    if(!this.locateValid(state))return;
     const row=Array.from(tab.list.children).find(row=>row.dataset.path===path);
-    if(row){row.classList.add('selected');row.scrollIntoView({block:'nearest'});row.focus({preventScroll:true});}
+    if(!row){this.cancelLocate();return;}
+    state.row=row;
+    const list=tab.list,view=list.getBoundingClientRect(),bounds=row.getBoundingClientRect();
+    const reduced=window.matchMedia?.('(prefers-reduced-motion: reduce)').matches;
+    const arrive=()=>{
+      if(!this.locateValid(state)||tab.list!==list||!list.contains(row))return;
+      state.frame=undefined;row.focus({preventScroll:true});row.classList.remove('wb-locate-highlight');
+      // Restart the visual cue when the same row is located again.
+      void row.offsetWidth;row.classList.add('wb-locate-highlight');
+      state.timer=setTimeout(()=>{if(this.locateState===state){row.classList.remove('wb-locate-highlight');this.locateState=null;}},reduced?3000:3400);
+    };
+    if(bounds.top>=view.top&&bounds.bottom<=view.bottom){arrive();return;}
+    const height=bounds.bottom-bounds.top;
+    const target=Math.max(0,Math.min(list.scrollHeight-list.clientHeight,list.scrollTop+bounds.top-view.top-(list.clientHeight-height)/2));
+    if(reduced){list.scrollTop=target;arrive();return;}
+    const from=list.scrollTop,delta=target-from;
+    if(!delta){arrive();return;}
+    let start=null;
+    const tick=now=>{
+      if(!this.locateValid(state)||state.motionCancelled)return;
+      if(!Number.isFinite(now)){list.scrollTop=target;arrive();return;}
+      if(start===null)start=now;
+      const progress=Math.min(1,(now-start)/300),eased=1-(1-progress)**3;
+      list.scrollTop=from+delta*eased;
+      if(progress<1)state.frame=requestAnimationFrame(tick);else arrive();
+    };
+    for(const event of ['wheel','touchstart','pointerdown'])list.addEventListener(event,()=>{
+      if(this.locateState===state&&state.frame!==undefined){state.motionCancelled=true;cancelAnimationFrame(state.frame);state.frame=undefined;}
+    },{passive:true});
+    state.frame=requestAnimationFrame(tick);
   }
   newTab() {
     if (!this.current) return;
@@ -281,11 +329,12 @@ class Workbench {
     }
     this.select('terminal');
   }
-  async directory(session, tab, path, append = false) {
+  async directory(session, tab, path, append = false, locateState = null) {
+    if(this.locateState&&this.locateState!==locateState)this.cancelLocate();
     tab.controller?.abort(); const controller = tab.controller = new AbortController();
     if (!append) {
       if (session === this.current) this.stopThumbnails();
-      session.directory = path; tab.body.replaceChildren();
+      session.directory = path; tab.next=null;tab.body.replaceChildren();
       const toolbar = this.node('div', 'wb-toolbar');
       const up = this.button('‹', () => this.directory(session, tab, path.split('/').slice(0, -1).join('/')), BridgeI18n.t('上一级目录')); up.disabled = !path;
       const crumb = this.node('div', 'wb-path', path || BridgeI18n.t('项目文件')); if(path)this.raw(crumb);else crumb.dataset.i18nTitle='当前聊天的项目目录';crumb.title = path || BridgeI18n.t('当前聊天的项目目录');
@@ -302,7 +351,7 @@ class Workbench {
     try {
       const url = this.url(session, '', path) + '&hidden=' + session.hidden + '&search=' + encodeURIComponent(session.search) + '&offset=' + (append ? tab.next : 0);
       const result = await this.request(url, undefined, controller.signal);
-      if (controller.signal.aborted || !this.sessions.has(session.key)) return;
+      if (controller.signal.aborted || tab.controller!==controller || this.sessions.get(session.key)!==session || !session.files.includes(tab) || session.directory!==path || (locateState&&!this.locateValid(locateState))) return;
       session.project = result.project; const crumb=tab.body.querySelector('.wb-path');delete crumb.dataset.i18n;crumb.textContent = result.project + (path ? ' / ' + path : '');
       delete tab.status.dataset.i18n;
       tab.status.replaceChildren(...(result.total ? [this.node('span', '', String(result.total)), this.node('span', '', ' 项 · '), this.node('span', '', session.host === 'local' ? '电脑上的项目' : 'SSH 项目')] : [this.node('span', '', '当前目录没有匹配的文件')]));

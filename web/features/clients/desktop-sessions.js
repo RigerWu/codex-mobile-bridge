@@ -126,13 +126,13 @@ class DesktopSessionsView {
     return blocked&&!(client?.enabled!==false&&client?.cliAvailable===true&&this.provider==='claude');
   }
   get isChatOpen(){return this.provider!=='codex'&&!!this.sid&&!this.conversation.hidden;}
-  bindDraftGateway(identity){if(this.draftGateway&&this.draftGateway!==identity)this.provisionalDrafts.clear();this.draftGateway=identity||'';}
+  bindDraftGateway(identity){if(this.draftGateway&&this.draftGateway!==identity){this.provisionalDrafts.clear();this.drafts.clear();for(let i=sessionStorage.length-1;i>=0;i--){const key=sessionStorage.key(i);if(key?.startsWith('desktop-draft:'))sessionStorage.removeItem(key);}}this.draftGateway=identity||'';}
   saveDraft(){
     if(!this.sid||this.restoringDraft)return null;
     const key=this.provider+':'+this.sid,fields={text:this.input.value,selectionStart:this.input.selectionStart,selectionEnd:this.input.selectionEnd,sendMode:this.mode.value,skills:[...this.selectedSkills().keys()]};
     if(!this.draftScope||!this.composerDrafts){if(this.draftGateway&&this.composerDrafts){if(this.draftTouched)this.provisionalDrafts.set(key,{gateway:this.draftGateway,account:'',...fields});}else this.drafts.set(key,fields.text);return null;}
     const saved=this.composerDrafts.save(this.draftScope,fields);
-    if(saved)this.provisionalDrafts.delete(key);
+    if(saved){this.provisionalDrafts.delete(key);this.drafts.delete(key);sessionStorage.removeItem('desktop-draft:'+key);}
     else{this.provisionalDrafts.set(key,{gateway:this.draftGateway,account:this.draftScope.account,...fields});this.drafts.set(key,fields.text);}
     return saved;
   }
@@ -144,9 +144,9 @@ class DesktopSessionsView {
     if(this.composerDrafts.key(scope)===this.composerDrafts.key(this.draftScope))return;
     const switching=!!this.draftScope;if(switching){this.saveDraft();this.drafts.delete(this.provider+':'+this.sid);for(const key of this.pending.keys())if(key.startsWith(this.provider+':'+this.sid+':send:')&&key.endsWith(':'+this.draftGateway+':'))this.pending.delete(key);}this.draftScope=scope;
     const key=this.provider+':'+this.sid,pending=this.provisionalDrafts.get(key);
-    if(pending&&(pending.gateway!==this.draftGateway||pending.account&&pending.account!==account))this.provisionalDrafts.delete(key);
+    if(pending&&(pending.gateway!==this.draftGateway||pending.account&&pending.account!==account)){this.provisionalDrafts.delete(key);this.drafts.delete(key);sessionStorage.removeItem('desktop-draft:'+key);}
     const provisional=this.provisionalDrafts.get(key),promoted=provisional&&this.composerDrafts.save(scope,provisional);
-    if(promoted)this.provisionalDrafts.delete(key);
+    if(promoted){this.provisionalDrafts.delete(key);this.drafts.delete(key);sessionStorage.removeItem('desktop-draft:'+key);}
     const stored=this.composerDrafts.load(scope),legacy=(stored||provisional)?null:this.composerDrafts.migrate(scope,sessionStorage,{text:'desktop-draft:'+this.provider+':'+this.sid});
     const draft=promoted||provisional||stored||legacy;
     if(draft&&(switching||!this.draftTouched)){
@@ -174,7 +174,7 @@ class DesktopSessionsView {
     const drafts=new Map([...this.drafts].filter(([key])=>key.startsWith(provider+':')));this.accountDrafts.set(identity(previous),drafts);
     if(provider===this.provider){clearTimeout(this.timer);this.generation++;this.detailRevision++;this.sid=null;this.state=null;this.draftScope=null;this.draftTouched=false;this.freshDetail=false;this.input.value='';}
     const jsonKey=key=>{try{return JSON.parse(key)[0]===provider;}catch{return false;}};
-    this.providerViews.delete(provider);for(const key of this.drafts.keys())if(key.startsWith(provider+':'))this.drafts.delete(key);for(const key of this.provisionalDrafts.keys())if(key.startsWith(provider+':'))this.provisionalDrafts.delete(key);
+    this.providerViews.delete(provider);for(const key of this.drafts.keys())if(key.startsWith(provider+':'))this.drafts.delete(key);for(const key of this.provisionalDrafts.keys())if(key.startsWith(provider+':'))this.provisionalDrafts.delete(key);for(let i=sessionStorage.length-1;i>=0;i--){const key=sessionStorage.key(i);if(key?.startsWith('desktop-draft:'+provider+':'))sessionStorage.removeItem(key);}
     const snapshotKey=this.listSnapshotKey(provider);if(snapshotKey){localStorage.removeItem(snapshotKey);sessionStorage.removeItem(snapshotKey);}
     if(!this.draftGateway||!this.composerDrafts)for(const [key,text] of this.accountDrafts.get(identity(next))||[])this.drafts.set(key,text);
     for(const key of this.detailCache.keys())if(jsonKey(key))this.forgetDetail(key);for(const key of this.skillSelections.keys())if(jsonKey(key))this.skillSelections.delete(key);
@@ -184,7 +184,7 @@ class DesktopSessionsView {
     if(provider!==this.provider)return;
     this.rows=[];this.listStamp='';this.lastMessages=[];this.requestStamp='';this.messageNodes.clear();this.messages.replaceChildren();this.requests.replaceChildren();this.showSelection(false);this.renderList();this.updateComposer();await this.refresh();
   }
-  clear(){this.modelDialog?.close();this.listSync.reset();this.readEpoch++;this.readTasks.clear();this.providerReadEpochs.clear();this.listPrefetchAt.clear();this.detailCacheSizes.clear();this.clientStates=[];this.workbench.reset();clearTimeout(this.timer);this.generation++;this.detailRevision++;this.provider='codex';this.previewOnly=false;this.select.value='codex';this.select.hidden=true;this.container.hidden=true;this.root.classList.remove('desktop-mode');this.sid=null;this.state=null;this.showSelection(false);this.drafts.clear();this.provisionalDrafts.clear();this.accountDrafts.clear();this.skillSelections.clear();this.providerViews.clear();this.listCacheIdentity='';this.listCacheHost='';this.draftGateway='';this.draftScope=null;this.detailCache.clear();this.activity.clear();this.freshDetail=false;this.rows=[];this.listStamp='';this.rowsRoot.replaceChildren();this.lastMessages=[];this.requestStamp='';this.pending.clear();this.attachments.reset();this.messages.replaceChildren();this.requests.replaceChildren();this.messageNodes.clear();}
+  clear(){this.modelDialog?.close();this.listSync.reset();this.readEpoch++;this.readTasks.clear();this.providerReadEpochs.clear();this.listPrefetchAt.clear();this.detailCacheSizes.clear();this.detailCacheBytes=0;this.clientStates=[];this.workbench.reset();clearTimeout(this.timer);this.generation++;this.detailRevision++;this.provider='codex';this.previewOnly=false;this.select.value='codex';this.select.hidden=true;this.container.hidden=true;this.root.classList.remove('desktop-mode');this.sid=null;this.state=null;this.showSelection(false);this.drafts.clear();this.provisionalDrafts.clear();for(let i=sessionStorage.length-1;i>=0;i--){const key=sessionStorage.key(i);if(key?.startsWith('desktop-draft:'))sessionStorage.removeItem(key);}this.accountDrafts.clear();this.skillSelections.clear();this.providerViews.clear();this.listCacheIdentity='';this.listCacheHost='';this.draftGateway='';this.draftScope=null;this.detailCache.clear();this.activity.clear();this.freshDetail=false;this.rows=[];this.listStamp='';this.rowsRoot.replaceChildren();this.lastMessages=[];this.requestStamp='';this.pending.clear();this.attachments.reset();this.messages.replaceChildren();this.requests.replaceChildren();this.messageNodes.clear();}
   async refresh(){
     clearTimeout(this.timer);const generation=this.generation,provider=this.provider;if(this.previewOnly||provider==='codex'||document.hidden||this.root.hidden)return;
     if(this.renderConnectionStatus()){this.updateActivity(this.rows,false);this.renderIndicators();this.freshDetail=false;this.updateComposer();return;}
@@ -323,13 +323,14 @@ class DesktopSessionsView {
     const body={text,mode:this.mode.value},skills=this.state.capabilities.skills===true?[...selected.keys()].sort():[];
     if(ids.length)body.attachments=ids;if(skills.length)body.plugins=skills;
     const transientKey=this.pendingKey('send',body,sid,provider),scopedKey=this.pendingKey('send',body,sid,provider,scope?.account||''),fallbackId=this.pending.get(scopedKey)||this.pending.get(transientKey);
-    const revision=this.saveDraft()?.revision,pending=scope&&this.composerDrafts?this.composerDrafts.begin(scope,body,fallbackId||this.requestId()):null;
+    const revision=this.saveDraft()?.revision,provisional=this.provisionalDrafts.get(provider+':'+sid),pending=scope&&this.composerDrafts?this.composerDrafts.begin(scope,body,fallbackId||this.requestId()):null;
     if(pending?.blocked){this.error.textContent=BridgeI18n.t('上次发送结果尚未确认，请检查聊天记录或先处理未确认记录。');return;}
     const result=await this.mutate('send',body,sid,pending?.id||fallbackId,scope?.account||'');
     if(scope&&(pending||this.pending.has(scopedKey)||result))this.pending.delete(transientKey);
     if(result){
       const sameRevision=pending?this.composerDrafts.load(scope)?.revision===revision:this.input.value===raw;
       const confirmed=pending?this.composerDrafts.confirm(scope,pending.id,revision):true;
+      if(confirmed&&provisional&&JSON.stringify(this.provisionalDrafts.get(provider+':'+sid))===JSON.stringify(provisional)){this.provisionalDrafts.delete(provider+':'+sid);this.drafts.delete(provider+':'+sid);sessionStorage.removeItem('desktop-draft:'+provider+':'+sid);}
       if(confirmed)this.attachments.clear(key,ids);
       if(confirmed&&sameRevision){for(const id of skills)selected.delete(id);
         if(!pending)this.drafts.delete(provider+':'+sid);

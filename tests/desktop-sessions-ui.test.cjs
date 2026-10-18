@@ -151,8 +151,16 @@ test('desktop storage write failure keeps the uncertain ID when storage recovers
  ui.view.composerDrafts.storage={getItem:key=>original.getItem(key),removeItem:key=>original.removeItem(key),setItem:(key,value)=>{if(fail)throw Error('quota');original.setItem(key,value);}};
  ui.setHandler(async(url,body)=>body?{status:++writes===1?'unknown':'accepted'}:url.includes('/detail')?{session:{id:'a',title:'Chat',status:'idle'},draftAccountIdentity:'account-a',messages:[]}:{sessions:[]});
  ui.view.input.value='same message';ui.view.input.oninput();await ui.view.submit();const first=ui.calls.filter(c=>c.body)[0].body.id;
+ assert.equal(ui.view.provisionalDrafts.get('claude:a').text,'same message');
  fail=false;await ui.view.detail(ui.view.generation);await ui.view.submit();
  const sent=ui.calls.filter(c=>c.body);assert.equal(sent.length,2);assert.equal(sent[1].body.id,first);
+});
+test('confirmed desktop send clears the provisional draft while an unknown result keeps it',async()=>{
+ const ui=await opened();ui.view.bindDraftGateway('gateway-a');ui.view.bindDraftScope({draftAccountIdentity:'account-a'});
+ ui.view.composerDrafts.storage={getItem(){return null;},setItem(){throw Error('quota');},removeItem(){}};
+ let writes=0;ui.setHandler(async(url,body)=>body?{status:++writes===1?'unknown':'accepted'}:url.includes('/detail')?{session:{id:'a',title:'Chat',status:'idle'},draftAccountIdentity:'account-a',messages:[]}:{sessions:[]});
+ ui.view.input.value='same message';ui.view.input.oninput();await ui.view.submit();assert.equal(ui.view.provisionalDrafts.get('claude:a').text,'same message');
+ await ui.view.detail(ui.view.generation);await ui.view.submit();assert.equal(writes,2);assert.equal(ui.view.provisionalDrafts.has('claude:a'),false);assert.equal(ui.view.drafts.has('claude:a'),false);
 });
 test('Claude A/B/A open path waits for account identity before restoring provisional drafts',async()=>{
  const ui=fixture();ui.view.bindDraftGateway('gateway-a');await ui.view.choose('claude');const waiting=new Map();
@@ -169,10 +177,14 @@ test('Claude A/B/A open path waits for account identity before restoring provisi
 test('provisional desktop draft cannot cross a verified account or gateway change',async()=>{
  const ui=await opened();ui.view.bindDraftGateway('gateway-a');
  ui.view.provisionalDrafts.set('claude:a',{gateway:'gateway-a',account:'account-old',text:'secret',sendMode:'send',skills:[]});
+ ui.view.drafts.set('claude:a','secret');ui.sessionStore.set('desktop-draft:claude:a','secret');
  ui.view.prepareChat('a');ui.view.bindDraftScope({draftAccountIdentity:'account-new'});
- assert.equal(ui.view.input.value,'');assert.equal(ui.view.provisionalDrafts.has('claude:a'),false);
- ui.view.provisionalDrafts.set('claude:a',{gateway:'gateway-a',account:'',text:'pending'});ui.view.bindDraftGateway('gateway-b');
- assert.equal(ui.view.provisionalDrafts.size,0);
+ assert.equal(ui.view.input.value,'');assert.equal(ui.view.provisionalDrafts.has('claude:a'),false);assert.equal(ui.view.drafts.has('claude:a'),false);assert.equal(ui.sessionStore.has('desktop-draft:claude:a'),false);
+ assert.notEqual(ui.view.composerDrafts.load({gateway:'gateway-a',provider:'claude',account:'account-new',host:'local',session:'a'})?.text,'secret');
+ ui.view.provisionalDrafts.set('claude:a',{gateway:'gateway-a',account:'',text:'pending'});ui.sessionStore.set('desktop-draft:claude:a','pending');ui.view.bindDraftGateway('gateway-b');
+ assert.equal(ui.view.provisionalDrafts.size,0);assert.equal(ui.sessionStore.has('desktop-draft:claude:a'),false);
+ ui.view.provisionalDrafts.set('claude:a',{gateway:'gateway-b',account:'',text:'logout'});ui.sessionStore.set('desktop-draft:claude:a','logout');ui.view.clear();
+ assert.equal(ui.view.provisionalDrafts.size,0);assert.equal(ui.sessionStore.has('desktop-draft:claude:a'),false);
 });
 test('client shell and welcome appear before the first list response',async()=>{
  const ui=fixture();let finish;ui.setHandler(()=>new Promise(resolve=>finish=resolve));const reading=ui.view.choose('claude');assert.equal(ui.view.container.hidden,false);assert.equal(ui.view.welcome.hidden,false);assert.match(ui.view.welcome.textContent,/从一条聊天继续/);assert.equal(ui.view.conversation.hidden,true);assert.match(ui.view.listStatus.textContent,/读取|加载|连接/);finish({sessions:[]});await reading;

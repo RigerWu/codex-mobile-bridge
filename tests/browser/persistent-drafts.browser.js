@@ -1,7 +1,7 @@
 // Run after app.js on an isolated synthetic gateway page. No real session is contacted.
 async function runPersistentDraftTests(){
   const checks=[],check=(value,label)=>{if(!value)throw Error(label);checks.push(label);};
-  const old={id:currentId,host:currentHost,scope:codexDraftScope,gateway:draftGateway,touched:codexDraftTouched,text:$('message').value,skills:selectedSkills,mode:workModes.selection,state,fetch:window.fetch};
+  const old={id:currentId,host:currentHost,scope:codexDraftScope,gateway:draftGateway,touched:codexDraftTouched,text:$('message').value,skills:selectedSkills,mode:workModes.selection,state,fetch:window.fetch,listRows,timelineStart:ChatTimeline.prototype.start};
   const gateway='fixture-drafts-'+crypto.randomUUID(),a='11111111-1111-4111-8111-111111111111',b='22222222-2222-4222-8222-222222222222';
   const scope=(session,account='account-a')=>({gateway,provider:'codex',account,host:'local',session});
   try{
@@ -42,6 +42,16 @@ async function runPersistentDraftTests(){
     codexDraftScope=null;codexDraftTouched=false;$('message').value='sent before account scope';$('message').dispatchEvent(new Event('input',{bubbles:true}));bindCodexDraft({draftAccountIdentity:'account-b'});
     await $('composer').onsubmit({preventDefault(){}});
     check(attempts[2]?.id!=='foreign-id','A foreign gateway pending ID is not imported');
+    const c='33333333-3333-4333-8333-333333333333',d='44444444-4444-4444-8444-444444444444';
+    ChatTimeline.prototype.start=async function(){};listRows=[];draftGateway=gateway;
+    await openChat(c);$('message').value='pending C';$('message').dispatchEvent(new Event('input',{bubbles:true}));
+    await openChat(d);$('message').value='pending D';$('message').dispatchEvent(new Event('input',{bubbles:true}));
+    await openChat(c);
+    check($('message').value===''&&codexProvisionalDrafts.get('local|'+c)?.text==='pending C','Real chat open keeps pending C hidden until account verification');
+    bindCodexDraft({draftAccountIdentity:'account-a'});
+    check($('message').value==='pending C'&&composerDrafts.load(scope(c))?.text==='pending C','Verified account promotes pending C after A/B/A navigation');
+    await openChat(d);bindCodexDraft({draftAccountIdentity:'account-a'});
+    check($('message').value==='pending D'&&composerDrafts.load(scope(d))?.text==='pending D','Pending D survives the same open path independently');
     draftGateway='';codexDraftScope=null;currentId=b;$('message').value='temporary';$('message').dispatchEvent(new Event('input',{bubbles:true}));
     check(sessionStorage.getItem('draft:local|'+b)==='temporary','Gateway without draft identity keeps temporary composer behavior');
     let sent=null;state={status:'idle',access:{source:'desktop',canSend:true}};
@@ -50,7 +60,8 @@ async function runPersistentDraftTests(){
     check(sent?.text==='temporary','Gateway without draft identity can still send');
     return {passed:checks.length,checks};
   }finally{
-    for(const key of [scope(a),scope(b),scope(a,'account-b')])composerDrafts.clear(key);
+    for(const key of [scope(a),scope(b),scope(a,'account-b'),scope('33333333-3333-4333-8333-333333333333'),scope('44444444-4444-4444-8444-444444444444')])composerDrafts.clear(key);
+    codexProvisionalDrafts.clear();ChatTimeline.prototype.start=old.timelineStart;listRows=old.listRows;
     sessionStorage.removeItem('draft:local|'+b);
     sessionStorage.removeItem('pending:local|'+b);
     window.fetch=old.fetch;currentId=old.id;currentHost=old.host;codexDraftScope=old.scope;draftGateway=old.gateway;codexDraftTouched=old.touched;$('message').value=old.text;selectedSkills=old.skills;workModes.selection=old.mode;state=old.state;

@@ -154,6 +154,26 @@ test('desktop storage write failure keeps the uncertain ID when storage recovers
  fail=false;await ui.view.detail(ui.view.generation);await ui.view.submit();
  const sent=ui.calls.filter(c=>c.body);assert.equal(sent.length,2);assert.equal(sent[1].body.id,first);
 });
+test('Claude A/B/A open path waits for account identity before restoring provisional drafts',async()=>{
+ const ui=fixture();ui.view.bindDraftGateway('gateway-a');await ui.view.choose('claude');const waiting=new Map();
+ ui.setHandler((url)=>url.includes('/detail')?new Promise(resolve=>waiting.set(new URL(url,'https://gateway.test').searchParams.get('sessionId'),resolve)):Promise.resolve({sessions:[]}));
+ const firstA=ui.view.open('a');ui.view.input.value='draft A';ui.view.input.oninput();ui.view.backToList();
+ const firstB=ui.view.open('b');ui.view.input.value='draft B';ui.view.input.oninput();ui.view.backToList();
+ const secondA=ui.view.open('a');assert.equal(ui.view.input.value,'');assert.equal(ui.view.provisionalDrafts.get('claude:a').text,'draft A');
+ waiting.get('a')({session:{id:'a',title:'A',status:'idle'},draftAccountIdentity:'account-a',messages:[]});await Promise.all([firstA,secondA]);
+ assert.equal(ui.view.input.value,'draft A');assert.equal(ui.view.provisionalDrafts.has('claude:a'),false);
+ const secondB=ui.view.open('b');assert.equal(ui.view.input.value,'');
+ waiting.get('b')({session:{id:'b',title:'B',status:'idle'},draftAccountIdentity:'account-a',messages:[]});await Promise.all([firstB,secondB]);
+ assert.equal(ui.view.input.value,'draft B');
+});
+test('provisional desktop draft cannot cross a verified account or gateway change',async()=>{
+ const ui=await opened();ui.view.bindDraftGateway('gateway-a');
+ ui.view.provisionalDrafts.set('claude:a',{gateway:'gateway-a',account:'account-old',text:'secret',sendMode:'send',skills:[]});
+ ui.view.prepareChat('a');ui.view.bindDraftScope({draftAccountIdentity:'account-new'});
+ assert.equal(ui.view.input.value,'');assert.equal(ui.view.provisionalDrafts.has('claude:a'),false);
+ ui.view.provisionalDrafts.set('claude:a',{gateway:'gateway-a',account:'',text:'pending'});ui.view.bindDraftGateway('gateway-b');
+ assert.equal(ui.view.provisionalDrafts.size,0);
+});
 test('client shell and welcome appear before the first list response',async()=>{
  const ui=fixture();let finish;ui.setHandler(()=>new Promise(resolve=>finish=resolve));const reading=ui.view.choose('claude');assert.equal(ui.view.container.hidden,false);assert.equal(ui.view.welcome.hidden,false);assert.match(ui.view.welcome.textContent,/从一条聊天继续/);assert.equal(ui.view.conversation.hidden,true);assert.match(ui.view.listStatus.textContent,/读取|加载|连接/);finish({sessions:[]});await reading;
 });

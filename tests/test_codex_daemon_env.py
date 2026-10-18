@@ -61,7 +61,11 @@ class DaemonEnvironmentTests(unittest.TestCase):
                 self.assertNotIn('child-value', repr(identity))
                 with self.assertRaises(DaemonEnvironmentUnavailable):
                     read_daemon_environment(home, __file__, {'CMB_SYNTHETIC_ENV_KEY'})
-                record['pid'] += 1
+                if os.name == 'nt':
+                    # An adjacent Windows PID is not guaranteed to be unused.
+                    record['processStartTime'] = '1'
+                else:
+                    record['pid'] = os.getpid()
                 path.write_text(json.dumps(record))
                 with self.assertRaises(DaemonEnvironmentUnavailable):
                     read_daemon_environment(home, executable, {'CMB_SYNTHETIC_ENV_KEY'})

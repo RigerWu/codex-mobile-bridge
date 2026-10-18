@@ -140,7 +140,7 @@ class DraftIdentityTests(unittest.TestCase):
         bridge.host = 'remote-one'
         bridge.cli_sessions = SimpleNamespace(alias='ssh-one', remote_home=Path('/remote/codex'))
         bridge._draft_remote_lock = threading.Lock()
-        key = ('remote-one', 'ssh-one', '/remote/codex', 'openai')
+        key = ('remote-one', 'ssh-one', str(bridge.cli_sessions.remote_home), 'openai')
         bridge._draft_remote_cache = {key: (time.monotonic() - 31, 'known-owner')}
         bridge._draft_remote_pending = set()
         with patch('bridge.app.service.threading.Thread') as worker:

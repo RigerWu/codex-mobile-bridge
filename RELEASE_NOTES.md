@@ -19,7 +19,7 @@ v2.1.1 改善 Codex、Claude 和 DeepSeek Harness 的账号与模型操作，减
 - 修复快速从 Codex 滑到 DeepSeek Harness 时被拉回 Claude；Claude/DSH 重进列表优先展示缓存，再同步最新内容；统一筛选框样式。
 - 修复非图片附件的显示与上下文信息、ChatGPT 登录经过自定义网关路由时的身份保留，并限制工作台启动资源并发。
 - 修复 iOS 场景生命周期及通知跳转重试，避免启动或恢复期间丢失待处理跳转。
-- 加强模型目录凭据与缓存身份隔离，避免桌面目录请求借用网关进程的环境凭据。
+- 加强模型目录缓存身份隔离，修复网关直接查询上游模型目录时的环境凭据误用。
 
 ### 贡献者
 
@@ -55,7 +55,7 @@ v2.1.1 improves account and model controls across Codex, Claude and DeepSeek Har
 - Prevent fast client swipes from jumping back to Claude; restore cached Claude/DSH lists before background updates and unify filter styles.
 - Fix non-image attachment visibility/context and ChatGPT identity behind custom gateway routing; bound workspace startup resource concurrency.
 - Handle iOS scene lifecycle and retry pending notification navigation during startup or resume.
-- Isolate model credentials and cache identities so desktop catalog requests do not borrow gateway environment credentials.
+- Strengthen model cache identity isolation and fix gateway environment credentials being used for direct upstream model-catalog HTTP requests.
 
 #### Contributors
 

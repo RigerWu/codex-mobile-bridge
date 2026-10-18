@@ -3,6 +3,7 @@ import json
 import os
 import tempfile
 import threading
+import traceback
 import unittest
 import uuid
 from pathlib import Path, PurePosixPath
@@ -251,9 +252,14 @@ class AccountsTests(unittest.TestCase):
             self.assertFalse(self.bridge.account.lock.acquire(blocking=False))
             original_restore(snapshot)
         self.manager.restore_files=restore
-        with patch('bridge.features.accounts.accounts.DesktopApp',return_value=self.app):
+        recovery_errors=[]
+        original_phase=self.manager.phase
+        def record_phase(name,**values):
+            if name=='interrupted':recovery_errors.append(traceback.format_exc())
+            return original_phase(name,**values)
+        with patch.object(self.manager,'phase',side_effect=record_phase), patch('bridge.features.accounts.accounts.DesktopApp',return_value=self.app):
             self.manager.recover({'confirmed':True});wait_for_account_worker(self)
-        self.assertEqual(self.manager.state['phase'],'restored')
+        self.assertEqual(self.manager.state['phase'],'restored',recovery_errors[-1] if recovery_errors else 'no recovery exception captured')
         self.assertEqual(self.manager.snapshot_files(),self.original)
 
     def test_busy_and_queued_tasks_block_before_shutdown(self):

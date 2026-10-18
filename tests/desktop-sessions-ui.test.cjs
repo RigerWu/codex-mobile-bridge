@@ -249,17 +249,21 @@ test('PDF reading position survives file-tab and chat-back navigation',async()=>
  stage.scrollTop=0;stage.scrollLeft=0;
  wb.select(pdf.id);assert.equal(stage.scrollTop,915);assert.equal(stage.scrollLeft,19);
 });
-test('file back follows parent directories before returning to chat on the shared page button',async()=>{
- const ui=await opened(),wb=ui.view.workbench,session=wb.current;
- const settle=()=>new Promise(setImmediate);
- const entries={'':[{'name':'src','path':'src','kind':'directory'}],src:[{'name':'lib','path':'src/lib','kind':'directory'}],'src/lib':[]};
- ui.setHandler(async url=>{const at=new URL(url,'http://fixture').searchParams.get('path');return {project:'/project',total:entries[at]?.length||0,entries:entries[at]||[],nextOffset:null};});
- wb.files();await settle();const tab=session.files.find(t=>t.id==='files');
- tab.list.querySelector('.wb-file').click();await settle();tab.list.querySelector('.wb-file').click();await settle();assert.equal(session.directory,'src/lib');
- await ui.view.back.click();assert.equal(session.directory,'src');assert.equal(session.active,'files');
- await ui.view.back.click();assert.equal(session.directory,'');assert.equal(session.active,'files');
- await ui.view.back.click();assert.equal(session.active,'chat');assert.equal(ui.view.isChatOpen,true);
- await ui.view.back.click();assert.equal(ui.view.isChatOpen,false);
+test('header back returns Claude and DeepSeek directly to their list without changing file directory or draft',async()=>{
+ for(const provider of ['claude','deepseek']){
+  const ui=fixture();await ui.view.choose(provider);await ui.view.open('a');const wb=ui.view.workbench,session=wb.current;
+  const settle=()=>new Promise(setImmediate),entries={'':[{name:'src',path:'src',kind:'directory'}],src:[{name:'lib',path:'src/lib',kind:'directory'}],'src/lib':[]};
+  ui.setHandler(async url=>{const at=new URL(url,'http://fixture').searchParams.get('path');return {project:'/project',total:entries[at]?.length||0,entries:entries[at]||[],nextOffset:null};});
+  wb.files();await settle();const tab=session.files.find(t=>t.id==='files');
+  tab.list.querySelector('.wb-file').click();await settle();tab.list.querySelector('.wb-file').click();await settle();
+  ui.view.input.value='Keep my draft';ui.view.input.oninput();tab.list.scrollTop=120;
+  const calls=ui.calls.length;wb.locateState={session,tab,row:tab.list};
+  await ui.view.back.click();
+  assert.equal(ui.view.isChatOpen,false);assert.equal(session.directory,'src/lib');assert.equal(session.active,'files');assert.equal(session.files[0],tab);
+  assert.equal(tab.list.scrollTop,120);assert.equal(ui.view.drafts.get(provider+':a'),'Keep my draft');assert.equal(wb.locateState,null);assert.equal(ui.calls.length,calls);
+  await ui.view.open('a');assert.equal(wb.current,session);assert.equal(session.directory,'src/lib');assert.equal(session.active,'files');assert.equal(ui.view.input.value,'Keep my draft');
+  assert.equal(wb.back(),true);assert.equal(session.directory,'src');assert.equal(ui.view.isChatOpen,true);
+ }
 });
 test('rapid file backs ignore stale responses and a failed parent read stays in the file browser',async()=>{
  const ui=await opened(),wb=ui.view.workbench,session=wb.current,pending=[];

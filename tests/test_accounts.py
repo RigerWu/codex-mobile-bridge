@@ -10,6 +10,7 @@ from pathlib import Path, PurePosixPath
 from types import SimpleNamespace
 from unittest.mock import Mock, patch
 
+from bridge.features.accounts import accounts as accounts_module
 from bridge.features.accounts.account import Account
 from bridge.features.accounts.accounts import Accounts, ManagedRPC, operation, private_bytes, private_json
 from bridge.clients.desktop_app import DesktopApp
@@ -23,6 +24,65 @@ def wait_for_account_worker(test):
         # Windows durable file writes can outlast the former three-second bound.
         test.manager.thread.join(30)
         test.assertFalse(test.manager.thread.is_alive(), 'account worker did not finish within 30 seconds')
+
+
+class PrivateWriteTests(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory(dir=ROOT/'.tmp')
+        self.addCleanup(self.tmp.cleanup)
+        self.path = Path(self.tmp.name)/'config.toml'
+        self.path.write_bytes(b'original')
+
+    def test_windows_transient_sharing_denial_retries_atomic_replace(self):
+        original_replace = os.replace
+        attempts = []
+        def replace(source, destination):
+            attempts.append(source)
+            if len(attempts) <= 2:
+                error = PermissionError('temporary sharing denial')
+                error.winerror = (5, 32)[len(attempts)-1]
+                raise error
+            return original_replace(source, destination)
+        windows = SimpleNamespace(name='nt', fdopen=os.fdopen, fsync=os.fsync, replace=replace)
+        clock = SimpleNamespace(monotonic=Mock(side_effect=[0, .01, .02]), sleep=Mock())
+        with patch.object(accounts_module, 'os', windows), patch.object(accounts_module, 'time', clock):
+            private_bytes(self.path, b'restored')
+        self.assertEqual(self.path.read_bytes(), b'restored')
+        self.assertEqual(len(attempts), 3)
+        self.assertEqual(clock.sleep.call_count, 2)
+        self.assertEqual(list(self.path.parent.glob('.account-*')), [])
+
+    def test_windows_persistent_denial_keeps_original_and_cleans_source(self):
+        attempts = []
+        def replace(source, destination):
+            attempts.append(source)
+            error = PermissionError('persistent sharing denial')
+            error.winerror = 5
+            raise error
+        windows = SimpleNamespace(name='nt', fdopen=os.fdopen, fsync=os.fsync, replace=replace)
+        clock = SimpleNamespace(monotonic=Mock(side_effect=[0, 1, 2]), sleep=Mock())
+        with patch.object(accounts_module, 'os', windows), patch.object(accounts_module, 'time', clock):
+            with self.assertRaises(PermissionError):
+                private_bytes(self.path, b'uncommitted')
+        self.assertEqual(len(attempts), 2)
+        clock.sleep.assert_called_once_with(.05)
+        self.assertEqual(self.path.read_bytes(), b'original')
+        self.assertEqual(list(self.path.parent.glob('.account-*')), [])
+
+    def test_other_denial_is_not_retried(self):
+        replace = Mock()
+        error = PermissionError('different denial')
+        error.winerror = 13
+        replace.side_effect = error
+        windows = SimpleNamespace(name='nt', fdopen=os.fdopen, fsync=os.fsync, replace=replace)
+        clock = SimpleNamespace(monotonic=Mock(return_value=0), sleep=Mock())
+        with patch.object(accounts_module, 'os', windows), patch.object(accounts_module, 'time', clock):
+            with self.assertRaises(PermissionError):
+                private_bytes(self.path, b'uncommitted')
+        replace.assert_called_once()
+        clock.sleep.assert_not_called()
+        self.assertEqual(self.path.read_bytes(), b'original')
+        self.assertEqual(list(self.path.parent.glob('.account-*')), [])
 
 
 class AccountsTests(unittest.TestCase):

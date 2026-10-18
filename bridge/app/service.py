@@ -2001,6 +2001,8 @@ class Bridge:
                            for item in items_array(turn.get('items')) if item.get('type') in ('ImageView', 'imageView')]
         # Resolve links in the delivered page, plus runtime ImageView evidence
         # retained separately from the paged message text.
+        if mode != 'detail':
+            result['meta']['draftAccountIdentity'] = self._draft_account_identity(authoritative_view)
         file_state = {'cwd': cwd, 'turns': [
             {'items': [{'type': 'agentMessage', 'text': text} for text in texts]},
             {'items': media_items},
